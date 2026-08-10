@@ -100,6 +100,11 @@ function xml(res, status, body) {
   res.writeHead(status, { "Content-Type": "text/xml; charset=utf-8" });
   res.end(body);
 }
+// תגובת טקסט גולמי (למשל פרוטוקול ה-API של ימות המשיח, שמצפה למחרוזת פשוטה ולא ל-JSON/XML)
+function text(res, status, body) {
+  res.writeHead(status, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end(body);
+}
 // תגובת HTML (למשל הגשת האזור האישי הגרפי - ר' public/app.html)
 function html(res, status, body) {
   res.writeHead(status, { "Content-Type": "text/html; charset=utf-8" });
@@ -113,4 +118,4 @@ function raw(res, status, buffer, { contentType = "application/octet-stream", fi
   res.end(buffer);
 }
 
-module.exports = { Router, json, xml, raw, html };
+module.exports = { Router, json, xml, text, raw, html };

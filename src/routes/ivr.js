@@ -264,4 +264,6 @@ function appendTranscript(callSid, speech) {
   db.prepare("UPDATE call_logs SET transcript = ? WHERE call_sid = ?").run(updated, callSid);
 }
 
-module.exports = { register };
+// מיוצא כדי שנוכל להשתמש באותה מכונת מצבים גם עבור אינטגרציית ימות המשיח (routes/yemot.js) -
+// בלי לשכפל את כל לוגיקת השיחה בין שני ספקי הטלפוניה.
+module.exports = { register, advance, upsertCall, appendTranscript, MAIN_MENU_HINTS };

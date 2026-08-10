@@ -34,6 +34,7 @@ require("./routes/lessonReports").register(router);
 require("./routes/documents").register(router);
 require("./routes/subscription").register(router);
 require("./routes/ivr").register(router);
+require("./routes/yemot").register(router);
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer((req, res) => router.handle(req, res));

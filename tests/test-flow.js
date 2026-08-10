@@ -56,6 +56,19 @@ async function ivrSay(callSid, speech) {
   return res.text();
 }
 
+// מדמה בקשת "ימות המשיח" (שלוחת API) - אותה כתובת בכל שלב, עם ApiCallId קבוע לאורך השיחה
+// ו-"speech" בלבד כשלב המשך (בדיוק כמו שהשרת שלנו מצפה - ר' services/yemot.js).
+async function yemotCall({ callId, phone, speech }) {
+  const params = { ApiCallId: callId, ApiPhone: phone || "", ApiDID: "0775325817", ApiExtension: "1" };
+  if (typeof speech === "string") params.speech = speech;
+  const res = await fetch(`${BASE}/api/ivr/yemot`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(params),
+  });
+  return res.text();
+}
+
 async function run() {
   console.log("🧪 מתחיל בדיקות מקצה לקצה — הפנקס שלי\n");
 
@@ -426,6 +439,29 @@ async function run() {
     await ivrCall(balanceCallSid, "+972500000001");
     const balanceXml = await ivrSay(balanceCallSid, "יתרה");
     assert(balanceXml.includes("היתרה הנוכחית שלך היא"), "שאילתת יתרה קולית עובדת");
+
+    console.log("\n☎️ מנוע השיחה הקולית מול ימות המשיח (שלוחת API) — אותה מכונת מצבים, פרוטוקול שונה");
+    const ymCallId = `YM-${Date.now()}`;
+    const ymGreeting = await yemotCall({ callId: ymCallId, phone: "0500000001" });
+    assert(ymGreeting.startsWith("read=t-") && ymGreeting.includes("אפשר לומר"), "פתיחת שיחה בימות (מספר בפורמט מקומי) מזהה משתמש ומציגה תפריט");
+
+    const ymUnknown = await yemotCall({ callId: `${ymCallId}-unknown`, phone: "0500000099" });
+    assert(ymUnknown.includes("אינו מזוהה") && ymUnknown.includes("g-hangup"), "שיחת ימות ממספר לא רשום נענית ומנותקת כראוי");
+
+    await yemotCall({ callId: ymCallId, speech: "הוצאה" });
+    await yemotCall({ callId: ymCallId, speech: "45" });
+    await yemotCall({ callId: ymCallId, speech: "מזון" });
+    const ymConfirm = await yemotCall({ callId: ymCallId, speech: "כן" });
+    assert(ymConfirm.includes("נשמר") && ymConfirm.includes("id_list_message=") && ymConfirm.includes("g-hangup"), "זרימת הוצאה קולית מלאה דרך ימות הושלמה ואושרה, ומחזירה פקודת ניתוק תקינה");
+
+    const afterYmTx = await api("GET", "/api/transactions", null, token);
+    const ymTx = afterYmTx.data.transactions.find(t => t.source === "phone" && t.amount === 45 && t.category === "מזון");
+    assert(!!ymTx, "התנועה שנוצרה בשיחת ימות אכן נשמרה במסד הנתונים עם source=phone");
+
+    const ymBalanceCallId = `${ymCallId}-balance`;
+    await yemotCall({ callId: ymBalanceCallId, phone: "+972500000001" }); // מוודאים שפורמט בינלאומי (+972) גם מזוהה
+    const ymBalance = await yemotCall({ callId: ymBalanceCallId, speech: "יתרה" });
+    assert(ymBalance.includes("היתרה הנוכחית שלך היא"), "שאילתת יתרה קולית עובדת גם בפורמט טלפון בינלאומי דרך ימות");
 
   } catch (err) {
     failed++;
