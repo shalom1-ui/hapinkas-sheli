@@ -1,0 +1,15 @@
+{
+  "name": "hapinkas-sheli-backend",
+  "version": "0.1.0",
+  "description": "הפנקס שלי - שרת Backend אמיתי: ניהול תקציב, חונכות ומעגל מטפלים דרך שיחה קולית. אפס תלויות חיצוניות - עובד עם Node.js 20+ בלבד (משתמש ב-node:sqlite המובנה).",
+  "main": "src/server.js",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node tests/test-flow.js"
+  },
+  "dependencies": {}
+}
