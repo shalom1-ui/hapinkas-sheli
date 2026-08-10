@@ -97,6 +97,15 @@
   .pill.trend-mid{background:var(--warn-soft); color:#8a6400;}
   .pill.trend-bad{background:var(--danger-soft); color:var(--danger);}
 
+  .report-table{width:100%; border-collapse:collapse; font-size:13.5px;}
+  .report-table th{text-align:right; padding:9px 6px; color:var(--text-secondary); font-weight:700; font-size:12.5px; border-bottom:1.5px solid var(--border);}
+  .report-table td{padding:9px 6px; border-bottom:1px solid var(--border);}
+  .report-table tr:last-child td{border-bottom:none;}
+  .report-table td.num{font-weight:700;}
+  .report-table td.income{color:var(--success);}
+  .report-table td.expense{color:var(--danger);}
+  .report-table tr.total-row td{font-weight:800; border-top:2px solid var(--border); border-bottom:none;}
+
   .bar-row{display:flex; align-items:center; gap:10px; margin-bottom:10px; font-size:13px;}
   .bar-label{width:80px; flex-shrink:0; color:var(--text-secondary);}
   .bar-track{flex:1; height:10px; background:var(--surface-2); border-radius:6px; overflow:hidden;}
@@ -238,6 +247,11 @@
             <button class="btn" onclick="addTransaction()">הוספה</button>
           </div>
           <div class="hint">טיפ: לרישום מעשר שנתתם, בחרו סוג "הוצאה" וקטגוריה "מעשרות" - זה יתעדכן אוטומטית בסקירה הכללית.</div>
+        </div>
+        <div class="card">
+          <h3>דוח חודשי: הכנסות מול הוצאות</h3>
+          <div class="hint" style="margin-bottom:10px">12 החודשים האחרונים שבהם היו תנועות. "יתרת חודש" היא הכנסות פחות הוצאות לאותו חודש בלבד (לא מצטבר).</div>
+          <div id="tx-trend-report"><div class="empty-state">אין עדיין מספיק נתונים לדוח</div></div>
         </div>
         <div class="card">
           <h3>כל התנועות</h3>
@@ -512,7 +526,41 @@ async function addTransaction() {
   const r = await api('POST', '/api/transactions', { type, amount, category: category || undefined });
   if (r.ok) { toast('התנועה נוספה בהצלחה', 'success'); document.getElementById('t_amount').value = ''; document.getElementById('t_category').value = ''; loadTransactions(); }
 }
+// דוח חודשי מסודר: הכנסות מול הוצאות (בנוסף לרשימת התנועות הגולמית) - מבוסס על /api/transactions/trend,
+// שכבר מחשב בשרת סכומי הכנסה/הוצאה לכל אחד מ-12 החודשים האחרונים.
+async function loadTransactionsTrend() {
+  const r = await api('GET', '/api/transactions/trend');
+  const el = document.getElementById('tx-trend-report');
+  if (!el) return;
+  if (!r.ok) return;
+  const rows = (r.data.trend || []).filter(m => m.income > 0 || m.expense > 0);
+  if (!rows.length) { el.innerHTML = '<div class="empty-state">אין עדיין מספיק נתונים לדוח</div>'; return; }
+
+  const totalIncome = rows.reduce((sum, m) => sum + m.income, 0);
+  const totalExpense = rows.reduce((sum, m) => sum + m.expense, 0);
+
+  el.innerHTML = `
+    <table class="report-table">
+      <thead><tr><th>חודש</th><th>הכנסות</th><th>הוצאות</th><th>יתרת חודש</th></tr></thead>
+      <tbody>
+        ${rows.map(m => `
+          <tr>
+            <td>${m.month}</td>
+            <td class="num income">₪${m.income}</td>
+            <td class="num expense">₪${m.expense}</td>
+            <td class="num">₪${m.income - m.expense}</td>
+          </tr>`).join('')}
+        <tr class="total-row">
+          <td>סה"כ</td>
+          <td class="num income">₪${totalIncome}</td>
+          <td class="num expense">₪${totalExpense}</td>
+          <td class="num">₪${totalIncome - totalExpense}</td>
+        </tr>
+      </tbody>
+    </table>`;
+}
 async function loadTransactions() {
+  loadTransactionsTrend();
   const r = await api('GET', '/api/transactions');
   if (!r.ok) return;
   const s = r.data.summary;

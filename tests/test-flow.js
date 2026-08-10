@@ -417,19 +417,16 @@ async function run() {
     const subscribe = await api("POST", "/api/subscribe", { planId: "basic" }, token);
     assert(subscribe.status === 201 && subscribe.data.mock === true, "הצטרפות לתוכנית יצרה הוראת קבע מדומה (MOCK)");
 
-    console.log("\n📞 מנוע השיחה הקולית (IVR) — ללא לחיצת מקשים, הכל בדיבור חופשי");
+    console.log("\n📞 מנוע השיחה הקולית (IVR) — תפריט קטגוריות, ללא לחיצת מקשים, הכל בדיבור חופשי");
     const callSid = `TEST-${Date.now()}`;
     const greeting = await ivrCall(callSid, "+972500000001");
-    assert(greeting.includes("<Gather") && greeting.includes("אפשר לומר"), "פתיחת שיחה מזהה משתמש ומציגה תפריט");
-
-    const unknownCall = await ivrCall(`${callSid}-unknown`, "+972500000099");
-    assert(unknownCall.includes("אינו מזוהה"), "שיחה ממספר לא רשום נדחית כראוי");
+    assert(greeting.includes("<Gather") && greeting.includes("נא לציין"), "פתיחת שיחה מזהה משתמש ומציגה תפריט קטגוריות");
 
     await ivrSay(callSid, "הוצאה");
     await ivrSay(callSid, "60");
     await ivrSay(callSid, "תחבורה");
     const confirmXml = await ivrSay(callSid, "כן");
-    assert(confirmXml.includes("נשמר"), "זרימת הוצאה קולית מלאה הושלמה ואושרה");
+    assert(confirmXml.includes("נשמר"), "זרימת הוצאה קולית מלאה (קיצור ישיר מהתפריט הראשי) הושלמה ואושרה");
 
     const afterCallTx = await api("GET", "/api/transactions", null, token);
     const phoneTx = afterCallTx.data.transactions.find(t => t.source === "phone" && t.amount === 60);
@@ -437,16 +434,67 @@ async function run() {
 
     const balanceCallSid = `${callSid}-balance`;
     await ivrCall(balanceCallSid, "+972500000001");
-    const balanceXml = await ivrSay(balanceCallSid, "יתרה");
-    assert(balanceXml.includes("היתרה הנוכחית שלך היא"), "שאילתת יתרה קולית עובדת");
+    const balanceXml = await ivrSay(balanceCallSid, "ניהול חשבונות");
+    assert(balanceXml.includes("היתרה הנוכחית שלך היא"), "קטגוריית 'ניהול חשבונות' מקריאה את היתרה");
+
+    const txCallSid = `${callSid}-transactions`;
+    await ivrCall(txCallSid, "+972500000001");
+    const txMenu = await ivrSay(txCallSid, "תנועות");
+    assert(txMenu.includes("הכנסה או הוצאה"), "קטגוריית 'תנועות' פותחת תת-תפריט הכנסה/הוצאה");
+    await ivrSay(txCallSid, "הכנסה");
+    const txIncomeConfirm = await ivrSay(txCallSid, "300");
+    assert(txIncomeConfirm.includes("לאשר"), "תת-תפריט תנועות ממשיך לזרימת הכנסה הרגילה");
+    await ivrSay(txCallSid, "כן");
+
+    const therapistCallSid = `${callSid}-therapist`;
+    await ivrCall(therapistCallSid, "+972500000001");
+    const therapistMenu = await ivrSay(therapistCallSid, "מטפלים");
+    assert(therapistMenu.includes("מה סוג הדיווח"), "קטגוריית 'מטפלים' פותחת את זרימת דיווח המטפל הקיימת");
+
+    console.log("\n👨‍👩‍👧 קטגוריית 'הורה' בטלפון — סיכום קולי על הילד, בלי גישה לאתר");
+    await api("PUT", "/api/me", { phone: "+972500000055" }, parentToken); // נותנים להורה מספר טלפון קבוע לזיהוי בשיחה
+    const guardianCallSid = `${callSid}-guardian`;
+    await ivrCall(guardianCallSid, "+972500000055");
+    const guardianSummaryXml = await ivrSay(guardianCallSid, "הורה");
+    assert(
+      guardianSummaryXml.includes("תלמיד בדיקה") && guardianSummaryXml.includes("2 מפגשים"),
+      "הורה משויך שומע בקול סיכום נכון (שם הילד ומספר המפגשים) על הילד היחיד שלו"
+    );
+
+    const noChildCallSid = `${callSid}-nochild`;
+    await ivrCall(noChildCallSid, "+972500000001"); // המשתמש הראשי (חונך) הוא לא הורה של אף אחד
+    const noChildXml = await ivrSay(noChildCallSid, "הורה");
+    assert(noChildXml.includes("לא נמצאו ילדים"), "משתמש שאינו הורה של אף תלמיד מקבל תשובה ברורה בקטגוריית 'הורה'");
+
+    console.log("\n📝 הרשמה ישירות בטלפון (Twilio) — מספר לא מזוהה יכול להירשם בלי לגשת לאתר");
+    const signupCallSid = `${callSid}-signup`;
+    const signupPhone = "+972500000077";
+    const signupGreeting = await ivrCall(signupCallSid, signupPhone);
+    assert(
+      signupGreeting.includes("אינו מזוהה") && signupGreeting.includes("<Gather") && signupGreeting.includes("השם המלא"),
+      "מספר לא מזוהה מקבל הצעה להירשם בטלפון (לא ננתק מיד)"
+    );
+    const signupConfirmXml = await ivrSay(signupCallSid, "רותם כהן");
+    assert(signupConfirmXml.includes("רותם כהן") && signupConfirmXml.includes("לאשר"), "שם שנאמר חוזר לאישור לפני יצירת המשתמש");
+    const signupDoneXml = await ivrSay(signupCallSid, "כן");
+    assert(signupDoneXml.includes("נרשמת בהצלחה") && signupDoneXml.includes("נא לציין"), "אישור ה'כן' יוצר משתמש חדש ועובר ישר לתפריט הקטגוריות הרגיל");
+
+    const secondCallSameNumber = await ivrCall(`${signupCallSid}-again`, signupPhone);
+    assert(
+      secondCallSameNumber.includes("רותם כהן") && !secondCallSameNumber.includes("אינו מזוהה"),
+      "שיחה חוזרת מאותו מספר אחרי ההרשמה כבר מזהה את המשתמש (בלי הצעת הרשמה נוספת)"
+    );
 
     console.log("\n☎️ מנוע השיחה הקולית מול ימות המשיח (שלוחת API) — אותה מכונת מצבים, פרוטוקול שונה");
     const ymCallId = `YM-${Date.now()}`;
     const ymGreeting = await yemotCall({ callId: ymCallId, phone: "0500000001" });
-    assert(ymGreeting.startsWith("read=t-") && ymGreeting.includes("אפשר לומר"), "פתיחת שיחה בימות (מספר בפורמט מקומי) מזהה משתמש ומציגה תפריט");
+    assert(ymGreeting.startsWith("read=t-") && ymGreeting.includes("נא לציין"), "פתיחת שיחה בימות (מספר בפורמט מקומי) מזהה משתמש ומציגה תפריט קטגוריות");
 
     const ymUnknown = await yemotCall({ callId: `${ymCallId}-unknown`, phone: "0500000099" });
-    assert(ymUnknown.includes("אינו מזוהה") && ymUnknown.includes("g-hangup"), "שיחת ימות ממספר לא רשום נענית ומנותקת כראוי");
+    assert(
+      ymUnknown.includes("אינו מזוהה") && ymUnknown.startsWith("read=t-") && ymUnknown.includes("השם המלא"),
+      "שיחת ימות ממספר לא רשום מקבלת הצעת הרשמה בטלפון (לא מנותקת מיד)"
+    );
 
     await yemotCall({ callId: ymCallId, speech: "הוצאה" });
     await yemotCall({ callId: ymCallId, speech: "45" });
@@ -458,10 +506,42 @@ async function run() {
     const ymTx = afterYmTx.data.transactions.find(t => t.source === "phone" && t.amount === 45 && t.category === "מזון");
     assert(!!ymTx, "התנועה שנוצרה בשיחת ימות אכן נשמרה במסד הנתונים עם source=phone");
 
+    console.log("\n#️⃣ אישור מהיר בהקשה (סולמית) בערוץ ימות - בלי לחכות לזיהוי הדיבור על 'כן'");
+    const ymDigitCallId = `${ymCallId}-digit-confirm`;
+    await yemotCall({ callId: ymDigitCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymDigitCallId, speech: "הכנסה" });
+    const ymDigitConfirmPrompt = await yemotCall({ callId: ymDigitCallId, speech: "77" });
+    assert(ymDigitConfirmPrompt.includes("סולמית"), "שאלת האישור בימות מזכירה אפשרות הקשת סולמית לאישור מהיר");
+    const ymDigitConfirmDone = await yemotCall({ callId: ymDigitCallId, speech: "#" });
+    assert(
+      ymDigitConfirmDone.includes("נשמר") && ymDigitConfirmDone.includes("g-hangup"),
+      "הקשת סולמית (#) בלבד, בלי לומר 'כן', נחשבת אישור תקף ושומרת את התנועה"
+    );
+    const afterDigitTx = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterDigitTx.data.transactions.some(t => t.source === "phone" && t.amount === 77 && t.type === "income"),
+      "התנועה שאושרה בהקשת סולמית אכן נשמרה במסד הנתונים"
+    );
+
     const ymBalanceCallId = `${ymCallId}-balance`;
     await yemotCall({ callId: ymBalanceCallId, phone: "+972500000001" }); // מוודאים שפורמט בינלאומי (+972) גם מזוהה
-    const ymBalance = await yemotCall({ callId: ymBalanceCallId, speech: "יתרה" });
-    assert(ymBalance.includes("היתרה הנוכחית שלך היא"), "שאילתת יתרה קולית עובדת גם בפורמט טלפון בינלאומי דרך ימות");
+    const ymBalance = await yemotCall({ callId: ymBalanceCallId, speech: "חשבונות" });
+    assert(ymBalance.includes("היתרה הנוכחית שלך היא"), "קטגוריית 'ניהול חשבונות' (מילה 'חשבונות') עובדת גם דרך ימות");
+
+    console.log("\n📝 הרשמה ישירות בטלפון (ימות המשיח) — אותה יכולת גם דרך ימות");
+    const ymSignupCallId = `${ymCallId}-signup`;
+    const ymSignupPhone = "0500000088";
+    const ymSignupGreeting = await yemotCall({ callId: ymSignupCallId, phone: ymSignupPhone });
+    assert(ymSignupGreeting.includes("אינו מזוהה") && ymSignupGreeting.includes("השם המלא"), "מספר לא מזוהה בימות מקבל הצעת הרשמה");
+    await yemotCall({ callId: ymSignupCallId, speech: "דנה לוי" });
+    const ymSignupDone = await yemotCall({ callId: ymSignupCallId, speech: "כן" });
+    assert(ymSignupDone.includes("נרשמת בהצלחה") && ymSignupDone.includes("דנה לוי"), "הרשמה טלפונית דרך ימות יוצרת משתמש ועוברת לתפריט הרגיל");
+
+    const ymSecondCall = await yemotCall({ callId: `${ymSignupCallId}-again`, phone: ymSignupPhone });
+    assert(
+      ymSecondCall.includes("דנה לוי") && !ymSecondCall.includes("אינו מזוהה"),
+      "שיחת ימות חוזרת מאותו מספר אחרי ההרשמה כבר מזהה את המשתמש שנוצר"
+    );
 
   } catch (err) {
     failed++;
