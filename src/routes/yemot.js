@@ -17,6 +17,11 @@ const { text } = require("../router");
 const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt } = require("./ivr");
 const { sayAndReadStt, sayAndHangup, VAL_NAME } = require("../services/yemot");
 
+// שלבים שמבקשים טקסט חופשי גרידא (שם, לא קטגוריה/ספרה) - אין בהם שום קיצור הקשה בעל משמעות,
+// ולכן אפשר להעביר אותם למנוע ה"הקלטה" של ימות (freeText ב-sayAndReadStt) לזיהוי דיבור מדויק
+// ונדיב יותר, בלי לפגוע בקיצורי ההקשה בשום מקום אחר (הם ממילא לא רלוונטיים כאן).
+const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student"]);
+
 function register(router) {
   router.post("/api/ivr/yemot", async (ctx) => {
     const v = ctx.body || {};
@@ -42,7 +47,7 @@ function register(router) {
         return text(
           ctx.res,
           200,
-          sayAndReadStt("מספר הטלפון שלך אינו מזוהה במערכת. אפשר להירשם עכשיו ישירות בטלפון, בלי לגשת לאתר. מה השם המלא שלכם?")
+          sayAndReadStt("מספר הטלפון שלך אינו מזוהה במערכת. אפשר להירשם עכשיו ישירות בטלפון, בלי לגשת לאתר. מה השם המלא שלכם?", { freeText: true })
         );
       }
 
@@ -66,7 +71,7 @@ function register(router) {
     if (result.hangup) {
       return text(ctx.res, 200, sayAndHangup(result.text));
     }
-    return text(ctx.res, 200, sayAndReadStt(result.text));
+    return text(ctx.res, 200, sayAndReadStt(result.text, { freeText: FREE_TEXT_STATES.has(result.nextState) }));
   });
 }
 

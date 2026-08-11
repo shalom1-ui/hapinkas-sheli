@@ -92,7 +92,10 @@ function mainMenuPrompt(name, opts = {}) {
   // שאפשר להקיש ספרה במקום לדבר, ובלי לחכות שהמערכת תסיים להקריא את כל התפריט (ימות לא חוסם הקשה
   // במהלך ההשמעה - ר' services/yemot.js). בכוונה לא חוזרים כאן על כל רשימת הספרות (זה כבר ארוך
   // מספיק בגלל רשימת הקטגוריות עצמה) - מספיק לדעת שאפשר להקיש בכלל.
-  const digitNote = opts.digitConfirm ? " אפשר גם להקיש 1 עד 6, או סולמית לאישור מהיר." : "";
+  // חשוב: כאן לא מזכירים "סולמית לאישור מהיר" - זה תפריט בחירת קטגוריה, לא שאלת כן/לא, ולסולמית
+  // אין כאן שום פעולה. הזכרה שגויה שלה כאן גרמה בעבר לכך שמתקשרים ניסו להקיש סולמית במסך הזה ולא
+  // קרה כלום חוץ מ"לא זוהה דיבור" אחרי המתנה - ר' isConfirmYes/confirmSuffix למקומות שבהם סולמית כן פעילה.
+  const digitNote = opts.digitConfirm ? " אפשר גם להקיש 1 עד 6." : "";
   return `${name ? `שלום ${name}, ` : "שלום, "}הגעתם לפנקס שלי. נא לציין קטגוריה: ${mainMenuCategoriesText()}${digitNote}`;
 }
 function mainMenuCategoriesText() {
@@ -126,12 +129,16 @@ function transactionsTypePrompt(opts) {
   return `הכנסה או הוצאה?${opts && opts.digitConfirm ? " (אפשר גם להקיש: 1 להכנסה, 2 להוצאה)" : ""}`;
 }
 // טקסט אפשרויות שלב בחירת הפעולה בחונכות (משותף לכל הצמתים שמגיעים לשלב הזה)
+// משתמשים במילים עבריות פשוטות ("כניסה"/"יציאה") ולא ב"צ'ק אין"/"צ'ק אאוט" (תעתיק אנגלית) - זה גם
+// יותר ברור למתקשר, וגם יותר קל לזיהוי דיבור: המערכת מקריאה בעברית, אז עדיף שגם המתקשר יחזור
+// במילה עברית טבעית ולא ינסה לחקות ביטוי לועזי. לוגיקת ההתאמה (case "mentor_action") עדיין מקבלת
+// גם "אין"/"אאוט" כמילות מפתח נוספות לנוחות, ליתר בטחון.
 function mentorActionPrompt(studentName, opts) {
-  return `${studentName}. האם זה צ'ק אין, צ'ק אאוט, מפגש רגיל, או הסרת התלמיד?${mentorActionDigitsNote(opts)}`;
+  return `${studentName}. האם זה כניסה, יציאה, מפגש רגיל, או הסרת התלמיד?${mentorActionDigitsNote(opts)}`;
 }
-// רמז הקשה (1/2/3/4) לשלב בחירת סוג הפעולה בחונכות (צ'ק אין / צ'ק אאוט / מפגש רגיל / הסרת תלמיד)
+// רמז הקשה (1/2/3/4) לשלב בחירת סוג הפעולה בחונכות (כניסה / יציאה / מפגש רגיל / הסרת תלמיד)
 function mentorActionDigitsNote(opts) {
-  return opts && opts.digitConfirm ? " אפשר גם להקיש: 1 לצ'ק אין, 2 לצ'ק אאוט, 3 למפגש רגיל, 4 להסרת התלמיד." : "";
+  return opts && opts.digitConfirm ? " אפשר גם להקיש: 1 לכניסה, 2 ליציאה, 3 למפגש רגיל, 4 להסרת התלמיד." : "";
 }
 // רמז הקשה (1/2) לשלב "האם להוסיף תלמיד חדש שלא נמצא ברשימה"
 function addStudentDigitsNote(opts) {
@@ -439,7 +446,7 @@ function doCheckin(draft) {
   const student = db.prepare("SELECT * FROM students WHERE id = ?").get(draft.studentId);
   if (student.checkin_at) return { text: "כבר קיים מפגש פתוח לתלמיד הזה. להתראות.", nextState: "done", hangup: true };
   db.prepare("UPDATE students SET checkin_at = datetime('now') WHERE id = ?").run(student.id);
-  return { text: `נרשם צ'ק אין עבור ${student.name}. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "checkin_saved" };
+  return { text: `נרשמה כניסה עבור ${student.name}. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "checkin_saved" };
 }
 
 function doCheckout(draft, user) {
@@ -450,7 +457,7 @@ function doCheckout(draft, user) {
   db.prepare("INSERT INTO sessions (student_id, mentor_user_id, method, duration_minutes) VALUES (?, ?, 'checkin_checkout', ?)")
     .run(student.id, user.id, durationMinutes);
   db.prepare("UPDATE students SET checkin_at = NULL WHERE id = ?").run(student.id);
-  return { text: `נרשם צ'ק אאוט עבור ${student.name}. משך המפגש: ${durationMinutes} דקות. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "checkout_saved" };
+  return { text: `נרשמה יציאה עבור ${student.name}. משך המפגש: ${durationMinutes} דקות. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "checkout_saved" };
 }
 
 function doQuickSession(draft, user) {

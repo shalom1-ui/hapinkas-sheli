@@ -604,8 +604,9 @@ async function run() {
     const ymGreeting = await yemotCall({ callId: ymCallId, phone: "0500000001" });
     assert(ymGreeting.startsWith("read=t-") && ymGreeting.includes("נא לציין"), "פתיחת שיחה בימות (מספר בפורמט מקומי) מזהה משתמש ומציגה תפריט קטגוריות");
     assert(
-      ymGreeting.includes("1 עד 6") && ymGreeting.includes("סולמית"),
-      "כבר בברכת הפתיחה בימות מוזכר שאפשר להקיש ספרה (1-6) בלי לחכות, במקום לדבר - בקצרה, כדי לא להאריך את זמן ההשמעה"
+      ymGreeting.includes("1 עד 6") && !ymGreeting.includes("סולמית"),
+      "כבר בברכת הפתיחה בימות מוזכר שאפשר להקיש ספרה (1-6) בלי לחכות, במקום לדבר - בקצרה, כדי לא להאריך את זמן ההשמעה. " +
+        "לא מוזכרת כאן סולמית - בתפריט הראשי (בחירת קטגוריה) אין לה שום פעולה, וזה בעבר גרם למתקשרים לנסות להקיש אותה בלי שקרה כלום"
     );
 
     const ymUnknown = await yemotCall({ callId: `${ymCallId}-unknown`, phone: "0500000099" });
@@ -666,8 +667,7 @@ async function run() {
     await yemotCall({ callId: ymDigitMentorCallId, phone: "0500000001" });
     await yemotCall({ callId: ymDigitMentorCallId, speech: "3" }); // 3 = חונכות
     const ymDigitMentorAction = await yemotCall({ callId: ymDigitMentorCallId, speech: "תלמיד בדיקה" });
-    // הערה: ימות אוסרת גרש (') כתו TTS - sanitizeForYemot מסיר אותו, אז "צ'ק" יוצא כ"צק" בפועל
-    assert(ymDigitMentorAction.includes("1 לצק אין") && ymDigitMentorAction.includes("2 לצק אאוט"), "אחרי זיהוי תלמיד, מוזכרים גם קיצורי הקשה לצ'ק אין/אאוט/מפגש רגיל");
+    assert(ymDigitMentorAction.includes("1 לכניסה") && ymDigitMentorAction.includes("2 ליציאה"), "אחרי זיהוי תלמיד, מוזכרים גם קיצורי הקשה לכניסה/יציאה/מפגש רגיל");
 
     console.log("\n➕ חונכות: הוספת תלמיד חדש ישירות מהטלפון (בלי לגשת לאתר), אם השם לא נמצא ברשימת החונך");
     const ymAddStudentCallId = `${ymCallId}-add-student`;
@@ -680,7 +680,7 @@ async function run() {
     );
     const ymAddStudentDone = await yemotCall({ callId: ymAddStudentCallId, speech: "1" }); // 1 = כן, להוסיף
     assert(
-      ymAddStudentDone.includes("נוסף תלמיד חדש") && ymAddStudentDone.includes("משה ישראלי") && ymAddStudentDone.includes("1 לצק אין"),
+      ymAddStudentDone.includes("נוסף תלמיד חדש") && ymAddStudentDone.includes("משה ישראלי") && ymAddStudentDone.includes("1 לכניסה"),
       "הקשת/אמירת אישור יוצרת בפועל תלמיד חדש (owner=החונך המתקשר) וממשיכה ישר לבחירת סוג הפעולה"
     );
     const studentsAfterAdd = await api("GET", "/api/students", null, token);
