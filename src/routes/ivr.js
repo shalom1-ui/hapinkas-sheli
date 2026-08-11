@@ -158,12 +158,12 @@ async function advance(state, speech, draft, user, opts = {}) {
       // מילת המפתח המתאימה, ומריצים דרך אותה לוגיקת התאמה כרגיל.
       const es = mainMenuDigitKeyword(s) || s;
       if (includesAny(es, ["ניהול חשבונות", "חשבונות", "יתרה", "מצב חשבון"])) return doBalance(user);
-      if (includesAny(es, ["הוצאה"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
-      if (includesAny(es, ["הכנסה"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
+      if (includesAny(es, ["הוצאה", "הוצאות"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
+      if (includesAny(es, ["הכנסה", "הכנסות"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
       if (includesAny(es, ["תנועות", "תנועה"])) return { text: transactionsTypePrompt(opts), nextState: "transactions_pick_type" };
       if (includesAny(es, ["חונכות", "תלמיד"])) return { text: "מה שם התלמיד?", nextState: "mentor_pick_student" };
       if (includesAny(es, ["מטפלים", "מטפל", "דיווח", "ריפוי", "רגשי"])) return { text: "מה סוג הדיווח: ריפוי בעיסוק, טיפול רגשי, או אחר?", nextState: "therapist_role" };
-      if (includesAny(es, ["הורה"])) return startGuardianFlow(user);
+      if (includesAny(es, ["הורה", "הורים"])) return startGuardianFlow(user);
       if (includesAny(es, ["מפקח", "הערת מפקח", "הערה"])) return { text: "על איזה תלמיד ההערה?", nextState: "supervisor_pick_student" };
       return { text: `לא הבנתי. אפשר לומר: ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
     }
@@ -231,7 +231,7 @@ async function advance(state, speech, draft, user, opts = {}) {
     }
     case "mentor_confirm_add_student": {
       const digit = onlyDigits(s);
-      const wantsAdd = digit === "1" || includesAny(s, ["כן", "אישור", "מאשר", "הוסיפו", "הוסף"]);
+      const wantsAdd = digit === "1" || includesAny(s, ["כן", "אישור", "מאשר", "לאשר", "הוסיפו", "הוסף"]);
       const wantsCancel = digit === "2" || includesAny(s, ["לא", "ביטול", "בטל"]);
       if (wantsAdd) {
         const info = db.prepare("INSERT INTO students (owner_user_id, name) VALUES (?, ?)").run(user.id, draft.pendingStudentName);
@@ -265,8 +265,10 @@ async function advance(state, speech, draft, user, opts = {}) {
       const digit = onlyDigits(s);
       if (digit === "2" || includesAny(s, ["אאוט", "יציאה", "סיום"])) return doCheckout(draft, user);
       if (digit === "1" || includesAny(s, ["אין", "כניסה", "התחלה"])) return doCheckin(draft);
-      if (digit === "3" || includesAny(s, ["רגיל", "מהיר", "קבוע"])) return doQuickSession(draft, user);
-      if (digit === "4" || includesAny(s, ["הסר", "הסרה", "מחיקה", "מחק", "לא לומד", "הפסיק"])) {
+      // "מפגש" נכלל כאן בנוסף ל"רגיל"/"מהיר"/"קבוע" - בבדיקה בפועל זיהוי הדיבור לפעמים קלט רק את המילה
+      // הראשונה מתוך "מפגש רגיל" (שתי מילים) והשמיט את השנייה, אז בלי "מפגש" עצמו ברשימה זה לא היה מזוהה בכלל.
+      if (digit === "3" || includesAny(s, ["רגיל", "מהיר", "קבוע", "מפגש"])) return doQuickSession(draft, user);
+      if (digit === "4" || includesAny(s, ["הסר", "הסרה", "להסיר", "מחיקה", "מחק", "לא לומד", "הפסיק"])) {
         return {
           text: `לאשר: להסיר את ${draft.studentName} מרשימת התלמידים שלך? התלמיד לא יימחק לצמיתות, רק לא יופיע יותר ברשימה הפעילה - כל ההיסטוריה שלו נשארת בתיק. אמרו כן לאישור.${confirmSuffix(opts)}`,
           nextState: "mentor_remove_confirm",
@@ -371,7 +373,7 @@ async function advanceSignup(state, speech, draft, opts = {}) {
     // אבל מייל מאפשר בעתיד גם שחזור/כניסה מהאתר בצורה נוחה יותר. אם הזיהוי מהדיבור לא נשמע כמו כתובת
     // מייל תקינה - לא תוקעים את השיחה בלולאה, פשוט ממשיכים בלי מייל (אפשר להוסיף מאוחר יותר באתר).
     case "signup_email": {
-      if (includesAny(s, ["דלג", "לא", "אין", "בלי", "לדלג", "המשך"])) {
+      if (includesAny(s, ["דלג", "לא", "אין", "בלי", "לדלג", "דילוג", "המשך"])) {
         const newUser = createPhoneUser(draft.fullName, draft.phone, null);
         return {
           text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
@@ -526,18 +528,25 @@ function includesAny(text, words) {
   return words.some(w => text.includes(normalize(w)));
 }
 
-// בודק אם תשובה נחשבת "כן" בצומת אישור: תמיד לפי מילה מדוברת ("כן"/"אישור"/"מאשר"), ובערוצים שתומכים
-// בהקשה תוך כדי זיהוי דיבור (opts.digitConfirm) - גם כל הקשה (ספרות ו/או סולמית), כדי לאפשר אישור מהיר
-// בלי לחכות לעיבוד הדיבור.
+// בודק אם תשובה נחשבת "כן" בצומת אישור: תמיד לפי מילה מדוברת ("כן"/"אישור"/"מאשר"/"לאשר"), ובערוצים
+// שתומכים בהקשה תוך כדי זיהוי דיבור (opts.digitConfirm) - גם הקשת 1, כדי לאפשר אישור מהיר בלי לחכות
+// לעיבוד הדיבור. בעבר קיבלנו כאן כל הקשת ספרה (כולל סולמית בודדת) כ"כן" - התברר בבדיקה בפועל שסולמית
+// בודדת (בלי ספרה לפניה) לרוב לא מגיעה בכלל לשרת שלנו במצב זיהוי דיבור של ימות (ככל הנראה נבלעת
+// כתו סיום קלט), ומצד שני קבלת *כל* ספרה כ"כן" הייתה מסוכנת (למשל הקשה בטעות של 2 באישור הסרת
+// תלמיד הייתה מוחקת אותו בלי כוונה) - לכן עברנו ספציפית ל-1, שכבר מוכח כעובד באמינות בכל שאר התפריטים.
 function isConfirmYes(s, opts) {
-  if (includesAny(s, ["כן", "אישור", "מאשר"])) return true;
-  if (opts && opts.digitConfirm) return /^[#0-9]+$/.test(String(s || "").trim());
+  if (includesAny(s, ["כן", "אישור", "מאשר", "לאשר"])) return true;
+  if (opts && opts.digitConfirm) {
+    const trimmed = String(s || "").trim();
+    return onlyDigits(trimmed) === "1" || trimmed === "#";
+  }
   return false;
 }
 
-// טקסט נוסף שמצטרף לשאלות אישור בערוצים שתומכים בהקשה (ר' isConfirmYes)
+// טקסט נוסף שמצטרף לשאלות אישור בערוצים שתומכים בהקשה (ר' isConfirmYes) - מציע הקשת 1, לא סולמית
+// (סולמית בודדת התבררה כלא אמינה במצב זיהוי דיבור של ימות - ר' isConfirmYes)
 function confirmSuffix(opts) {
-  return opts && opts.digitConfirm ? " אפשר גם להקיש סולמית לאישור מהיר." : "";
+  return opts && opts.digitConfirm ? " אפשר גם להקיש 1 לאישור מהיר." : "";
 }
 
 // מנרמל טקסט להשוואה: מוריד רווחים מיותרים, אותיות קטנות (לא רלוונטי בעברית אבל לא מזיק), ומסיר ניקוד -

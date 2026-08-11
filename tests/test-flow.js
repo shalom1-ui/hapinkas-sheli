@@ -625,21 +625,35 @@ async function run() {
     const ymTx = afterYmTx.data.transactions.find(t => t.source === "phone" && t.amount === 45 && t.category === "מזון");
     assert(!!ymTx, "התנועה שנוצרה בשיחת ימות אכן נשמרה במסד הנתונים עם source=phone");
 
-    console.log("\n#️⃣ אישור מהיר בהקשה (סולמית) בערוץ ימות - בלי לחכות לזיהוי הדיבור על 'כן'");
+    console.log("\n#️⃣ אישור מהיר בהקשה (1) בערוץ ימות - בלי לחכות לזיהוי הדיבור על 'כן'");
+    // הערה: בעבר הוצעה כאן סולמית בודדת כקיצור אישור, אבל בבדיקה בפועל מול ימות התברר שסולמית בודדת
+    // (בלי ספרה לפניה) לרוב לא מגיעה בכלל לשרת במצב זיהוי דיבור - כנראה נבלעת כתו סיום קלט. עברנו
+    // להקשת 1, שכבר מוכחת כעובדת באמינות בכל שאר התפריטים. עדיין מקבלים גם סולמית בפועל (ר' isConfirmYes)
+    // ליתר בטחון, אבל זה לא מה שמוצע/מובטח למתקשר יותר.
     const ymDigitCallId = `${ymCallId}-digit-confirm`;
     await yemotCall({ callId: ymDigitCallId, phone: "0500000001" });
     await yemotCall({ callId: ymDigitCallId, speech: "הכנסה" });
     const ymDigitConfirmPrompt = await yemotCall({ callId: ymDigitCallId, speech: "77" });
-    assert(ymDigitConfirmPrompt.includes("סולמית"), "שאלת האישור בימות מזכירה אפשרות הקשת סולמית לאישור מהיר");
-    const ymDigitConfirmDone = await yemotCall({ callId: ymDigitCallId, speech: "#" });
+    assert(ymDigitConfirmPrompt.includes("1 לאישור"), "שאלת האישור בימות מזכירה אפשרות הקשת 1 לאישור מהיר");
+    const ymDigitConfirmDone = await yemotCall({ callId: ymDigitCallId, speech: "1" });
     assert(
       ymDigitConfirmDone.includes("נשמר") && ymDigitConfirmDone.includes("g-hangup"),
-      "הקשת סולמית (#) בלבד, בלי לומר 'כן', נחשבת אישור תקף ושומרת את התנועה"
+      "הקשת 1 בלבד, בלי לומר 'כן', נחשבת אישור תקף ושומרת את התנועה"
     );
     const afterDigitTx = await api("GET", "/api/transactions", null, token);
     assert(
       afterDigitTx.data.transactions.some(t => t.source === "phone" && t.amount === 77 && t.type === "income"),
-      "התנועה שאושרה בהקשת סולמית אכן נשמרה במסד הנתונים"
+      "התנועה שאושרה בהקשת 1 אכן נשמרה במסד הנתונים"
+    );
+
+    const ymHashConfirmCallId = `${ymCallId}-hash-confirm`;
+    await yemotCall({ callId: ymHashConfirmCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymHashConfirmCallId, speech: "הכנסה" });
+    await yemotCall({ callId: ymHashConfirmCallId, speech: "88" });
+    const ymHashConfirmDone = await yemotCall({ callId: ymHashConfirmCallId, speech: "#" });
+    assert(
+      ymHashConfirmDone.includes("נשמר") && ymHashConfirmDone.includes("g-hangup"),
+      "סולמית בודדת עדיין מתקבלת כאישור תקף אם היא כן מגיעה לשרת (גיבוי נוסף, גם אם לא מוצע יותר למתקשר)"
     );
 
     const ymBalanceCallId = `${ymCallId}-balance`;

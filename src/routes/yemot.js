@@ -20,11 +20,15 @@ const { sayAndReadStt, sayAndHangup, VAL_NAME } = require("../services/yemot");
 // שלבים שמבקשים טקסט חופשי גרידא (שם, לא קטגוריה/ספרה) - אין בהם שום קיצור הקשה בעל משמעות,
 // ולכן אפשר להעביר אותם למנוע ה"הקלטה" של ימות (freeText ב-sayAndReadStt) לזיהוי דיבור מדויק
 // ונדיב יותר, בלי לפגוע בקיצורי ההקשה בשום מקום אחר (הם ממילא לא רלוונטיים כאן).
-const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student"]);
+const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "signup_email"]);
 
 function register(router) {
   router.post("/api/ivr/yemot", async (ctx) => {
     const v = ctx.body || {};
+    // לוג אבחון זמני: רושם בדיוק מה ימות שולח בכל בקשה (כולל השדה "speech" - שם מגיעה גם הקשת ספרות/
+    // סולמית תוך כדי זיהוי דיבור) - כדי לבדוק בפועל (דרך "Logs" ב-Render) מה בדיוק קורה כשמקישים
+    // סולמית בודדת. אפשר להסיר את השורה הזו בהמשך אחרי שהעניין יתברר.
+    console.log(`[YEMOT-DEBUG] בקשה נכנסת: ${JSON.stringify(v)}`);
     const callId = v.ApiCallId;
 
     // בקשה שלא מגיעה מימות (בדיקה ידנית בדפדפן וכו') - לא מחזירים שגיאה קשה, רק הודעה ברורה
