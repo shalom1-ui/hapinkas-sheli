@@ -14,7 +14,7 @@
 
 const db = require("../db");
 const { text } = require("../router");
-const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt } = require("./ivr");
+const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt, OPENING_GREETING } = require("./ivr");
 const { sayAndReadStt, sayAndRecord, sayAndHangup, VAL_NAME } = require("../services/yemot");
 const speechToText = require("../services/speechToText");
 
@@ -67,12 +67,12 @@ function register(router) {
         return text(
           ctx.res,
           200,
-          freeTextPrompt(callId, "מספר הטלפון שלך אינו מזוהה במערכת. אפשר להירשם עכשיו ישירות בטלפון, בלי לגשת לאתר. מה השם המלא שלכם?")
+          freeTextPrompt(callId, `${OPENING_GREETING}מספר הטלפון שלך אינו מזוהה במערכת. אפשר להירשם עכשיו ישירות בטלפון, בלי לגשת לאתר. מה השם המלא שלכם?`)
         );
       }
 
       upsertCall(callId, user.id, "main_menu", {});
-      return text(ctx.res, 200, sayAndReadStt(mainMenuPrompt(user.full_name, { digitConfirm: true })));
+      return text(ctx.res, 200, sayAndReadStt(`${OPENING_GREETING}${mainMenuPrompt(user.full_name, { digitConfirm: true })}`));
     }
 
     // ---------- המשך שיחה קיימת ----------

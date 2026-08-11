@@ -518,6 +518,7 @@ async function run() {
     const callSid = `TEST-${Date.now()}`;
     const greeting = await ivrCall(callSid, "+972500000001");
     assert(greeting.includes("<Gather") && greeting.includes("נא לציין"), "פתיחת שיחה מזהה משתמש ומציגה תפריט קטגוריות");
+    assert(greeting.includes("שלום וברכה") && greeting.includes("הגעתם לקו הפנקס שלי"), "מיד כשמתקשרים (Twilio) המערכת פותחת בברכה 'שלום וברכה, הגעתם לקו הפנקס שלי' לפני שאר התפריט");
 
     await ivrSay(callSid, "הוצאה");
     await ivrSay(callSid, "60");
@@ -571,8 +572,19 @@ async function run() {
       signupGreeting.includes("אינו מזוהה") && signupGreeting.includes("<Gather") && signupGreeting.includes("השם המלא"),
       "מספר לא מזוהה מקבל הצעה להירשם בטלפון (לא ננתק מיד)"
     );
+    assert(signupGreeting.includes("שלום וברכה") && signupGreeting.includes("הגעתם לקו הפנקס שלי"), "גם למספר לא מזוהה, הברכה 'שלום וברכה, הגעתם לקו הפנקס שלי' נאמרת מיד בתחילת השיחה");
     const signupConfirmXml = await ivrSay(signupCallSid, "רותם כהן");
     assert(signupConfirmXml.includes("רותם כהן") && signupConfirmXml.includes("לאשר"), "שם שנאמר חוזר לאישור לפני יצירת המשתמש");
+
+    // תיקון בטיחות: קלט לא ברור באישור השם לא מוחק בשקט את השם ומתחיל את ההרשמה מחדש - הוא רק
+    // חוזר על אותה שאלת אישור, עם השם שכבר נאמר עדיין שמור (בדיוק כמו התיקון שכבר קיים בכל שאר
+    // צמתי האישור - expense_confirm וכו').
+    const signupUnclearXml = await ivrSay(signupCallSid, "אולי אחר כך");
+    assert(
+      signupUnclearXml.includes("רותם כהן") && signupUnclearXml.includes("לאשר") && !signupUnclearXml.includes("מה השם המלא שלכם"),
+      "קלט לא ברור באישור השם בהרשמה חוזר על אותה שאלת אישור (עם השם שכבר נאמר), ולא מתחיל את ההרשמה מחדש בשקט"
+    );
+
     const signupEmailPrompt = await ivrSay(signupCallSid, "כן");
     assert(
       signupEmailPrompt.includes("כתובת מייל") && signupEmailPrompt.includes("<Gather"),
@@ -603,6 +615,7 @@ async function run() {
     const ymCallId = `YM-${Date.now()}`;
     const ymGreeting = await yemotCall({ callId: ymCallId, phone: "0500000001" });
     assert(ymGreeting.startsWith("read=t-") && ymGreeting.includes("נא לציין"), "פתיחת שיחה בימות (מספר בפורמט מקומי) מזהה משתמש ומציגה תפריט קטגוריות");
+    assert(ymGreeting.includes("שלום וברכה") && ymGreeting.includes("הגעתם לקו הפנקס שלי"), "מיד כשמתקשרים גם בימות המערכת פותחת בברכה 'שלום וברכה, הגעתם לקו הפנקס שלי' לפני שאר התפריט");
     assert(
       ymGreeting.includes("1 עד 6") && !ymGreeting.includes("סולמית"),
       "כבר בברכת הפתיחה בימות מוזכר שאפשר להקיש ספרה (1-6) בלי לחכות, במקום לדבר - בקצרה, כדי לא להאריך את זמן ההשמעה. " +
@@ -614,6 +627,7 @@ async function run() {
       ymUnknown.includes("אינו מזוהה") && ymUnknown.startsWith("read=t-") && ymUnknown.includes("השם המלא"),
       "שיחת ימות ממספר לא רשום מקבלת הצעת הרשמה בטלפון (לא מנותקת מיד)"
     );
+    assert(ymUnknown.includes("שלום וברכה") && ymUnknown.includes("הגעתם לקו הפנקס שלי"), "גם בימות, למספר לא מזוהה, הברכה נאמרת מיד בתחילת השיחה");
 
     await yemotCall({ callId: ymCallId, speech: "הוצאה" });
     await yemotCall({ callId: ymCallId, speech: "45" });

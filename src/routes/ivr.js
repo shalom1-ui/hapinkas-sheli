@@ -25,6 +25,11 @@ const MAIN_MENU_HINTS = [
   "חונכות", "מטפלים", "דיווח", "הורה", "מפקח", "הערת מפקח", "הערה",
 ];
 
+// ברכת פתיחה - נאמרת פעם אחת בלבד, ממש כשמתקשרים (ההודעה הראשונה של שיחה חדשה), לפני כל שאלה
+// אחרת (זיהוי משתמש/הצעת הרשמה/תפריט הקטגוריות). בכוונה לא מוכפלת בשום מקום אחר באמצע השיחה
+// (למשל אחרי ביטול פעולה שחוזר לתפריט הראשי) - שם זה יישמע מוזר ומיותר לחזור שוב על "הגעתם לקו...".
+const OPENING_GREETING = "שלום וברכה, הגעתם לקו הפנקס שלי. ";
+
 function register(router) {
   // כניסה לשיחה
   router.post("/api/ivr/voice", async (ctx) => {
@@ -38,7 +43,7 @@ function register(router) {
         ctx.res,
         200,
         sayAndGather({
-          text: "מספר הטלפון שלך אינו מזוהה במערכת. אפשר להירשם עכשיו ישירות בטלפון, בלי לגשת לאתר. מה השם המלא שלכם?",
+          text: `${OPENING_GREETING}מספר הטלפון שלך אינו מזוהה במערכת. אפשר להירשם עכשיו ישירות בטלפון, בלי לגשת לאתר. מה השם המלא שלכם?`,
           actionPath: "/api/ivr/handle",
           hints: [],
         })
@@ -49,7 +54,7 @@ function register(router) {
     return xml(
       ctx.res,
       200,
-      sayAndGather({ text: mainMenuPrompt(user.full_name), actionPath: "/api/ivr/handle", hints: MAIN_MENU_HINTS })
+      sayAndGather({ text: `${OPENING_GREETING}${mainMenuPrompt(user.full_name)}`, actionPath: "/api/ivr/handle", hints: MAIN_MENU_HINTS })
     );
   });
 
@@ -403,13 +408,25 @@ async function advanceSignup(state, speech, draft, opts = {}) {
         draft: { ...draft, fullName },
       };
     }
+    // תיקון בטיחות (אותו דפוס שהופעל כבר בכל שאר צמתי האישור - ר' expense_confirm וכו' ב-advance()):
+    // בעבר כל קלט לא ברור כאן (למשל זיהוי דיבור שגוי) נחשב אוטומטית "לא", ומחק בשקט את השם שכבר
+    // נאמר וחזר להתחיל את ההרשמה מההתחלה ("מה השם המלא שלכם?") - מתסכל ומיותר אם זו רק אי-הבנה
+    // חד-פעמית. עכשיו: "כן" מפורש -> ממשיכים; "לא" מפורש -> באמת מתחילים מחדש; כל השאר -> חוזרים
+    // על אותה שאלת אישור (עם השם שכבר נאמר עדיין שמור), בלי לאבד כלום.
     case "signup_confirm": {
-      if (!isConfirmYes(s, opts)) {
+      if (isConfirmYes(s, opts)) {
+        return {
+          text: "אפשר גם לצרף כתובת מייל לחשבון, זה לא חובה. אם תרצו - אמרו אותה עכשיו. אם לא, אמרו דלג.",
+          nextState: "signup_email",
+          draft,
+        };
+      }
+      if (isConfirmNo(s, opts)) {
         return { text: "בסדר, ננסה שוב. מה השם המלא שלכם?", nextState: "signup_name", draft: { phone: draft.phone } };
       }
       return {
-        text: "אפשר גם לצרף כתובת מייל לחשבון, זה לא חובה. אם תרצו - אמרו אותה עכשיו. אם לא, אמרו דלג.",
-        nextState: "signup_email",
+        text: `לא הבנתי.${retryHint()} לאשר: נרשמים בשם ${draft.fullName}, עם מספר הטלפון שממנו אתם מתקשרים כרגע? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        nextState: "signup_confirm",
         draft,
       };
     }
@@ -646,4 +663,5 @@ module.exports = {
   appendTranscript,
   MAIN_MENU_HINTS,
   mainMenuPrompt,
+  OPENING_GREETING,
 };
