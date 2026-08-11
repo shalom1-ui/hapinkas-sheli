@@ -179,7 +179,7 @@ async function advance(state, speech, draft, user, opts = {}) {
     // ---------- הוצאה ----------
     case "expense_amount": {
       const amount = extractAmount(s);
-      if (!amount) return { text: "לא זיהיתי סכום. כמה עלה, בשקלים?", nextState: "expense_amount" };
+      if (!amount) return { text: `לא זיהיתי סכום.${retryHint()} כמה עלה, בשקלים?`, nextState: "expense_amount" };
       return { text: "לאיזו קטגוריה? למשל: מזון, תחבורה, דיור, אחר.", nextState: "expense_category", draft: { amount } };
     }
     case "expense_category": {
@@ -210,7 +210,7 @@ async function advance(state, speech, draft, user, opts = {}) {
     // ---------- הכנסה ----------
     case "income_amount": {
       const amount = extractAmount(s);
-      if (!amount) return { text: "לא זיהיתי סכום. מה סכום ההכנסה?", nextState: "income_amount" };
+      if (!amount) return { text: `לא זיהיתי סכום.${retryHint()} מה סכום ההכנסה?`, nextState: "income_amount" };
       return { text: `לאשר: הכנסה של ${amount} שקלים? אמרו כן לאישור.${confirmSuffix(opts)}`, nextState: "income_confirm", draft: { amount } };
     }
     case "income_confirm": {
@@ -249,7 +249,7 @@ async function advance(state, speech, draft, user, opts = {}) {
     }
     case "mentor_confirm_add_student": {
       const digit = onlyDigits(s);
-      const wantsAdd = digit === "1" || includesAny(s, ["כן", "אישור", "מאשר", "לאשר", "הוסיפו", "הוסף"]);
+      const wantsAdd = digit === "1" || includesAny(s, ["כן", "אישור", "מאשר", "לאשר", "מאושר", "הוסיפו", "הוסף"]);
       const wantsCancel = digit === "2" || includesAny(s, ["לא", "ביטול", "בטל"]);
       if (wantsAdd) {
         const info = db.prepare("INSERT INTO students (owner_user_id, name) VALUES (?, ?)").run(user.id, draft.pendingStudentName);
@@ -320,7 +320,7 @@ async function advance(state, speech, draft, user, opts = {}) {
     }
     case "therapist_student": {
       const student = findStudentByName(null, s);
-      if (!student) return { text: "לא מצאתי תלמיד בשם הזה. אפשר לומר שוב?", nextState: "therapist_student" };
+      if (!student) return { text: `לא מצאתי תלמיד בשם הזה.${retryHint()} אפשר לומר שוב?`, nextState: "therapist_student" };
       return { text: "מה תוכן הדיווח? אפשר לתאר את ההתקדמות והמטרות.", nextState: "therapist_note", draft: { ...draft, studentId: student.id, studentName: student.name } };
     }
     case "therapist_note": {
@@ -351,14 +351,14 @@ async function advance(state, speech, draft, user, opts = {}) {
     case "guardian_pick_child": {
       const options = draft.children || [];
       const match = options.find((c) => normalize(c.name).includes(s) || s.includes(normalize(c.name)));
-      if (!match) return { text: "לא זיהיתי את השם. אפשר לומר שוב את שם הילד?", nextState: "guardian_pick_child" };
+      if (!match) return { text: `לא זיהיתי את השם.${retryHint()} אפשר לומר שוב את שם הילד?`, nextState: "guardian_pick_child" };
       return guardianSummaryResult(match);
     }
 
     // ---------- הערת מפקח ----------
     case "supervisor_pick_student": {
       const student = findStudentByName(null, s);
-      if (!student) return { text: "לא מצאתי תלמיד בשם הזה. אפשר לומר שוב?", nextState: "supervisor_pick_student" };
+      if (!student) return { text: `לא מצאתי תלמיד בשם הזה.${retryHint()} אפשר לומר שוב?`, nextState: "supervisor_pick_student" };
       return { text: "מה תוכן ההערה?", nextState: "supervisor_readback", draft: { studentId: student.id, studentName: student.name } };
     }
     case "supervisor_readback": {
@@ -579,7 +579,7 @@ function includesAny(text, words) {
 // כתו סיום קלט), ומצד שני קבלת *כל* ספרה כ"כן" הייתה מסוכנת (למשל הקשה בטעות של 2 באישור הסרת
 // תלמיד הייתה מוחקת אותו בלי כוונה) - לכן עברנו ספציפית ל-1, שכבר מוכח כעובד באמינות בכל שאר התפריטים.
 function isConfirmYes(s, opts) {
-  if (includesAny(s, ["כן", "אישור", "מאשר", "לאשר"])) return true;
+  if (includesAny(s, ["כן", "אישור", "מאשר", "לאשר", "מאושר"])) return true;
   if (opts && opts.digitConfirm) {
     const trimmed = String(s || "").trim();
     return onlyDigits(trimmed) === "1" || trimmed === "#";
