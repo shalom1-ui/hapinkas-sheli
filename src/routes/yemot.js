@@ -47,7 +47,7 @@ function register(router) {
       }
 
       upsertCall(callId, user.id, "main_menu", {});
-      return text(ctx.res, 200, sayAndReadStt(mainMenuPrompt(user.full_name)));
+      return text(ctx.res, 200, sayAndReadStt(mainMenuPrompt(user.full_name, { digitConfirm: true })));
     }
 
     // ---------- המשך שיחה קיימת ----------

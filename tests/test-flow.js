@@ -116,6 +116,93 @@ async function run() {
     const loginNew = await api("POST", "/api/auth/login", { username, password: "9999" });
     assert(loginNew.status === 200, "התחברות עם הסיסמה החדשה הצליחה");
 
+    console.log("\n👑 תביעת 'בעל הקו' (admin) - לא 'המשתמש הראשון שנרשם', אלא מי שנרשם באתר עצמו ומאמת טלפון");
+    // חשבון שנוצר דרך הטלפון (signup_channel='phone') לא כשיר לתבוע בעל הקו, גם אם הוא "המשתמש הראשון"
+    // באיזשהו מובן - בודקים את זה ע"י יצירת משתמש כזה, קביעת סיסמה ידועה דרך שחזור סיסמה (כדי שנוכל
+    // בכלל להתחבר אליו ולקבל טוקן), ואז ניסיון תביעה שאמור להידחות.
+    const phoneOnlyCallSid = `ADMIN-CLAIM-TEST-${Date.now()}`;
+    const phoneOnlyPhone = "+972500000066";
+    await ivrCall(phoneOnlyCallSid, phoneOnlyPhone);
+    await ivrSay(phoneOnlyCallSid, "מהטלפון בלבד");
+    await ivrSay(phoneOnlyCallSid, "כן");
+    await ivrSay(phoneOnlyCallSid, "דלג");
+    const phoneOnlyUsername = `phone_${phoneOnlyPhone.replace(/\D/g, "").slice(-9)}`;
+    const phoneOnlyResetReq = await api("POST", "/api/auth/forgot-password/request", { username: phoneOnlyUsername, channel: "phone" });
+    assert(phoneOnlyResetReq.status === 200 && phoneOnlyResetReq.data.demoCode, "אפשר לשחזר סיסמה לחשבון שנוצר מהטלפון (כדי להתחבר אליו לצורך הבדיקה)");
+    const phoneOnlyVerify = await api("POST", "/api/auth/forgot-password/verify", { username: phoneOnlyUsername, code: phoneOnlyResetReq.data.demoCode });
+    await api("POST", "/api/auth/forgot-password/reset", { resetToken: phoneOnlyVerify.data.resetToken, newPassword: "1234" });
+    const phoneOnlyLogin = await api("POST", "/api/auth/login", { username: phoneOnlyUsername, password: "1234" });
+    assert(phoneOnlyLogin.status === 200, "התחברות לחשבון שנוצר מהטלפון (אחרי קביעת סיסמה) הצליחה");
+    const phoneOnlyClaimAttempt = await api("POST", "/api/me/request-admin-claim", {}, phoneOnlyLogin.data.token);
+    assert(
+      phoneOnlyClaimAttempt.status === 403,
+      "חשבון שנוצר דרך הטלפון (לא נרשם באתר עצמו) לא יכול לתבוע את תפקיד בעל הקו, גם אם יש לו טלפון וסיסמה"
+    );
+
+    const claimStatusBefore = await api("GET", "/api/me/admin-claim-status", null, token);
+    assert(
+      claimStatusBefore.data.adminExists === false && claimStatusBefore.data.eligible === true,
+      "לפני שיש בעל קו כלשהו: משתמש שנרשם באתר עצמו ויש לו טלפון רשום כשיר לתבוע את התפקיד"
+    );
+
+    const noPhoneSignup = await api("POST", "/api/auth/signup", {
+      full_name: "בלי טלפון", username: `no_phone_${Date.now()}`, password: "1234",
+    });
+    const noPhoneClaimAttempt = await api("POST", "/api/me/request-admin-claim", {}, noPhoneSignup.data.token);
+    assert(noPhoneClaimAttempt.status === 400, "משתמש בלי מספר טלפון רשום לא יכול לתבוע את בעל הקו (אין ערוץ לאמת אותו)");
+
+    const wrongClaimCode = await api("POST", "/api/me/request-admin-claim", {}, token);
+    assert(wrongClaimCode.status === 200 && wrongClaimCode.data.demoCode, "בקשת תביעת בעל הקו שולחת קוד אישור בשיחה קולית (demoCode במצב MOCK)");
+    const wrongClaimConfirm = await api("POST", "/api/me/confirm-admin-claim", { code: "0000" }, token);
+    assert(wrongClaimConfirm.status === 400, "קוד שגוי לא מאשר תביעת בעל הקו");
+    const rightClaimConfirm = await api("POST", "/api/me/confirm-admin-claim", { code: wrongClaimCode.data.demoCode }, token);
+    assert(
+      rightClaimConfirm.status === 200 && rightClaimConfirm.data.user.roles.includes("admin"),
+      "קוד נכון מאשר את התביעה בפועל - המשתמש (שנרשם באתר עם טלפון משלו) הופך ל'בעל הקו'"
+    );
+
+    const secondClaimAttempt = await api("POST", "/api/me/request-admin-claim", {}, noPhoneSignup.data.token);
+    assert(secondClaimAttempt.status === 409, "אחרי שכבר יש בעל קו, אף אחד אחר לא יכול לתבוע את התפקיד (409)");
+
+    console.log("\n👑 תפקיד 'מפקח' - לא ניתן להצהרה עצמית, רק דרך אישור בעל הקו");
+    const supervisorViaSignup = await api("POST", "/api/auth/signup", {
+      full_name: "מנסה להיות מפקח בהרשמה", username: `sneaky_signup_${Date.now()}`, password: "1234", roles: "mentor,supervisor",
+    });
+    assert(
+      supervisorViaSignup.data.user.roles.includes("mentor") && !supervisorViaSignup.data.user.roles.includes("supervisor"),
+      "לא ניתן להצהיר על עצמך כ'מפקח' ישירות בהרשמה - התפקיד מסונן, שאר התפקידים (mentor) כן מתקבלים"
+    );
+
+    const supervisorViaProfile = await api("PUT", "/api/me", { roles: "mentor,supervisor" }, supervisorViaSignup.data.token);
+    assert(
+      supervisorViaProfile.data.user.roles.includes("mentor") && !supervisorViaProfile.data.user.roles.includes("supervisor"),
+      "לא ניתן להצהיר על עצמך כ'מפקח' ישירות דרך עדכון פרופיל (/api/me) - אותה הגנה"
+    );
+
+    const wrongAdminPhone = await api("POST", "/api/me/request-supervisor", { admin_phone: "0500000000" }, supervisorViaSignup.data.token);
+    assert(
+      wrongAdminPhone.status === 200 && !wrongAdminPhone.data.demoCode,
+      "מספר טלפון שגוי של 'בעל הקו' מחזיר תשובה גנרית (200, בלי קוד) - לא חושף אם המספר נכון או לא"
+    );
+
+    const rightAdminPhone = await api("POST", "/api/me/request-supervisor", { admin_phone: "+972500000001" }, supervisorViaSignup.data.token);
+    assert(rightAdminPhone.status === 200 && rightAdminPhone.data.demoCode, "מספר הטלפון הנכון של בעל הקו שולח קוד אישור (מוחזר כ-demoCode במצב MOCK)");
+
+    const wrongCodeConfirm = await api("POST", "/api/me/confirm-supervisor", { code: "0000" }, supervisorViaSignup.data.token);
+    assert(wrongCodeConfirm.status === 400, "קוד שגוי לא מאשר את הבקשה");
+
+    const rightCodeConfirm = await api("POST", "/api/me/confirm-supervisor", { code: rightAdminPhone.data.demoCode }, supervisorViaSignup.data.token);
+    assert(
+      rightCodeConfirm.status === 200 && rightCodeConfirm.data.user.roles.includes("supervisor"),
+      "הזנת הקוד הנכון (שהתקבל מבעל הקו) מאשרת בפועל את תפקיד המפקח"
+    );
+
+    const supervisorProfileAfterSave = await api("PUT", "/api/me", { full_name: "מנסה להיות מפקח בהרשמה" }, supervisorViaSignup.data.token);
+    assert(
+      supervisorProfileAfterSave.data.user.roles.includes("supervisor"),
+      "שמירת פרופיל רגילה (בלי לגעת בתפקידים) לא 'שוכחת'/מסירה בטעות תפקיד מפקח שכבר אושר"
+    );
+
     console.log("\n👤 עדכון פרופיל חלקי (שדה בודד, בלי שאר השדות)");
     // בדיקה שנוספה בעקבות באג אמיתי שנתגלה: עדכון עם שדה יחיד בלבד (למשל טלפון) קרס בעבר
     // כי node:sqlite לא מקבל undefined כפרמטר, ושאר השדות לא נשלחו בבקשה.
@@ -272,10 +359,20 @@ async function run() {
     const strangerToken = strangerSignup.data.token;
 
     const addGuardianByStranger = await api("POST", `/api/students/${sid}/guardians`, { username: parentUsername }, strangerToken);
-    assert(addGuardianByStranger.status === 404, "משתמש זר (שאינו בעלים) לא יכול לשייך הורה לתלמיד");
+    assert(addGuardianByStranger.status === 403, "משתמש זר בלי תפקיד מקצועי (roles='private' בלבד) לא יכול לשייך הורה לתלמיד - כולל הורה שמנסה לשייך את עצמו");
 
+    const otherProfessionalSignup = await api("POST", "/api/auth/signup", {
+      full_name: "מטפל אחר בצוות", username: `other_pro_${Date.now()}`, password: "1234", roles: "therapist",
+    });
+    const addGuardianByOtherProfessional = await api(
+      "POST", `/api/students/${sid}/guardians`, { username: parentUsername }, otherProfessionalSignup.data.token
+    );
+    assert(
+      addGuardianByOtherProfessional.status === 201,
+      "איש צוות מקצועי אחר (לאו דווקא הבעלים המקורי) יכול גם הוא לשייך הורה לתלמיד"
+    );
     const addGuardian = await api("POST", `/api/students/${sid}/guardians`, { username: parentUsername }, token);
-    assert(addGuardian.status === 201, "החונך (הבעלים) שייך בהצלחה הורה לתלמיד");
+    assert(addGuardian.status === 409, "אחרי ששויך כבר פעם אחת (ע\"י איש צוות אחר), ניסיון שיוך כפול נחסם כראוי (409)");
 
     console.log("\n📧 עדכון הורה במייל כשמתקבל דוח התקדמות חדש");
     const secondReport = await api("POST", `/api/students/${sid}/reports`, { role_type: "טיפול רגשי", note: "שיפור ניכר השבוע", trend: "משתפרת" }, token);
@@ -476,8 +573,13 @@ async function run() {
     );
     const signupConfirmXml = await ivrSay(signupCallSid, "רותם כהן");
     assert(signupConfirmXml.includes("רותם כהן") && signupConfirmXml.includes("לאשר"), "שם שנאמר חוזר לאישור לפני יצירת המשתמש");
-    const signupDoneXml = await ivrSay(signupCallSid, "כן");
-    assert(signupDoneXml.includes("נרשמת בהצלחה") && signupDoneXml.includes("נא לציין"), "אישור ה'כן' יוצר משתמש חדש ועובר ישר לתפריט הקטגוריות הרגיל");
+    const signupEmailPrompt = await ivrSay(signupCallSid, "כן");
+    assert(
+      signupEmailPrompt.includes("כתובת מייל") && signupEmailPrompt.includes("<Gather"),
+      "אחרי אישור השם, המערכת שואלת (לא חובה) על כתובת מייל לפני יצירת המשתמש"
+    );
+    const signupDoneXml = await ivrSay(signupCallSid, "דלג");
+    assert(signupDoneXml.includes("נרשמת בהצלחה") && signupDoneXml.includes("נא לציין"), "אמירת 'דלג' על שלב המייל עדיין יוצרת את המשתמש ועובר ישר לתפריט הקטגוריות הרגיל");
 
     const secondCallSameNumber = await ivrCall(`${signupCallSid}-again`, signupPhone);
     assert(
@@ -485,10 +587,26 @@ async function run() {
       "שיחה חוזרת מאותו מספר אחרי ההרשמה כבר מזהה את המשתמש (בלי הצעת הרשמה נוספת)"
     );
 
+    console.log("\n📧 הרשמה בטלפון עם כתובת מייל אופציונלית שנאמרה בקול");
+    const emailSignupCallSid = `${callSid}-signup-email`;
+    const emailSignupPhone = "+972500000078";
+    await ivrCall(emailSignupCallSid, emailSignupPhone);
+    await ivrSay(emailSignupCallSid, "גל שני");
+    await ivrSay(emailSignupCallSid, "כן");
+    const emailDoneXml = await ivrSay(emailSignupCallSid, "gal כרוכית gmail נקודה com");
+    assert(
+      emailDoneXml.includes("נרשמת בהצלחה") && emailDoneXml.includes("gal@gmail.com"),
+      "כתובת מייל שנאמרה בקול (עם 'כרוכית'/'נקודה' במקום @ ונקודה) מזוהה ונשמרת אצל המשתמש החדש"
+    );
+
     console.log("\n☎️ מנוע השיחה הקולית מול ימות המשיח (שלוחת API) — אותה מכונת מצבים, פרוטוקול שונה");
     const ymCallId = `YM-${Date.now()}`;
     const ymGreeting = await yemotCall({ callId: ymCallId, phone: "0500000001" });
     assert(ymGreeting.startsWith("read=t-") && ymGreeting.includes("נא לציין"), "פתיחת שיחה בימות (מספר בפורמט מקומי) מזהה משתמש ומציגה תפריט קטגוריות");
+    assert(
+      ymGreeting.includes("1 לניהול חשבונות") && ymGreeting.includes("2 לתנועות"),
+      "כבר בברכת הפתיחה בימות מוזכר שאפשר להקיש ספרה (1-6) בלי לחכות, במקום לדבר"
+    );
 
     const ymUnknown = await yemotCall({ callId: `${ymCallId}-unknown`, phone: "0500000099" });
     assert(
@@ -528,14 +646,76 @@ async function run() {
     const ymBalance = await yemotCall({ callId: ymBalanceCallId, speech: "חשבונות" });
     assert(ymBalance.includes("היתרה הנוכחית שלך היא"), "קטגוריית 'ניהול חשבונות' (מילה 'חשבונות') עובדת גם דרך ימות");
 
+    console.log("\n#️⃣ קיצורי הקשה (DTMF) בתפריט - במקום לדבר, ובלי לחכות שהמערכת תסיים להקריא");
+    const ymDigitMenuCallId = `${ymCallId}-digit-menu`;
+    await yemotCall({ callId: ymDigitMenuCallId, phone: "0500000001" });
+    const ymDigitBalance = await yemotCall({ callId: ymDigitMenuCallId, speech: "1" }); // 1 = ניהול חשבונות
+    assert(ymDigitBalance.includes("היתרה הנוכחית שלך היא"), "הקשת 1 בתפריט הראשי שקולה לאמירת 'ניהול חשבונות'");
+
+    const ymDigitTxCallId = `${ymCallId}-digit-tx`;
+    await yemotCall({ callId: ymDigitTxCallId, phone: "0500000001" });
+    const ymDigitTxType = await yemotCall({ callId: ymDigitTxCallId, speech: "2" }); // 2 = תנועות
+    assert(ymDigitTxType.includes("הכנסה או הוצאה") && ymDigitTxType.includes("1 להכנסה"), "הקשת 2 בתפריט הראשי שקולה לאמירת 'תנועות', ומזכירה גם קיצורי הקשה לשלב הבא");
+    const ymDigitIncome = await yemotCall({ callId: ymDigitTxCallId, speech: "1" }); // 1 = הכנסה
+    assert(ymDigitIncome.includes("מה סכום ההכנסה"), "הקשת 1 בבחירת סוג תנועה שקולה לאמירת 'הכנסה'");
+    await yemotCall({ callId: ymDigitTxCallId, speech: "500" });
+    const ymDigitIncomeConfirm = await yemotCall({ callId: ymDigitTxCallId, speech: "#" });
+    assert(ymDigitIncomeConfirm.includes("נשמר") && ymDigitIncomeConfirm.includes("g-hangup"), "זרימה מלאה של תנועה דרך הקשות בלבד (בלי מילה אחת בדיבור) עובדת עד הסוף");
+
+    const ymDigitMentorCallId = `${ymCallId}-digit-mentor`;
+    await yemotCall({ callId: ymDigitMentorCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymDigitMentorCallId, speech: "3" }); // 3 = חונכות
+    const ymDigitMentorAction = await yemotCall({ callId: ymDigitMentorCallId, speech: "תלמיד בדיקה" });
+    // הערה: ימות אוסרת גרש (') כתו TTS - sanitizeForYemot מסיר אותו, אז "צ'ק" יוצא כ"צק" בפועל
+    assert(ymDigitMentorAction.includes("1 לצק אין") && ymDigitMentorAction.includes("2 לצק אאוט"), "אחרי זיהוי תלמיד, מוזכרים גם קיצורי הקשה לצ'ק אין/אאוט/מפגש רגיל");
+
+    console.log("\n➕ חונכות: הוספת תלמיד חדש ישירות מהטלפון (בלי לגשת לאתר), אם השם לא נמצא ברשימת החונך");
+    const ymAddStudentCallId = `${ymCallId}-add-student`;
+    await yemotCall({ callId: ymAddStudentCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymAddStudentCallId, speech: "חונכות" });
+    const ymAddStudentOffer = await yemotCall({ callId: ymAddStudentCallId, speech: "משה ישראלי" });
+    assert(
+      ymAddStudentOffer.includes("לא מצאתי תלמיד בשם משה ישראלי") && ymAddStudentOffer.includes("להוסיף אותו כתלמיד חדש"),
+      "שם תלמיד שלא נמצא ברשימת החונך מקבל הצעה להוסיף אותו כתלמיד חדש, ולא רק 'לא מצאתי, נסו שוב'"
+    );
+    const ymAddStudentDone = await yemotCall({ callId: ymAddStudentCallId, speech: "1" }); // 1 = כן, להוסיף
+    assert(
+      ymAddStudentDone.includes("נוסף תלמיד חדש") && ymAddStudentDone.includes("משה ישראלי") && ymAddStudentDone.includes("1 לצק אין"),
+      "הקשת/אמירת אישור יוצרת בפועל תלמיד חדש (owner=החונך המתקשר) וממשיכה ישר לבחירת סוג הפעולה"
+    );
+    const studentsAfterAdd = await api("GET", "/api/students", null, token);
+    const addedStudent = studentsAfterAdd.data.students.find(s => s.name === "משה ישראלי");
+    assert(!!addedStudent, "התלמיד החדש שנוסף בטלפון אכן נשמר במסד הנתונים תחת החונך הנכון");
+
+    console.log("\n➖ חונכות: הסרת תלמיד (מחיקה רכה, active=0) - גם מהטלפון וגם מהאתר");
+    const ymRemoveCallId = `${ymCallId}-remove-student`;
+    await yemotCall({ callId: ymRemoveCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymRemoveCallId, speech: "חונכות" });
+    await yemotCall({ callId: ymRemoveCallId, speech: "משה ישראלי" });
+    const ymRemoveConfirmPrompt = await yemotCall({ callId: ymRemoveCallId, speech: "4" }); // 4 = הסרת התלמיד
+    assert(ymRemoveConfirmPrompt.includes("לאשר") && ymRemoveConfirmPrompt.includes("להסיר את משה ישראלי"), "הקשת 4 בשלב הפעולה מציעה לאשר הסרת התלמיד, ולא מסירה מיד בלי אישור");
+    const ymRemoveDone = await yemotCall({ callId: ymRemoveCallId, speech: "כן" });
+    assert(ymRemoveDone.includes("הוסר") && ymRemoveDone.includes("g-hangup"), "אישור ההסרה מסתיים בניתוק תקין עם הודעת אישור");
+    const studentsAfterRemove = await api("GET", "/api/students", null, token);
+    assert(!studentsAfterRemove.data.students.some(s => s.name === "משה ישראלי"), "אחרי ההסרה, התלמיד כבר לא מופיע ברשימת התלמידים הפעילים (/api/students)");
+
+    const removeViaWeb = await api("DELETE", `/api/students/${addedStudent.id}`, null, token);
+    assert(removeViaWeb.status === 404 || removeViaWeb.status === 200, "אותו נתיב הסרה (DELETE /api/students/:id) זמין גם לאתר - אידמפוטנטי, לא קורס גם אם כבר הוסר");
+
+    const foreignStudent = await api("POST", "/api/students", { name: "תלמיד של מישהו אחר" }, parentToken);
+    const foreignRemoveAttempt = await api("DELETE", `/api/students/${foreignStudent.data.student.id}`, null, token);
+    assert(foreignRemoveAttempt.status === 404, "משתמש לא יכול להסיר תלמיד שאינו הבעלים שלו (404, לא חושף מידע)");
+
     console.log("\n📝 הרשמה ישירות בטלפון (ימות המשיח) — אותה יכולת גם דרך ימות");
     const ymSignupCallId = `${ymCallId}-signup`;
     const ymSignupPhone = "0500000088";
     const ymSignupGreeting = await yemotCall({ callId: ymSignupCallId, phone: ymSignupPhone });
     assert(ymSignupGreeting.includes("אינו מזוהה") && ymSignupGreeting.includes("השם המלא"), "מספר לא מזוהה בימות מקבל הצעת הרשמה");
     await yemotCall({ callId: ymSignupCallId, speech: "דנה לוי" });
-    const ymSignupDone = await yemotCall({ callId: ymSignupCallId, speech: "כן" });
-    assert(ymSignupDone.includes("נרשמת בהצלחה") && ymSignupDone.includes("דנה לוי"), "הרשמה טלפונית דרך ימות יוצרת משתמש ועוברת לתפריט הרגיל");
+    const ymSignupEmailPrompt = await yemotCall({ callId: ymSignupCallId, speech: "כן" });
+    assert(ymSignupEmailPrompt.includes("כתובת מייל"), "גם בימות, אחרי אישור השם שואלים (לא חובה) על כתובת מייל");
+    const ymSignupDone = await yemotCall({ callId: ymSignupCallId, speech: "דלג" });
+    assert(ymSignupDone.includes("נרשמת בהצלחה") && ymSignupDone.includes("דנה לוי"), "הרשמה טלפונית דרך ימות יוצרת משתמש ועוברת לתפריט הרגיל, גם כשמדלגים על המייל");
 
     const ymSecondCall = await yemotCall({ callId: `${ymSignupCallId}-again`, phone: ymSignupPhone });
     assert(

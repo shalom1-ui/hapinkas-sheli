@@ -84,11 +84,59 @@ function register(router) {
 }
 
 // ---------- ברכת פתיחה / תפריט ראשי (משותף לTwilio ולימות) ----------
-function mainMenuPrompt(name) {
-  return `${name ? `שלום ${name}, ` : "שלום, "}הגעתם לפנקס שלי. נא לציין לאיזה קטגוריה אתם רוצים להיכנס: ${mainMenuCategoriesText()}`;
+function mainMenuPrompt(name, opts = {}) {
+  // digitConfirm בערוצים שתומכים בהקשה תוך כדי זיהוי דיבור (כרגע: ימות בלבד) - מזכירים כבר בפתיחה
+  // שאפשר להקיש ספרה במקום לדבר, ובלי לחכות שהמערכת תסיים להקריא את כל התפריט (ימות לא חוסם הקשה
+  // במהלך ההשמעה - ר' services/yemot.js).
+  const digitNote = opts.digitConfirm
+    ? ` אפשר גם להקיש בכל רגע, בלי לחכות שנסיים לדבר: ${mainMenuDigitsText()}. ובכל שאלת אישור בשיחה - סולמית לאישור מהיר.`
+    : "";
+  return `${name ? `שלום ${name}, ` : "שלום, "}הגעתם לפנקס שלי. נא לציין לאיזה קטגוריה אתם רוצים להיכנס: ${mainMenuCategoriesText()}${digitNote}`;
 }
 function mainMenuCategoriesText() {
   return "ניהול חשבונות, תנועות, חונכות, מטפלים, הורה, או הערת מפקח.";
+}
+
+// ---------- קיצורי הקשה (DTMF) לתפריט הראשי ----------
+// ימות מאפשרת הקשת ספרות תוך כדי זיהוי דיבור בלי לחסום (ר' services/yemot.js) - כלומר אפשר להקיש
+// כבר תוך כדי השמעת התפריט, בלי לחכות. הספרה שהוקשה מגיעה באותו שדה כמו הדיבור, ולכן פשוט ממירים
+// אותה למילת המפתח המתאימה ומריצים אותה דרך אותה לוגיקת ההתאמה הרגילה (includesAny).
+const MAIN_MENU_DIGIT_KEYWORDS = {
+  "1": "ניהול חשבונות",
+  "2": "תנועות",
+  "3": "חונכות",
+  "4": "מטפלים",
+  "5": "הורה",
+  "6": "הערת מפקח",
+};
+function mainMenuDigitsText() {
+  return "1 לניהול חשבונות, 2 לתנועות, 3 לחונכות, 4 למטפלים, 5 להורה, 6 להערת מפקח";
+}
+function mainMenuDigitKeyword(s) {
+  const digits = onlyDigits(s);
+  return digits && MAIN_MENU_DIGIT_KEYWORDS[digits] ? normalize(MAIN_MENU_DIGIT_KEYWORDS[digits]) : null;
+}
+// שולף ספרות בלבד מתוך קלט (כולל כשמעורבת בו גם סולמית) - מחזיר null אם אין ספרות בכלל
+function onlyDigits(s) {
+  const digits = String(s || "").replace(/[^0-9]/g, "");
+  return digits || null;
+}
+
+// הודעת "הכנסה או הוצאה" בתפריט תנועות - עם רמז הקשה (1/2) בערוצים שתומכים בזה
+function transactionsTypePrompt(opts) {
+  return `הכנסה או הוצאה?${opts && opts.digitConfirm ? " (אפשר גם להקיש: 1 להכנסה, 2 להוצאה)" : ""}`;
+}
+// טקסט אפשרויות שלב בחירת הפעולה בחונכות (משותף לכל הצמתים שמגיעים לשלב הזה)
+function mentorActionPrompt(studentName, opts) {
+  return `${studentName}. האם זה צ'ק אין, צ'ק אאוט, מפגש רגיל, או הסרת התלמיד?${mentorActionDigitsNote(opts)}`;
+}
+// רמז הקשה (1/2/3/4) לשלב בחירת סוג הפעולה בחונכות (צ'ק אין / צ'ק אאוט / מפגש רגיל / הסרת תלמיד)
+function mentorActionDigitsNote(opts) {
+  return opts && opts.digitConfirm ? " אפשר גם להקיש: 1 לצ'ק אין, 2 לצ'ק אאוט, 3 למפגש רגיל, 4 להסרת התלמיד." : "";
+}
+// רמז הקשה (1/2) לשלב "האם להוסיף תלמיד חדש שלא נמצא ברשימה"
+function addStudentDigitsNote(opts) {
+  return opts && opts.digitConfirm ? " אפשר גם להקיש: 1 להוספה, 2 לביטול." : "";
 }
 
 // ---------- מכונת המצבים ----------
@@ -100,21 +148,25 @@ async function advance(state, speech, draft, user, opts = {}) {
 
   switch (state) {
     case "main_menu": {
-      if (includesAny(s, ["ניהול חשבונות", "חשבונות", "יתרה", "מצב חשבון"])) return doBalance(user);
-      if (includesAny(s, ["הוצאה"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
-      if (includesAny(s, ["הכנסה"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
-      if (includesAny(s, ["תנועות", "תנועה"])) return { text: "הכנסה או הוצאה?", nextState: "transactions_pick_type" };
-      if (includesAny(s, ["חונכות", "תלמיד"])) return { text: "מה שם התלמיד?", nextState: "mentor_pick_student" };
-      if (includesAny(s, ["מטפלים", "מטפל", "דיווח", "ריפוי", "רגשי"])) return { text: "מה סוג הדיווח: ריפוי בעיסוק, טיפול רגשי, או אחר?", nextState: "therapist_role" };
-      if (includesAny(s, ["הורה"])) return startGuardianFlow(user);
-      if (includesAny(s, ["מפקח", "הערת מפקח", "הערה"])) return { text: "על איזה תלמיד ההערה?", nextState: "supervisor_pick_student" };
+      // אפשר להקיש ספרה (1-6) במקום לדבר - ר' MAIN_MENU_DIGIT_KEYWORDS. מתייחסים אליה כאילו נאמרה
+      // מילת המפתח המתאימה, ומריצים דרך אותה לוגיקת התאמה כרגיל.
+      const es = mainMenuDigitKeyword(s) || s;
+      if (includesAny(es, ["ניהול חשבונות", "חשבונות", "יתרה", "מצב חשבון"])) return doBalance(user);
+      if (includesAny(es, ["הוצאה"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
+      if (includesAny(es, ["הכנסה"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
+      if (includesAny(es, ["תנועות", "תנועה"])) return { text: transactionsTypePrompt(opts), nextState: "transactions_pick_type" };
+      if (includesAny(es, ["חונכות", "תלמיד"])) return { text: "מה שם התלמיד?", nextState: "mentor_pick_student" };
+      if (includesAny(es, ["מטפלים", "מטפל", "דיווח", "ריפוי", "רגשי"])) return { text: "מה סוג הדיווח: ריפוי בעיסוק, טיפול רגשי, או אחר?", nextState: "therapist_role" };
+      if (includesAny(es, ["הורה"])) return startGuardianFlow(user);
+      if (includesAny(es, ["מפקח", "הערת מפקח", "הערה"])) return { text: "על איזה תלמיד ההערה?", nextState: "supervisor_pick_student" };
       return { text: `לא הבנתי. אפשר לומר: ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
     }
 
     // ---------- תנועות: בחירת סוג (הכנסה/הוצאה) ----------
     case "transactions_pick_type": {
-      if (includesAny(s, ["הוצאה"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
-      if (includesAny(s, ["הכנסה"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
+      const digit = onlyDigits(s);
+      if (digit === "2" || includesAny(s, ["הוצאה"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
+      if (digit === "1" || includesAny(s, ["הכנסה"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
       return { text: "לא הבנתי. הכנסה או הוצאה?", nextState: "transactions_pick_type" };
     }
 
@@ -152,16 +204,75 @@ async function advance(state, speech, draft, user, opts = {}) {
     }
 
     // ---------- חונכות ----------
+    // חונך הוא ה"רושם" של תלמידיו (owner_user_id) - לכן אם הוא אומר שם תלמיד שעדיין לא רשום אצלו,
+    // מציעים להוסיף אותו כתלמיד חדש מיד בטלפון (בלי לחייב מעבר לאתר) - ר' mentor_confirm_add_student.
     case "mentor_pick_student": {
       const student = findStudentByName(user.id, s);
-      if (!student) return { text: "לא מצאתי תלמיד בשם הזה. אפשר לומר שוב את שם התלמיד?", nextState: "mentor_pick_student" };
-      return { text: `${student.name}. האם זה צ'ק אין, צ'ק אאוט, או מפגש רגיל?`, nextState: "mentor_action", draft: { studentId: student.id, studentName: student.name } };
+      if (student) {
+        return {
+          text: mentorActionPrompt(student.name, opts),
+          nextState: "mentor_action",
+          draft: { studentId: student.id, studentName: student.name },
+        };
+      }
+      const spokenName = String(speech || "").trim();
+      if (!spokenName) return { text: "לא שמעתי שם. מה שם התלמיד?", nextState: "mentor_pick_student" };
+      return {
+        text: `לא מצאתי תלמיד בשם ${spokenName} ברשימת התלמידים שלך. רוצים להוסיף אותו כתלמיד חדש?${addStudentDigitsNote(opts)}`,
+        nextState: "mentor_confirm_add_student",
+        draft: { pendingStudentName: spokenName },
+      };
+    }
+    case "mentor_confirm_add_student": {
+      const digit = onlyDigits(s);
+      const wantsAdd = digit === "1" || includesAny(s, ["כן", "אישור", "מאשר", "הוסיפו", "הוסף"]);
+      const wantsCancel = digit === "2" || includesAny(s, ["לא", "ביטול", "בטל"]);
+      if (wantsAdd) {
+        const info = db.prepare("INSERT INTO students (owner_user_id, name) VALUES (?, ?)").run(user.id, draft.pendingStudentName);
+        return {
+          text: `נוסף תלמיד חדש: ${draft.pendingStudentName}. ${mentorActionPrompt(draft.pendingStudentName, opts)}`,
+          nextState: "mentor_action",
+          draft: { studentId: info.lastInsertRowid, studentName: draft.pendingStudentName },
+        };
+      }
+      if (wantsCancel) {
+        return { text: `בסדר, לא הוספנו. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      }
+      // כל תשובה אחרת - מנסים שוב כאילו זה שם תלמיד (יתכן וזה ניסיון תיקון/חזרה על השם)
+      const retryStudent = findStudentByName(user.id, s);
+      if (retryStudent) {
+        return {
+          text: mentorActionPrompt(retryStudent.name, opts),
+          nextState: "mentor_action",
+          draft: { studentId: retryStudent.id, studentName: retryStudent.name },
+        };
+      }
+      const retryName = String(speech || "").trim();
+      if (!retryName) return { text: "לא שמעתי שם. מה שם התלמיד?", nextState: "mentor_pick_student" };
+      return {
+        text: `גם בשם ${retryName} לא מצאתי תלמיד ברשימה שלך. רוצים להוסיף אותו כתלמיד חדש?${addStudentDigitsNote(opts)}`,
+        nextState: "mentor_confirm_add_student",
+        draft: { pendingStudentName: retryName },
+      };
     }
     case "mentor_action": {
-      if (includesAny(s, ["אאוט", "יציאה", "סיום"])) return doCheckout(draft, user);
-      if (includesAny(s, ["אין", "כניסה", "התחלה"])) return doCheckin(draft);
-      if (includesAny(s, ["רגיל", "מהיר", "קבוע"])) return doQuickSession(draft, user);
-      return { text: "לא הבנתי. אפשר לומר: צ'ק אין, צ'ק אאוט, או מפגש רגיל?", nextState: "mentor_action" };
+      const digit = onlyDigits(s);
+      if (digit === "2" || includesAny(s, ["אאוט", "יציאה", "סיום"])) return doCheckout(draft, user);
+      if (digit === "1" || includesAny(s, ["אין", "כניסה", "התחלה"])) return doCheckin(draft);
+      if (digit === "3" || includesAny(s, ["רגיל", "מהיר", "קבוע"])) return doQuickSession(draft, user);
+      if (digit === "4" || includesAny(s, ["הסר", "הסרה", "מחיקה", "מחק", "לא לומד", "הפסיק"])) {
+        return {
+          text: `לאשר: להסיר את ${draft.studentName} מרשימת התלמידים שלך? התלמיד לא יימחק לצמיתות, רק לא יופיע יותר ברשימה הפעילה - כל ההיסטוריה שלו נשארת בתיק. אמרו כן לאישור.${confirmSuffix(opts)}`,
+          nextState: "mentor_remove_confirm",
+          draft,
+        };
+      }
+      return { text: `לא הבנתי. ${mentorActionPrompt(draft.studentName, opts)}`, nextState: "mentor_action" };
+    }
+    case "mentor_remove_confirm": {
+      if (!isConfirmYes(s, opts)) return { text: `בסדר, לא הסרנו. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      db.prepare("UPDATE students SET active = 0 WHERE id = ? AND owner_user_id = ?").run(draft.studentId, user.id);
+      return { text: `${draft.studentName} הוסר/ה מרשימת התלמידים הפעילים שלך. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "student_removed" };
     }
 
     // ---------- דיווח מטפל ----------
@@ -244,9 +355,31 @@ async function advanceSignup(state, speech, draft, opts = {}) {
       if (!isConfirmYes(s, opts)) {
         return { text: "בסדר, ננסה שוב. מה השם המלא שלכם?", nextState: "signup_name", draft: { phone: draft.phone } };
       }
-      const newUser = createPhoneUser(draft.fullName, draft.phone);
       return {
-        text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name)}`,
+        text: "אפשר גם לצרף כתובת מייל לחשבון, זה לא חובה. אם תרצו - אמרו אותה עכשיו. אם לא, אמרו דלג.",
+        nextState: "signup_email",
+        draft,
+      };
+    }
+    // מייל אופציונלי בהרשמה טלפונית - הזיהוי עצמו נשען על מספר הטלפון (Caller ID), לא על המייל/סיסמה,
+    // אבל מייל מאפשר בעתיד גם שחזור/כניסה מהאתר בצורה נוחה יותר. אם הזיהוי מהדיבור לא נשמע כמו כתובת
+    // מייל תקינה - לא תוקעים את השיחה בלולאה, פשוט ממשיכים בלי מייל (אפשר להוסיף מאוחר יותר באתר).
+    case "signup_email": {
+      if (includesAny(s, ["דלג", "לא", "אין", "בלי", "לדלג", "המשך"])) {
+        const newUser = createPhoneUser(draft.fullName, draft.phone, null);
+        return {
+          text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
+          nextState: "main_menu",
+          newUserId: newUser.id,
+          hints: MAIN_MENU_HINTS,
+          outcome: "phone_signup_completed",
+        };
+      }
+      const email = parseSpokenEmail(speech);
+      const newUser = createPhoneUser(draft.fullName, draft.phone, email);
+      const emailNote = email ? `נשמרה גם כתובת המייל ${email}. ` : "לא זיהיתי כתובת מייל תקינה, ממשיכים בלי מייל - אפשר להוסיף אותה מאוחר יותר באתר. ";
+      return {
+        text: `נרשמת בהצלחה! ${emailNote}${mainMenuPrompt(newUser.full_name, opts)}`,
         nextState: "main_menu",
         newUserId: newUser.id,
         hints: MAIN_MENU_HINTS,
@@ -258,10 +391,22 @@ async function advanceSignup(state, speech, draft, opts = {}) {
   }
 }
 
+// ניסיון "כמיטב היכולת" להמיר מה שנאמר בקול לכתובת מייל: זיהוי דיבור בעברית לא קורא תווים כמו @ ונקודה
+// כמו שהם, אז אנשים בדרך כלל אומרים "כרוכית"/"שטרודל" או "at" במקום @, ו"נקודה"/"dot" במקום נקודה.
+// מחזיר null אם התוצאה לא נראית כמו כתובת מייל תקינה - כדי שלא נשמור זבל בשדה המייל.
+function parseSpokenEmail(rawSpeech) {
+  let t = String(rawSpeech || "").trim().toLowerCase();
+  t = t.replace(/\s*(כרוכית|שטרודל|@|\bat\b)\s*/g, "@");
+  t = t.replace(/\s*(נקודה|\bdot\b|\.)\s*/g, ".");
+  t = t.replace(/\s+/g, "");
+  const isValid = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(t);
+  return isValid ? t : null;
+}
+
 // יוצר משתמש חדש ישירות מתוך שיחת טלפון - בלי סיסמה שהמשתמש בוחר (הזיהוי בטלפון הוא לפי Caller ID
 // בלבד, לא סיסמה). אם ירצו גם גישה לאתר, יוכלו לשחזר סיסמה בכל עת דרך "שכחתי סיסמה" (ערוץ טלפון קולי) -
 // אין צורך שהם ידעו את הסיסמה האקראית שנוצרת כאן.
-function createPhoneUser(fullName, phone) {
+function createPhoneUser(fullName, phone, email) {
   const digits = String(phone || "").replace(/\D/g, "").slice(-9) || "user";
   let username = `phone_${digits}`;
   let n = 1;
@@ -270,9 +415,11 @@ function createPhoneUser(fullName, phone) {
     username = `phone_${digits}_${n}`;
   }
   const randomPassword = crypto.randomBytes(16).toString("hex");
+  // signup_channel='phone' בכוונה מפורשת - חשבון שנוצר כך (סיסמה אקראית, לא נבחרה בפועל) לא כשיר
+  // להיות "בעל הקו" (ר' /api/me/request-admin-claim ב-routes/auth.js).
   const info = db
-    .prepare("INSERT INTO users (full_name, username, password_hash, phone, roles) VALUES (?, ?, ?, ?, 'private')")
-    .run(fullName, username, hashPassword(randomPassword), phone || null);
+    .prepare("INSERT INTO users (full_name, username, password_hash, phone, email, roles, signup_channel) VALUES (?, ?, ?, ?, ?, 'private', 'phone')")
+    .run(fullName, username, hashPassword(randomPassword), phone || null, email || null);
   return db.prepare("SELECT * FROM users WHERE id = ?").get(info.lastInsertRowid);
 }
 

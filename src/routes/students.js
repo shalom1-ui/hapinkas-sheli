@@ -27,6 +27,16 @@ function register(router) {
     return json(ctx.res, 201, { student: row });
   }));
 
+  // הסרת תלמיד (למשל אם הפסיק ללמוד) - מחיקה "רכה" בלבד (active=0): לא נמחקת ההיסטוריה (מפגשים,
+  // דוחות, הערות, מסמכים) - התלמיד רק מפסיק להופיע ברשימה הפעילה. אותה פעולה זמינה גם בטלפון
+  // (ר' routes/ivr.js, mentor_remove_confirm).
+  router.delete("/api/students/:id", requireAuth(async (ctx) => {
+    const student = getOwnedStudent(ctx.params.id, ctx.user.userId);
+    if (!student) return json(ctx.res, 404, { error: "תלמיד לא נמצא" });
+    db.prepare("UPDATE students SET active = 0 WHERE id = ?").run(student.id);
+    return json(ctx.res, 200, { ok: true });
+  }));
+
   // ---------- שיטה 1: צ'ק-אין / צ'ק-אאוט עם חישוב משך אוטומטי ----------
   router.post("/api/students/:id/checkin", requireAuth(async (ctx) => {
     const student = getOwnedStudent(ctx.params.id, ctx.user.userId);
@@ -129,10 +139,15 @@ function register(router) {
   }));
 
   // ---------- הורים ----------
-  // רק הבעלים (החונך) יכול לשייך הורה לתלמיד - מונע ממישהו "להצהיר" על עצמו כהורה של תלמיד זר.
+  // כל איש צוות מקצועי (בעלים/חונך/מטפל/מפקח - לא רק הבעלים המקורי) יכול לשייך הורה לתלמיד -
+  // אותה הרשאה בדיוק כמו /file ו-/comments. הורים עצמם (roles='private' בלבד, בלי תפקיד מקצועי)
+  // לא עוברים את הבדיקה הזו, ולכן לא יכולים "להצהיר" על עצמם כהורה של תלמיד זר.
   router.post("/api/students/:id/guardians", requireAuth(async (ctx) => {
-    const student = getOwnedStudent(ctx.params.id, ctx.user.userId);
-    if (!student) return json(ctx.res, 404, { error: "תלמיד לא נמצא, או שאינכם הבעלים שלו" });
+    const student = db.prepare("SELECT * FROM students WHERE id = ?").get(ctx.params.id);
+    if (!student) return json(ctx.res, 404, { error: "תלמיד לא נמצא" });
+    if (!isOwnerOrProfessional(student, ctx.user.userId)) {
+      return json(ctx.res, 403, { error: "אין הרשאה לשייך הורה לתלמיד זה" });
+    }
 
     const { username } = ctx.body;
     if (!username) return json(ctx.res, 400, { error: "יש להזין שם משתמש של ההורה" });

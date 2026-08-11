@@ -166,8 +166,8 @@
         <div class="row tight" style="gap:16px">
           <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:500"><input type="checkbox" id="su_role_mentor"> חונך/ת</label>
           <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:500"><input type="checkbox" id="su_role_therapist"> מטפל/ת</label>
-          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:500"><input type="checkbox" id="su_role_supervisor"> מפקח/ת</label>
         </div>
+        <div class="hint">תפקיד "מפקח/ת" ניתן רק לאחר אישור בעל הקו - אפשר לבקש אותו בהגדרות אחרי הכניסה למערכת.</div>
       </div>
       <button class="btn block" onclick="doSignup()">יצירת חשבון</button>
     </div>
@@ -408,10 +408,36 @@
             <div style="display:flex; gap:14px; margin-top:4px; flex-wrap:wrap">
               <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:500"><input type="checkbox" id="st_role_mentor"> חונך/ת</label>
               <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:500"><input type="checkbox" id="st_role_therapist"> מטפל/ת</label>
-              <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:500"><input type="checkbox" id="st_role_supervisor"> מפקח/ת</label>
             </div>
           </div>
           <button class="btn" onclick="saveProfile()">שמירת שינויים</button>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0">בעל/ת הקו</h3>
+          <div id="admin-status" class="hint">בודק סטטוס...</div>
+          <div id="admin-claim-box" style="display:none; margin-top:10px">
+            <div class="hint">"בעל הקו" הוא מי שיכול לאשר בקשות לתפקיד "מפקח" (ר' למטה). כדי לתבוע את התפקיד צריך: להיות רשומים באתר עצמו (לא חשבון שנוצר אוטומטית מהטלפון), ולהזין מספר טלפון בפרופיל למעלה. יישלח קוד בן 4 ספרות בשיחה קולית למספר הזה.</div>
+            <div class="row" style="margin-top:8px">
+              <button class="btn secondary" onclick="requestAdminClaim()">שליחת קוד אימות לטלפון שלי</button>
+              <div class="field"><label>קוד שהתקבל</label><input id="admin_code" class="plain" placeholder="1234"></div>
+              <button class="btn" style="align-self:flex-end" onclick="confirmAdminClaim()">אישור</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <h3 style="margin-top:0">הרשאת מפקח/ת</h3>
+          <div id="supervisor-status" class="hint">בודק סטטוס...</div>
+          <div id="supervisor-request-box" style="display:none; margin-top:10px">
+            <div class="hint">תפקיד "מפקח" נותן גישה לצ'אט הפנימי ולדוחות של כל תלמיד במערכת - לכן הוא דורש אישור בעל הקו, ולא ניתן להצהרה עצמית. הזינו את מספר הטלפון של בעל הקו - אם הוא נכון, יישלח לבעל הקו קוד בן 4 ספרות למייל שלו, שהוא יעביר לכם.</div>
+            <div class="row" style="margin-top:8px">
+              <div class="field"><label>מספר הטלפון של בעל הקו</label><input id="sv_admin_phone" class="plain" placeholder="+972501234567"></div>
+              <button class="btn secondary" style="align-self:flex-end" onclick="requestSupervisor()">שליחת בקשה</button>
+            </div>
+            <div class="row" style="margin-top:8px">
+              <div class="field"><label>קוד מבעל הקו</label><input id="sv_code" class="plain" placeholder="1234"></div>
+              <button class="btn" style="align-self:flex-end" onclick="confirmSupervisor()">אישור</button>
+            </div>
+          </div>
         </div>
         <div class="card">
           <h3 style="margin-top:0">שינוי סיסמה</h3>
@@ -474,7 +500,6 @@ async function doSignup() {
   const roles = ['private'];
   if (document.getElementById('su_role_mentor').checked) roles.push('mentor');
   if (document.getElementById('su_role_therapist').checked) roles.push('therapist');
-  if (document.getElementById('su_role_supervisor').checked) roles.push('supervisor');
   const r = await api('POST', '/api/auth/signup', {
     full_name: document.getElementById('su_name').value,
     username: document.getElementById('su_username').value,
@@ -616,11 +641,16 @@ async function loadStudents() {
   const r = await api('GET', '/api/students');
   if (!r.ok) return;
   document.getElementById('student-list').innerHTML = r.data.students.length
-    ? r.data.students.map(s => `<div class="list-item"><div class="li-main">${s.name}</div>${s.checkin_at ? '<span class="pill trend-good">מפגש פתוח</span>' : ''}</div>`).join('')
+    ? r.data.students.map(s => `<div class="list-item"><div class="li-main">${s.name}</div><div style="display:flex; align-items:center; gap:8px">${s.checkin_at ? '<span class="pill trend-good">מפגש פתוח</span>' : ''}<button class="btn secondary sm" onclick="removeStudent(${s.id}, '${s.name.replace(/'/g, "\\'")}')">הסרה</button></div></div>`).join('')
     : '<div class="empty-state">עדיין אין תלמידים</div>';
   const options = r.data.students.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
   document.getElementById('m_student').innerHTML = options;
   document.getElementById('p_student').innerHTML = options;
+}
+async function removeStudent(id, name) {
+  if (!confirm(`להסיר את ${name} מרשימת התלמידים הפעילים? ההיסטוריה (מפגשים, דוחות) לא נמחקת - רק לא יופיע/תופיע יותר ברשימה.`)) return;
+  const r = await api('DELETE', `/api/students/${id}`);
+  if (r.ok) { toast(`${name} הוסר/ה`, 'success'); loadStudents(); }
 }
 function takeSessionNote() {
   const el = document.getElementById('m_note');
@@ -902,13 +932,38 @@ async function loadProfile() {
   const roles = (u.roles || '').split(',').map(r => r.trim());
   document.getElementById('st_role_mentor').checked = roles.includes('mentor');
   document.getElementById('st_role_therapist').checked = roles.includes('therapist');
-  document.getElementById('st_role_supervisor').checked = roles.includes('supervisor');
+  const isSupervisor = roles.includes('supervisor');
+  document.getElementById('supervisor-status').textContent = isSupervisor
+    ? '✅ יש לכם כרגע הרשאת מפקח/ת.'
+    : 'עדיין אין לכם הרשאת מפקח/ת.';
+  document.getElementById('supervisor-request-box').style.display = isSupervisor ? 'none' : '';
+  loadAdminClaimStatus();
+}
+async function loadAdminClaimStatus() {
+  const r = await api('GET', '/api/me/admin-claim-status');
+  if (!r.ok) return;
+  const { isAdmin, adminExists, eligible } = r.data;
+  const statusEl = document.getElementById('admin-status');
+  if (isAdmin) statusEl.textContent = '✅ אתם בעלי הקו הרשומים של המערכת.';
+  else if (adminExists) statusEl.textContent = 'כבר יש בעל קו רשום למערכת.';
+  else if (eligible) statusEl.textContent = 'עדיין אין בעל קו רשום למערכת - אפשר לתבוע את התפקיד.';
+  else statusEl.textContent = 'אין עדיין בעל קו, אבל אינכם כשירים לתבוע את התפקיד (צריך להיות רשומים באתר עצמו, עם טלפון בפרופיל).';
+  document.getElementById('admin-claim-box').style.display = (!isAdmin && !adminExists && eligible) ? '' : 'none';
+}
+async function requestAdminClaim() {
+  const r = await api('POST', '/api/me/request-admin-claim', {});
+  if (r.ok) toast(r.data.demoCode ? `${r.data.message} (מצב בדיקה - הקוד: ${r.data.demoCode})` : r.data.message, 'success');
+}
+async function confirmAdminClaim() {
+  const code = document.getElementById('admin_code').value.trim();
+  if (!code) { toast('יש להזין את הקוד שקיבלתם', 'error'); return; }
+  const r = await api('POST', '/api/me/confirm-admin-claim', { code });
+  if (r.ok) { toast(r.data.message, 'success'); document.getElementById('admin_code').value = ''; loadProfile(); }
 }
 async function saveProfile() {
   const roles = ['private'];
   if (document.getElementById('st_role_mentor').checked) roles.push('mentor');
   if (document.getElementById('st_role_therapist').checked) roles.push('therapist');
-  if (document.getElementById('st_role_supervisor').checked) roles.push('supervisor');
   const body = {
     full_name: document.getElementById('st_full_name').value || undefined,
     phone: document.getElementById('st_phone').value || undefined,
@@ -925,6 +980,18 @@ async function saveProfile() {
     document.getElementById('user-avatar').textContent = (currentUser.full_name || '?').trim()[0] || '?';
     toast('הפרטים נשמרו בהצלחה', 'success');
   }
+}
+async function requestSupervisor() {
+  const admin_phone = document.getElementById('sv_admin_phone').value.trim();
+  if (!admin_phone) { toast('יש להזין מספר טלפון', 'error'); return; }
+  const r = await api('POST', '/api/me/request-supervisor', { admin_phone });
+  if (r.ok) toast(r.data.demoCode ? `${r.data.message} (מצב בדיקה - הקוד: ${r.data.demoCode})` : r.data.message, 'success');
+}
+async function confirmSupervisor() {
+  const code = document.getElementById('sv_code').value.trim();
+  if (!code) { toast('יש להזין את הקוד שקיבלתם', 'error'); return; }
+  const r = await api('POST', '/api/me/confirm-supervisor', { code });
+  if (r.ok) { toast(r.data.message, 'success'); document.getElementById('sv_code').value = ''; loadProfile(); }
 }
 async function changePassword() {
   const currentPassword = document.getElementById('st_current_password').value;

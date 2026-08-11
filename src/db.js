@@ -25,9 +25,10 @@ db.exec(`
     phone2 TEXT,
     email TEXT,
     voice_pin TEXT,                    -- קוד זיהוי קולי לשימוש כאשר Caller ID לא מזוהה
-    roles TEXT NOT NULL DEFAULT 'private', -- comma-separated: private,mentor,therapist,supervisor
+    roles TEXT NOT NULL DEFAULT 'private', -- comma-separated: private,mentor,therapist,supervisor,admin
     default_session_minutes INTEGER DEFAULT 45,
     budget_alerts INTEGER DEFAULT 1,
+    signup_channel TEXT NOT NULL DEFAULT 'web', -- 'web' (נרשם באתר בעצמו, עם סיסמה שבחר) | 'phone' (נוצר אוטומטית מהטלפון)
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -183,14 +184,45 @@ db.exec(`
     outcome TEXT,             -- מה קרה בסוף השיחה (למשל "expense_saved", "hangup_unidentified")
     occurred_at TEXT DEFAULT (datetime('now'))
   );
+
+  -- בקשות אישור לתפקיד "מפקח" - תפקיד רגיש (גישה לצ'אט הפנימי/דוחות של כל תלמיד, לא רק תלמידים
+  -- שרשמת בעצמך) ולכן אי אפשר "להצהיר" עליו לבד כמו על חונך/מטפל - חייבים אישור בעל הקו (admin):
+  -- מי שמבקש להיות מפקח מזין את מספר הטלפון של בעל הקו, ונשלח קוד בן 4 ספרות למייל של בעל הקו -
+  -- בעל הקו מעביר את הקוד (בעל פה/בטלפון) למי שביקש, שמזין אותו כדי לאשר בפועל.
+  CREATE TABLE IF NOT EXISTS role_upgrade_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id), -- מי מבקש להפוך למפקח
+    code_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  -- אימות תביעת "בעל הקו" (admin) - ר' src/routes/auth.js (/api/me/request-admin-claim,
+  -- /api/me/confirm-admin-claim) להסבר המלא על התהליך. בכוונה לא "המשתמש הראשון שנרשם" (יכול
+  -- להיות חשבון שנוצר אוטומטית מהטלפון, בלי סיסמה שנבחרה בפועל) - אלא מי שנרשם באתר עצמו
+  -- (signup_channel='web') ומאמת בפועל שהוא הבעלים של הטלפון הרשום שלו, דרך קוד בשיחה קולית.
+  CREATE TABLE IF NOT EXISTS admin_claim_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    code_hash TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    used INTEGER DEFAULT 0,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
 `);
 
-// מיגרציה קטנה: אם יש כבר קובץ מסד נתונים ישן (מלפני שנוסף note ל-sessions),
-// CREATE TABLE IF NOT EXISTS למעלה לא מוסיף את העמודה לטבלה קיימת - צריך ALTER TABLE בנפרד.
-try {
-  db.exec("ALTER TABLE sessions ADD COLUMN note TEXT");
-} catch (e) {
-  if (!/duplicate column/i.test(e.message)) throw e; // מתעלמים רק אם העמודה כבר קיימת
+// מיגרציה קטנה: אם יש כבר קובץ מסד נתונים ישן (מלפני שנוספו העמודות/הטבלאות האלה),
+// CREATE TABLE IF NOT EXISTS למעלה לא מוסיף עמודה לטבלה קיימת - צריך ALTER TABLE בנפרד.
+for (const alterSql of [
+  "ALTER TABLE sessions ADD COLUMN note TEXT",
+  "ALTER TABLE users ADD COLUMN signup_channel TEXT NOT NULL DEFAULT 'web'",
+]) {
+  try {
+    db.exec(alterSql);
+  } catch (e) {
+    if (!/duplicate column/i.test(e.message)) throw e; // מתעלמים רק אם העמודה כבר קיימת
+  }
 }
 
 // זריעת תוכניות ברירת מחדל אם עדיין לא קיימות
