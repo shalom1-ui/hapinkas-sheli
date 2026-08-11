@@ -191,10 +191,20 @@ async function advance(state, speech, draft, user, opts = {}) {
       };
     }
     case "expense_confirm": {
-      if (!isConfirmYes(s, opts)) return { text: `בוטל. אפשר להתחיל שוב, מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
-      db.prepare("INSERT INTO transactions (user_id, type, amount, category, source) VALUES (?, 'expense', ?, ?, 'phone')")
-        .run(user.id, draft.amount, draft.category);
-      return { text: `נשמר. הוצאה של ${draft.amount} שקלים ב${draft.category}. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "expense_saved" };
+      // חשוב: לא "כל מה שאינו כן = לא/ביטול" - זה היה מבטל שקט את כל התנועה אם זיהוי הדיבור פשוט
+      // לא הבין את המילה (למשל "אישור" שלפעמים לא מזוהה, ר' isConfirmYes). מבטלים רק ב"לא" מפורש,
+      // ובכל קלט לא ברור אחר שואלים שוב את אותה שאלה במקום למחוק את מה שהמשתמש כבר הזין.
+      if (isConfirmYes(s, opts)) {
+        db.prepare("INSERT INTO transactions (user_id, type, amount, category, source) VALUES (?, 'expense', ?, ?, 'phone')")
+          .run(user.id, draft.amount, draft.category);
+        return { text: `נשמר. הוצאה של ${draft.amount} שקלים ב${draft.category}. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "expense_saved" };
+      }
+      if (isConfirmNo(s, opts)) return { text: `בוטל. אפשר להתחיל שוב, מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      return {
+        text: `לא הבנתי.${retryHint()} לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${draft.category}? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        nextState: "expense_confirm",
+        draft,
+      };
     }
 
     // ---------- הכנסה ----------
@@ -204,9 +214,17 @@ async function advance(state, speech, draft, user, opts = {}) {
       return { text: `לאשר: הכנסה של ${amount} שקלים? אמרו כן לאישור.${confirmSuffix(opts)}`, nextState: "income_confirm", draft: { amount } };
     }
     case "income_confirm": {
-      if (!isConfirmYes(s, opts)) return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
-      db.prepare("INSERT INTO transactions (user_id, type, amount, source) VALUES (?, 'income', ?, 'phone')").run(user.id, draft.amount);
-      return { text: `נשמר. הכנסה של ${draft.amount} שקלים. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "income_saved" };
+      // ר' הערה ב-expense_confirm - אותו עיקרון: מבטלים רק ב"לא" מפורש, לא בכל קלט לא ברור.
+      if (isConfirmYes(s, opts)) {
+        db.prepare("INSERT INTO transactions (user_id, type, amount, source) VALUES (?, 'income', ?, 'phone')").run(user.id, draft.amount);
+        return { text: `נשמר. הכנסה של ${draft.amount} שקלים. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "income_saved" };
+      }
+      if (isConfirmNo(s, opts)) return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      return {
+        text: `לא הבנתי.${retryHint()} לאשר: הכנסה של ${draft.amount} שקלים? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        nextState: "income_confirm",
+        draft,
+      };
     }
 
     // ---------- חונכות ----------
@@ -278,9 +296,18 @@ async function advance(state, speech, draft, user, opts = {}) {
       return { text: `לא הבנתי.${retryHint()} ${mentorActionPrompt(draft.studentName, opts)}`, nextState: "mentor_action" };
     }
     case "mentor_remove_confirm": {
-      if (!isConfirmYes(s, opts)) return { text: `בסדר, לא הסרנו. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
-      db.prepare("UPDATE students SET active = 0 WHERE id = ? AND owner_user_id = ?").run(draft.studentId, user.id);
-      return { text: `${draft.studentName} הוסר/ה מרשימת התלמידים הפעילים שלך. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "student_removed" };
+      // פעולה הרסנית (גם אם רק מחיקה רכה) - חשוב במיוחד כאן לא לבטל ולא לאשר על קלט לא ברור, רק
+      // לשאול שוב. ר' הערה מפורטת יותר ב-expense_confirm.
+      if (isConfirmYes(s, opts)) {
+        db.prepare("UPDATE students SET active = 0 WHERE id = ? AND owner_user_id = ?").run(draft.studentId, user.id);
+        return { text: `${draft.studentName} הוסר/ה מרשימת התלמידים הפעילים שלך. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "student_removed" };
+      }
+      if (isConfirmNo(s, opts)) return { text: `בסדר, לא הסרנו. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      return {
+        text: `לא הבנתי.${retryHint()} לאשר: להסיר את ${draft.studentName} מרשימת התלמידים שלך? התלמיד לא יימחק לצמיתות, רק לא יופיע יותר ברשימה הפעילה - כל ההיסטוריה שלו נשארת בתיק. אמרו כן לאישור.${confirmSuffix(opts)}`,
+        nextState: "mentor_remove_confirm",
+        draft,
+      };
     }
 
     // ---------- דיווח מטפל ----------
@@ -304,11 +331,20 @@ async function advance(state, speech, draft, user, opts = {}) {
       };
     }
     case "therapist_confirm": {
-      if (!isConfirmYes(s, opts)) return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
-      db.prepare(
-        "INSERT INTO therapy_reports (student_id, professional_user_id, role_type, note, trend, transcript) VALUES (?, ?, ?, ?, 'יציבה', ?)"
-      ).run(draft.studentId, user.id, draft.role, draft.note, draft.note);
-      return { text: `הדיווח נשמר עבור ${draft.studentName}. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "report_saved" };
+      // ר' הערה ב-expense_confirm - לא רוצים לאבד דיווח שלם (שנאמר במילים, אולי ארוך) רק כי המילה
+      // "אישור"/"לאשר" עצמה לא זוהתה.
+      if (isConfirmYes(s, opts)) {
+        db.prepare(
+          "INSERT INTO therapy_reports (student_id, professional_user_id, role_type, note, trend, transcript) VALUES (?, ?, ?, ?, 'יציבה', ?)"
+        ).run(draft.studentId, user.id, draft.role, draft.note, draft.note);
+        return { text: `הדיווח נשמר עבור ${draft.studentName}. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "report_saved" };
+      }
+      if (isConfirmNo(s, opts)) return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      return {
+        text: `לא הבנתי.${retryHint()} לאשר דיווח על ${draft.studentName}: ${draft.note}. אמרו כן לאישור.${confirmSuffix(opts)}`,
+        nextState: "therapist_confirm",
+        draft,
+      };
     }
 
     // ---------- הורה: סיכום קולי על הילד/ים ----------
@@ -333,10 +369,18 @@ async function advance(state, speech, draft, user, opts = {}) {
       };
     }
     case "supervisor_confirm": {
-      if (!isConfirmYes(s, opts)) return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
-      db.prepare("INSERT INTO student_comments (student_id, author_user_id, author_label, text) VALUES (?, ?, ?, ?)")
-        .run(draft.studentId, user.id, `${user.full_name} (דרך השיחה הקולית)`, draft.text);
-      return { text: `ההערה נשמרה בתיק ${draft.studentName}. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "comment_saved" };
+      // ר' הערה ב-expense_confirm.
+      if (isConfirmYes(s, opts)) {
+        db.prepare("INSERT INTO student_comments (student_id, author_user_id, author_label, text) VALUES (?, ?, ?, ?)")
+          .run(draft.studentId, user.id, `${user.full_name} (דרך השיחה הקולית)`, draft.text);
+        return { text: `ההערה נשמרה בתיק ${draft.studentName}. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "comment_saved" };
+      }
+      if (isConfirmNo(s, opts)) return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      return {
+        text: `לא הבנתי.${retryHint()} לאשר הערה על ${draft.studentName}: ${draft.text}. אמרו כן לאישור.${confirmSuffix(opts)}`,
+        nextState: "supervisor_confirm",
+        draft,
+      };
     }
 
     default:
@@ -540,6 +584,14 @@ function isConfirmYes(s, opts) {
     const trimmed = String(s || "").trim();
     return onlyDigits(trimmed) === "1" || trimmed === "#";
   }
+  return false;
+}
+
+// בודק אם תשובה נחשבת במפורש "לא" בצומת אישור - מילה מדוברת, או הקשת 2 (עקבי עם שאר התפריטים בהם
+// 2 הוא תמיד "לא"/ביטול). חשוב: זה **לא** סתם "לא isConfirmYes" - ר' ההערה בכל צומת אישור למה.
+function isConfirmNo(s, opts) {
+  if (includesAny(s, ["לא", "ביטול", "בטל"])) return true;
+  if (opts && opts.digitConfirm) return onlyDigits(String(s || "").trim()) === "2";
   return false;
 }
 

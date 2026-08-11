@@ -625,6 +625,32 @@ async function run() {
     const ymTx = afterYmTx.data.transactions.find(t => t.source === "phone" && t.amount === 45 && t.category === "מזון");
     assert(!!ymTx, "התנועה שנוצרה בשיחת ימות אכן נשמרה במסד הנתונים עם source=phone");
 
+    console.log("\n❓ קלט לא ברור בשאלת אישור לא מבטל בשקט (רק 'לא' מפורש מבטל) - כדי לא לאבד תנועה שהוזנה");
+    // בבדיקה בפועל מול ימות התברר שמילים כמו "אישור"/"לאשר" לפעמים לא מזוהות בדיוק ע"י זיהוי הדיבור.
+    // בעבר כל קלט שלא זוהה כ"כן" נחשב אוטומטית "לא" וביטל את כל התנועה בשקט - התנהגות מסוכנת.
+    const ymUnclearCallId = `${ymCallId}-unclear-confirm`;
+    await yemotCall({ callId: ymUnclearCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymUnclearCallId, speech: "הוצאה" });
+    await yemotCall({ callId: ymUnclearCallId, speech: "63" });
+    await yemotCall({ callId: ymUnclearCallId, speech: "מזון" });
+    const ymUnclearRetry = await yemotCall({ callId: ymUnclearCallId, speech: "משהו אחר לגמרי" });
+    assert(
+      ymUnclearRetry.includes("לא הבנתי") && ymUnclearRetry.includes("63") && ymUnclearRetry.startsWith("read=t-"),
+      "קלט לא ברור (לא 'כן' ולא 'לא' מפורש) בשאלת אישור חוזר על אותה שאלת אישור, ולא מבטל ולא שומר"
+    );
+    const afterUnclear = await api("GET", "/api/transactions", null, token);
+    assert(
+      !afterUnclear.data.transactions.some(t => t.source === "phone" && t.amount === 63),
+      "התנועה עדיין לא נשמרה אחרי קלט לא ברור - רק אחרי אישור בפועל"
+    );
+    const ymUnclearThenYes = await yemotCall({ callId: ymUnclearCallId, speech: "כן" });
+    assert(ymUnclearThenYes.includes("נשמר") && ymUnclearThenYes.includes("g-hangup"), "אחרי הקלט הלא ברור, אמירת 'כן' עדיין שומרת את התנועה כרגיל");
+    const afterUnclearYes = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterUnclearYes.data.transactions.some(t => t.source === "phone" && t.amount === 63 && t.category === "מזון"),
+      "התנועה נשמרה בסוף עם הסכום/קטגוריה הנכונים, אחרי שהמשתמש קיבל הזדמנות שנייה"
+    );
+
     console.log("\n#️⃣ אישור מהיר בהקשה (1) בערוץ ימות - בלי לחכות לזיהוי הדיבור על 'כן'");
     // הערה: בעבר הוצעה כאן סולמית בודדת כקיצור אישור, אבל בבדיקה בפועל מול ימות התברר שסולמית בודדת
     // (בלי ספרה לפניה) לרוב לא מגיעה בכלל לשרת במצב זיהוי דיבור - כנראה נבלעת כתו סיום קלט. עברנו
