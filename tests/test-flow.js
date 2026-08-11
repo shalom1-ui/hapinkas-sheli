@@ -159,7 +159,18 @@ async function run() {
     await ivrSay(phoneOnlyCallSid, "2222");
     await ivrSay(phoneOnlyCallSid, "דלג");
     const phoneOnlyUsername = `phone_${phoneOnlyPhone.replace(/\D/g, "").slice(-9)}`;
-    const phoneOnlyResetReq = await api("POST", "/api/auth/forgot-password/request", { username: phoneOnlyUsername, channel: "phone" });
+
+    // תיקון UX חשוב: מי שנרשם בטלפון מקבל שם משתמש אוטומטי (phone_XXXXXXXXX) שאף פעם לא נאמר לו
+    // בקול - בלי האפשרות להתחבר גם עם מספר הטלפון עצמו, אין לו שום דרך לדעת מה להקליד באתר (ר'
+    // findUserByLoginIdentifier ב-routes/auth.js). בודקים כאן שהתחברות עם מספר הטלפון (במקום שם
+    // המשתמש) עובדת - עם קוד ה-PIN שהוגדר כבר בהרשמה הטלפונית עצמה (2222), לפני כל שחזור סיסמה.
+    const phoneNumberLogin = await api("POST", "/api/auth/login", { username: phoneOnlyPhone, password: "2222" });
+    assert(
+      phoneNumberLogin.status === 200 && phoneNumberLogin.data.token,
+      "התחברות באתר עם מספר הטלפון עצמו (במקום שם המשתמש האוטומטי) וקוד ה-PIN שהוגדר בטלפון - עובדת"
+    );
+
+    const phoneOnlyResetReq = await api("POST", "/api/auth/forgot-password/request", { username: phoneOnlyPhone, channel: "phone" });
     assert(phoneOnlyResetReq.status === 200 && phoneOnlyResetReq.data.demoCode, "אפשר לשחזר סיסמה לחשבון שנוצר מהטלפון (כדי להתחבר אליו לצורך הבדיקה)");
     const phoneOnlyVerify = await api("POST", "/api/auth/forgot-password/verify", { username: phoneOnlyUsername, code: phoneOnlyResetReq.data.demoCode });
     await api("POST", "/api/auth/forgot-password/reset", { resetToken: phoneOnlyVerify.data.resetToken, newPassword: "1234" });

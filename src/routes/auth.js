@@ -22,6 +22,28 @@ function sanitizeRoles(rolesInput, fallback) {
   return list.length ? list.join(",") : fallback;
 }
 
+// מחשבים מזהה כניסה: שם משתמש, **או** מספר טלפון רשום (כולל שני הפורמטים הנפוצים - מקומי כמו
+// "0501234567" ובינלאומי כמו "+972501234567", בדיוק כמו findUserByPhone/phoneCandidates ב-
+// routes/yemot.js). למה זה חשוב: מי שנרשם ישירות בטלפון (ר' routes/ivr.js, createPhoneUser) מקבל
+// שם משתמש אוטומטי (`phone_XXXXXXXXX`) שהוא **לעולם לא נאמר לו בקול** - הזיהוי בטלפון עצמו הוא
+// תמיד לפי Caller ID, לא לפי שם משתמש. בלי האפשרות להתחבר גם עם מספר הטלפון עצמו, למי שנרשם
+// כך אין שום דרך סבירה לדעת מה להקליד בשדה "שם משתמש" באתר - הוא פשוט יקבל "סיסמה שגויה" גם עם
+// ה-PIN הנכון (כי בפועל שם המשתמש הוא השגוי, לא הסיסמה - אבל הודעת השגיאה לא מבדילה בין השניים).
+function findUserByLoginIdentifier(identifier) {
+  const byUsername = db.prepare("SELECT * FROM users WHERE username = ?").get(identifier);
+  if (byUsername) return byUsername;
+  const digits = String(identifier || "").replace(/\D/g, "");
+  if (!digits) return null;
+  const local = digits.startsWith("972") ? "0" + digits.slice(3) : digits; // 972501234567 -> 0501234567
+  const noLeadingZero = local.replace(/^0/, "");
+  const candidates = Array.from(new Set([identifier, digits, local, `+972${noLeadingZero}`, `972${noLeadingZero}`])).filter(Boolean);
+  for (const candidate of candidates) {
+    const user = db.prepare("SELECT * FROM users WHERE phone = ? OR phone2 = ?").get(candidate, candidate);
+    if (user) return user;
+  }
+  return null;
+}
+
 function register(router) {
   // ---------- הרשמה ----------
   router.post("/api/auth/signup", async (ctx) => {
@@ -53,7 +75,9 @@ function register(router) {
   // ---------- התחברות ----------
   router.post("/api/auth/login", async (ctx) => {
     const { username, password } = ctx.body;
-    const user = db.prepare("SELECT * FROM users WHERE username = ?").get(username);
+    // מתקבל גם מספר טלפון רשום כתחליף לשם משתמש (ר' findUserByLoginIdentifier למעלה) - חשוב במיוחד
+    // למי שנרשם דרך הטלפון וקיבל שם משתמש אוטומטי שאף פעם לא נאמר לו בקול.
+    const user = findUserByLoginIdentifier(username);
     if (!user || !verifyPassword(password || "", user.password_hash)) {
       return json(ctx.res, 401, { error: "שם משתמש או סיסמה שגויים" });
     }
@@ -64,7 +88,9 @@ function register(router) {
   // ---------- שחזור סיסמה: שלב 1 - בקשת קוד ----------
   router.post("/api/auth/forgot-password/request", async (ctx) => {
     const { username, channel } = ctx.body; // channel: 'phone' | 'email'
-    const user = db.prepare("SELECT * FROM users WHERE username = ?").get(username);
+    // גם כאן מתקבל מספר טלפון רשום כתחליף לשם משתמש (ר' findUserByLoginIdentifier) - מי שנרשם
+    // בטלפון ולא זוכר/לא יודע את שם המשתמש האוטומטי שלו עדיין צריך דרך לשחזר גישה.
+    const user = findUserByLoginIdentifier(username);
     if (!user) return json(ctx.res, 404, { error: "משתמש לא נמצא" });
 
     const code = generateOtpCode();
@@ -83,7 +109,7 @@ function register(router) {
   // ---------- שחזור סיסמה: שלב 2 - אימות קוד ----------
   router.post("/api/auth/forgot-password/verify", async (ctx) => {
     const { username, code } = ctx.body;
-    const user = db.prepare("SELECT * FROM users WHERE username = ?").get(username);
+    const user = findUserByLoginIdentifier(username); // ר' הערה למעלה - מתקבל גם מספר טלפון
     if (!user) return json(ctx.res, 404, { error: "משתמש לא נמצא" });
 
     const reset = db

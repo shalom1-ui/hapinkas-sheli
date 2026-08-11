@@ -55,14 +55,17 @@ async function downloadYemotRecording(downloadPath) {
   }
 }
 
-// שולח קובץ שמע ל-Whisper (OpenAI) ומחזיר את הטקסט המתומלל בעברית, או null אם נכשל/לא מוגדר.
+// שולח קובץ שמע לתמלול אצל OpenAI ומחזיר את הטקסט המתומלל בעברית, או null אם נכשל/לא מוגדר.
+// המודל: gpt-4o-mini-transcribe (לא whisper-1 הישן) - זול יותר (כ-0.003$ לדקה, לעומת מודלים אחרים
+// אצל OpenAI) ומופיע כמודל התמלול הנוכחי בתיעוד המחירים הרשמי של OpenAI (whisper-1 כבר לא מופיע שם
+// באופן מפורש נכון לעכשיו) - ר' README, סעיף "זיהוי דיבור משודרג" להסבר עלויות מלא.
 async function transcribeAudio(audioBuffer) {
   if (!isConfigured() || !audioBuffer) return null;
   try {
     const form = new FormData();
     form.append("file", new Blob([audioBuffer], { type: "audio/wav" }), "recording.wav");
-    form.append("model", "whisper-1");
-    form.append("language", "he"); // מבקשים במפורש עברית - עוזר לדיוק, גם אם Whisper יודע לזהות שפה לבד
+    form.append("model", "gpt-4o-mini-transcribe");
+    form.append("language", "he"); // מבקשים במפורש עברית - עוזר לדיוק, גם אם המודל יודע לזהות שפה לבד
     const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
       headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
