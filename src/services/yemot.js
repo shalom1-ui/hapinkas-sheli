@@ -67,9 +67,9 @@ function sayAndRecord(text, path, fileName) {
 function sayAndReadDigits(text, digits) {
   const safe = sanitizeForYemot(text);
   // סדר האופציות (מצב tap, ר' תיעוד מודול ה-API): valName, re_enter_if_exists, max_digits, min_digits,
-  // sec_wait (שניות המתנה בין הקשות), typing_playback_mode, block_asterisk_key, block_zero_key,
-  // replace_char, digits_allowed, amount_attempts, allow_empty, empty_val, block_change_keyboard.
-  const ops = ["no", String(digits), String(digits), "15", "No", "no", "no", "", "", "", "", "", ""];
+  // sec_wait (שניות המתנה בין הקשות - 7 שניות, נדיב אבל לא מוגזם), typing_playback_mode, block_asterisk_key,
+  // block_zero_key, replace_char, digits_allowed, amount_attempts, allow_empty, empty_val, block_change_keyboard.
+  const ops = ["no", String(digits), String(digits), "7", "No", "no", "no", "", "", "", "", "", ""];
   return `read=t-${safe}=${VAL_NAME},${ops.join(",")}`;
 }
 

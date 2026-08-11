@@ -197,7 +197,9 @@ async function advance(state, speech, draft, user, opts = {}) {
     case "expense_amount": {
       const amount = extractAmount(s);
       if (!amount) return { text: `לא זיהיתי סכום.${retryHint()} כמה עלה, בשקלים?`, nextState: "expense_amount" };
-      return { text: "לאיזו קטגוריה? למשל: מזון, תחבורה, דיור, אחר.", nextState: "expense_category", draft: { amount } };
+      // חוזרים מיד על הסכום שזוהה (לפני שממשיכים לשאלה הבאה) - כדי לתפוס מיד טעות זיהוי בסכום
+      // (מספרים מועדים לטעויות זיהוי דיבור), במקום לחכות לאישור הסופי כמה שאלות אחר כך.
+      return { text: `רשמתי ${amount} שקלים. לאיזו קטגוריה? למשל: מזון, תחבורה, דיור, אחר.`, nextState: "expense_category", draft: { amount } };
     }
     case "expense_category": {
       const category = s || "אחר";
@@ -338,7 +340,8 @@ async function advance(state, speech, draft, user, opts = {}) {
     case "therapist_student": {
       const student = findStudentByName(null, s);
       if (!student) return { text: `לא מצאתי תלמיד בשם הזה.${retryHint()} אפשר לומר שוב?`, nextState: "therapist_student" };
-      return { text: "מה תוכן הדיווח? אפשר לתאר את ההתקדמות והמטרות.", nextState: "therapist_note", draft: { ...draft, studentId: student.id, studentName: student.name } };
+      // חוזרים מיד על שם התלמיד שזוהה (בדיוק כמו mentorActionPrompt) - כדי שיהיה ברור מיד שהשם הובן נכון.
+      return { text: `${student.name}. מה תוכן הדיווח? אפשר לתאר את ההתקדמות והמטרות.`, nextState: "therapist_note", draft: { ...draft, studentId: student.id, studentName: student.name } };
     }
     case "therapist_note": {
       return {
@@ -376,7 +379,8 @@ async function advance(state, speech, draft, user, opts = {}) {
     case "supervisor_pick_student": {
       const student = findStudentByName(null, s);
       if (!student) return { text: `לא מצאתי תלמיד בשם הזה.${retryHint()} אפשר לומר שוב?`, nextState: "supervisor_pick_student" };
-      return { text: "מה תוכן ההערה?", nextState: "supervisor_readback", draft: { studentId: student.id, studentName: student.name } };
+      // חוזרים מיד על שם התלמיד שזוהה - כדי שיהיה ברור מיד שהשם הובן נכון.
+      return { text: `${student.name}. מה תוכן ההערה?`, nextState: "supervisor_readback", draft: { studentId: student.id, studentName: student.name } };
     }
     case "supervisor_readback": {
       return {
@@ -446,13 +450,16 @@ async function advanceSignup(state, speech, draft, opts = {}) {
     // ב-routes/ivr.js ו-routes/yemot.js), ומשמש גם כסיסמה להתחברות באתר (ר' isValidPin ב-utils/crypto.js
     // - אותה סיסמה בדיוק עובדת משני הכיוונים). מבקשים הקשה כפולה (כמו הגדרת PIN בכספומט) כדי לתפוס
     // הקשה שגויה בטעות, לפני שהחשבון בכלל נוצר.
+    // "התקבל"/"הוגדר בהצלחה" בתחילת המשפט הבא בכוונה מפורשת: יש עיכוב טבעי (זמן תקשורת ברשת) בין
+    // סיום ההקשה לבין שהמערכת עונה - בלי מילת אישור ברורה בתחילת המשפט הבא, המתקשר לא יודע אם
+    // ההקשה בכלל "נקלטה" תוך כדי ההמתנה השקטה. מילה ראשונה שמאשרת קליטה בבירור פותרת את זה.
     case "signup_pin": {
       const digits = onlyDigits(speech);
       if (!digits || digits.length !== 4) {
         return { text: `לא קלטתי בדיוק 4 ספרות.${retryHint()} הקישו שוב 4 ספרות במקלדת הטלפון לקוד הסודי.`, nextState: "signup_pin", draft };
       }
       return {
-        text: "עכשיו הקישו שוב את אותן 4 הספרות, לאישור.",
+        text: "התקבל. עכשיו הקישו שוב את אותן 4 הספרות, לאישור.",
         nextState: "signup_pin_confirm",
         draft: { ...draft, pendingPin: digits },
       };
@@ -461,7 +468,7 @@ async function advanceSignup(state, speech, draft, opts = {}) {
       const digits = onlyDigits(speech);
       if (digits && digits.length === 4 && digits === draft.pendingPin) {
         return {
-          text: "אפשר גם לצרף כתובת מייל לחשבון, זה לא חובה. אם תרצו - אמרו אותה עכשיו. אם לא, אמרו דלג.",
+          text: "הקוד הוגדר בהצלחה. אפשר גם לצרף כתובת מייל לחשבון, זה לא חובה. אם תרצו - אמרו אותה עכשיו. אם לא, אמרו דלג.",
           nextState: "signup_email",
           draft: { ...draft, pin: draft.pendingPin, pendingPin: undefined },
         };

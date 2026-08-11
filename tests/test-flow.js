@@ -553,7 +553,8 @@ async function run() {
     assert(greeting.includes("שלום וברכה") && greeting.includes("הגעתם לקו הפנקס שלי"), "מיד כשמתקשרים (Twilio) המערכת פותחת בברכה 'שלום וברכה, הגעתם לקו הפנקס שלי' לפני שאר התפריט");
 
     await ivrSay(callSid, "הוצאה");
-    await ivrSay(callSid, "60");
+    const amountEcho = await ivrSay(callSid, "60");
+    assert(amountEcho.includes("רשמתי 60 שקלים") && amountEcho.includes("לאיזו קטגוריה"), "מיד אחרי אמירת הסכום, המערכת חוזרת עליו ('רשמתי 60 שקלים') לפני ששואלת על הקטגוריה - כדי לתפוס מיד טעות זיהוי בסכום");
     await ivrSay(callSid, "תחבורה");
     const confirmXml = await ivrSay(callSid, "כן");
     assert(confirmXml.includes("נשמר"), "זרימת הוצאה קולית מלאה (קיצור ישיר מהתפריט הראשי) הושלמה ואושרה");
@@ -580,6 +581,21 @@ async function run() {
     await ivrCall(therapistCallSid, "+972500000001");
     const therapistMenu = await ivrSay(therapistCallSid, "מטפלים");
     assert(therapistMenu.includes("מה סוג הדיווח"), "קטגוריית 'מטפלים' פותחת את זרימת דיווח המטפל הקיימת");
+    await ivrSay(therapistCallSid, "ריפוי בעיסוק");
+    const therapistStudentEcho = await ivrSay(therapistCallSid, "תלמיד בדיקה");
+    assert(
+      therapistStudentEcho.includes("תלמיד בדיקה") && therapistStudentEcho.includes("מה תוכן הדיווח"),
+      "מיד אחרי זיהוי שם התלמיד בדיווח מטפל, המערכת חוזרת על השם לפני ששואלת על תוכן הדיווח"
+    );
+
+    const supervisorCallSid = `${callSid}-supervisor`;
+    await ivrCall(supervisorCallSid, "+972500000001");
+    await ivrSay(supervisorCallSid, "הערת מפקח");
+    const supervisorStudentEcho = await ivrSay(supervisorCallSid, "תלמיד בדיקה");
+    assert(
+      supervisorStudentEcho.includes("תלמיד בדיקה") && supervisorStudentEcho.includes("מה תוכן ההערה"),
+      "מיד אחרי זיהוי שם התלמיד בהערת מפקח, המערכת חוזרת על השם לפני ששואלת על תוכן ההערה"
+    );
 
     console.log("\n👨‍👩‍👧 קטגוריית 'הורה' בטלפון — סיכום קולי על הילד, בלי גישה לאתר");
     await api("PUT", "/api/me", { phone: "+972500000055" }, parentToken); // נותנים להורה מספר טלפון קבוע לזיהוי בשיחה
@@ -627,6 +643,10 @@ async function run() {
     // (משתמשים כאן ב-ivrTapDigits, לא ivrSay, כדי לבדוק בפועל את שדה "Digits" האמיתי של Twilio)
     const signupPinConfirmPrompt = await ivrTapDigits(signupCallSid, "1234");
     assert(signupPinConfirmPrompt.includes("שוב") && signupPinConfirmPrompt.includes('input="dtmf"'), "אחרי הקשת 4 ספרות, מתבקשים להקיש אותן שוב לאישור (גם בהקשה, לא בדיבור)");
+    assert(
+      signupPinConfirmPrompt.includes("התקבל"),
+      "המענה אחרי הקשת ה-PIN הראשונה פותח ב'התקבל' - כדי שהמתקשר ידע בבירור שההקשה נקלטה, גם אם יש עיכוב רשת עד שהתשובה מגיעה"
+    );
     const signupPinMismatchPrompt = await ivrSay(signupCallSid, "9999");
     assert(
       signupPinMismatchPrompt.includes("לא תאמו") && signupPinMismatchPrompt.includes('input="dtmf"'),
@@ -635,8 +655,8 @@ async function run() {
     await ivrSay(signupCallSid, "1234");
     const signupEmailPrompt = await ivrSay(signupCallSid, "1234");
     assert(
-      signupEmailPrompt.includes("כתובת מייל") && signupEmailPrompt.includes("<Gather"),
-      "אחרי הקשה כפולה תואמת של קוד ה-PIN, המערכת שואלת (לא חובה) על כתובת מייל לפני יצירת המשתמש"
+      signupEmailPrompt.includes("הוגדר בהצלחה") && signupEmailPrompt.includes("כתובת מייל") && signupEmailPrompt.includes("<Gather"),
+      "אחרי הקשה כפולה תואמת של קוד ה-PIN, המערכת שואלת (לא חובה) על כתובת מייל לפני יצירת המשתמש, עם אישור ברור שהקוד הוגדר"
     );
     const signupDoneXml = await ivrSay(signupCallSid, "דלג");
     assert(signupDoneXml.includes("נרשמת בהצלחה") && signupDoneXml.includes("נא לציין"), "אמירת 'דלג' על שלב המייל עדיין יוצרת את המשתמש ועובר ישר לתפריט הקטגוריות הרגיל");
@@ -821,12 +841,19 @@ async function run() {
     await yemotCall({ callId: ymSignupCallId, speech: "דנה לוי" });
     const ymSignupPinPrompt = await yemotCall({ callId: ymSignupCallId, speech: "כן" });
     assert(
-      ymSignupPinPrompt.includes("קוד סודי") && ymSignupPinPrompt.includes(",no,4,4,"),
-      "גם בימות, אחרי אישור השם מתבקש קוד PIN בן 4 ספרות בהקשה (מצב tap - max_digits/min_digits=4)"
+      ymSignupPinPrompt.includes("קוד סודי") && ymSignupPinPrompt.includes(",no,4,4,7,"),
+      "גם בימות, אחרי אישור השם מתבקש קוד PIN בן 4 ספרות בהקשה (מצב tap - max_digits/min_digits=4, sec_wait=7)"
     );
-    await yemotCall({ callId: ymSignupCallId, speech: "4321" });
+    const ymSignupPinConfirmPrompt = await yemotCall({ callId: ymSignupCallId, speech: "4321" });
+    assert(
+      ymSignupPinConfirmPrompt.includes("התקבל") && ymSignupPinConfirmPrompt.includes("שוב"),
+      "אחרי הקשת 4 הספרות הראשונות, המענה פותח ב'התקבל' - כדי שהמתקשר ידע בבירור שההקשה נקלטה, גם עם עיכוב הרשת"
+    );
     const ymSignupEmailPrompt = await yemotCall({ callId: ymSignupCallId, speech: "4321" });
-    assert(ymSignupEmailPrompt.includes("כתובת מייל"), "גם בימות, אחרי הקשה כפולה תואמת של קוד ה-PIN שואלים (לא חובה) על כתובת מייל");
+    assert(
+      ymSignupEmailPrompt.includes("הוגדר בהצלחה") && ymSignupEmailPrompt.includes("כתובת מייל"),
+      "גם בימות, אחרי הקשה כפולה תואמת של קוד ה-PIN שואלים (לא חובה) על כתובת מייל, עם אישור ברור שהקוד הוגדר"
+    );
     const ymSignupDone = await yemotCall({ callId: ymSignupCallId, speech: "דלג" });
     assert(ymSignupDone.includes("נרשמת בהצלחה") && ymSignupDone.includes("דנה לוי"), "הרשמה טלפונית דרך ימות יוצרת משתמש ועוברת לתפריט הרגיל, גם כשמדלגים על המייל");
 
