@@ -84,14 +84,16 @@ function register(router) {
 }
 
 // ---------- ברכת פתיחה / תפריט ראשי (משותף לTwilio ולימות) ----------
+// ההודעה נשמרת קצרה בכוונה: כל מילה נוספת כאן מאריכה את זמן ההשמעה לפני שהמערכת מתחילה להאזין,
+// וזה בדיוק מה שגורם לתחושת "לא מזהה מיד כשמתחילים לדבר" - ככל שהברכת פתיחה קצרה יותר, ההאזנה
+// בפועל מתחילה מוקדם יותר. הרשימה המלאה של מספר<->קטגוריה נשארת ב-README, לא מוקראת כל שיחה.
 function mainMenuPrompt(name, opts = {}) {
   // digitConfirm בערוצים שתומכים בהקשה תוך כדי זיהוי דיבור (כרגע: ימות בלבד) - מזכירים כבר בפתיחה
   // שאפשר להקיש ספרה במקום לדבר, ובלי לחכות שהמערכת תסיים להקריא את כל התפריט (ימות לא חוסם הקשה
-  // במהלך ההשמעה - ר' services/yemot.js).
-  const digitNote = opts.digitConfirm
-    ? ` אפשר גם להקיש בכל רגע, בלי לחכות שנסיים לדבר: ${mainMenuDigitsText()}. ובכל שאלת אישור בשיחה - סולמית לאישור מהיר.`
-    : "";
-  return `${name ? `שלום ${name}, ` : "שלום, "}הגעתם לפנקס שלי. נא לציין לאיזה קטגוריה אתם רוצים להיכנס: ${mainMenuCategoriesText()}${digitNote}`;
+  // במהלך ההשמעה - ר' services/yemot.js). בכוונה לא חוזרים כאן על כל רשימת הספרות (זה כבר ארוך
+  // מספיק בגלל רשימת הקטגוריות עצמה) - מספיק לדעת שאפשר להקיש בכלל.
+  const digitNote = opts.digitConfirm ? " אפשר גם להקיש 1 עד 6, או סולמית לאישור מהיר." : "";
+  return `${name ? `שלום ${name}, ` : "שלום, "}הגעתם לפנקס שלי. נא לציין קטגוריה: ${mainMenuCategoriesText()}${digitNote}`;
 }
 function mainMenuCategoriesText() {
   return "ניהול חשבונות, תנועות, חונכות, מטפלים, הורה, או הערת מפקח.";
@@ -109,9 +111,6 @@ const MAIN_MENU_DIGIT_KEYWORDS = {
   "5": "הורה",
   "6": "הערת מפקח",
 };
-function mainMenuDigitsText() {
-  return "1 לניהול חשבונות, 2 לתנועות, 3 לחונכות, 4 למטפלים, 5 להורה, 6 להערת מפקח";
-}
 function mainMenuDigitKeyword(s) {
   const digits = onlyDigits(s);
   return digits && MAIN_MENU_DIGIT_KEYWORDS[digits] ? normalize(MAIN_MENU_DIGIT_KEYWORDS[digits]) : null;

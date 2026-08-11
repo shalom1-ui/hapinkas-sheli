@@ -604,8 +604,8 @@ async function run() {
     const ymGreeting = await yemotCall({ callId: ymCallId, phone: "0500000001" });
     assert(ymGreeting.startsWith("read=t-") && ymGreeting.includes("נא לציין"), "פתיחת שיחה בימות (מספר בפורמט מקומי) מזהה משתמש ומציגה תפריט קטגוריות");
     assert(
-      ymGreeting.includes("1 לניהול חשבונות") && ymGreeting.includes("2 לתנועות"),
-      "כבר בברכת הפתיחה בימות מוזכר שאפשר להקיש ספרה (1-6) בלי לחכות, במקום לדבר"
+      ymGreeting.includes("1 עד 6") && ymGreeting.includes("סולמית"),
+      "כבר בברכת הפתיחה בימות מוזכר שאפשר להקיש ספרה (1-6) בלי לחכות, במקום לדבר - בקצרה, כדי לא להאריך את זמן ההשמעה"
     );
 
     const ymUnknown = await yemotCall({ callId: `${ymCallId}-unknown`, phone: "0500000099" });
