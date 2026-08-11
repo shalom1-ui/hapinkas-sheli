@@ -763,6 +763,19 @@ async function run() {
       "שיחת ימות חוזרת מאותו מספר אחרי ההרשמה כבר מזהה את המשתמש שנוצר"
     );
 
+    console.log("\n🎙️ זיהוי דיבור משודרג (ימות + Whisper) — במצב MOCK (בלי מפתחות) נשאר שקוף לחלוטין");
+    const speechToText = require("../src/services/speechToText");
+    assert(
+      speechToText.isConfigured() === false,
+      "isConfigured() מחזיר false כל עוד YEMOT_API_TOKEN/YEMOT_EXTENSION_NUMBER/OPENAI_API_KEY לא מוגדרים יחד (מצב הבדיקות)"
+    );
+    const whisperMockResult = await speechToText.downloadAndTranscribe("some-call-id");
+    assert(whisperMockResult === null, "downloadAndTranscribe() מחזיר null במצב MOCK, בלי לנסות פנייה רשתית כלשהי");
+    assert(
+      ymSignupGreeting.includes(",no,voice,") && !ymSignupGreeting.includes(",no,record,"),
+      "כשלא מוגדר זיהוי דיבור משודרג, שלב טקסט חופשי בימות (שם בהרשמה) עדיין משתמש במנוע ה-STT הרגיל של ימות ולא במצב הקלטה גולמית"
+    );
+
   } catch (err) {
     failed++;
     console.error("❌ שגיאה בלתי צפויה בבדיקות:", err);

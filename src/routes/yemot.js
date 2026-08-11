@@ -15,12 +15,28 @@
 const db = require("../db");
 const { text } = require("../router");
 const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt } = require("./ivr");
-const { sayAndReadStt, sayAndHangup, VAL_NAME } = require("../services/yemot");
+const { sayAndReadStt, sayAndRecord, sayAndHangup, VAL_NAME } = require("../services/yemot");
+const speechToText = require("../services/speechToText");
 
 // שלבים שמבקשים טקסט חופשי גרידא (שם, לא קטגוריה/ספרה) - אין בהם שום קיצור הקשה בעל משמעות,
 // ולכן אפשר להעביר אותם למנוע ה"הקלטה" של ימות (freeText ב-sayAndReadStt) לזיהוי דיבור מדויק
 // ונדיב יותר, בלי לפגוע בקיצורי ההקשה בשום מקום אחר (הם ממילא לא רלוונטיים כאן).
+// כשמוגדר "זיהוי דיבור משודרג" (speechToText.isConfigured() - ר' services/speechToText.js), אותם
+// שלבים בדיוק עוברים למצב "record" גולמי + תמלול Whisper במקום מנוע ההקלטה-לזיהוי של ימות עצמו -
+// ר' הערות בהמשך הקובץ במקומות שבהם נבדק FREE_TEXT_STATES.
 const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "signup_email"]);
+
+// בונה את תגובת הפרוטוקול לבקשת קלט טקסט חופשי (שם וכו') עבור שלב נתון - בוחר בין שלוש אפשרויות:
+// (1) אם מוגדר זיהוי דיבור משודרג (Whisper) - מבקשים הקלטה גולמית (sayAndRecord) שנתמלל בעצמנו
+//     בבקשה הבאה; (2) אחרת - מנוע ה"הקלטה-לזיהוי" הרגיל של ימות (freeText); (3) לשלבים שאינם
+//     free-text כלל - זיהוי דיבור (stt) רגיל, כמו קודם.
+function freeTextPrompt(callId, text_) {
+  if (speechToText.isConfigured()) {
+    const { path, fileName } = speechToText.recordingPath(callId);
+    return sayAndRecord(text_, path, fileName);
+  }
+  return sayAndReadStt(text_, { freeText: true });
+}
 
 function register(router) {
   router.post("/api/ivr/yemot", async (ctx) => {
@@ -51,7 +67,7 @@ function register(router) {
         return text(
           ctx.res,
           200,
-          sayAndReadStt("מספר הטלפון שלך אינו מזוהה במערכת. אפשר להירשם עכשיו ישירות בטלפון, בלי לגשת לאתר. מה השם המלא שלכם?", { freeText: true })
+          freeTextPrompt(callId, "מספר הטלפון שלך אינו מזוהה במערכת. אפשר להירשם עכשיו ישירות בטלפון, בלי לגשת לאתר. מה השם המלא שלכם?")
         );
       }
 
@@ -60,7 +76,21 @@ function register(router) {
     }
 
     // ---------- המשך שיחה קיימת ----------
-    const speech = String(v[VAL_NAME] || "").trim();
+    // אם השלב הקודם היה בקשת הקלטה גולמית (ר' freeTextPrompt) - הערך שימות שולחת בשדה "speech" הוא
+    // לא הטקסט שהמתקשר אמר (ימות לא ניסתה בכלל לזהות דיבור במצב record), אלא ערך לא רלוונטי. במקום
+    // זאת מורידים ומתמללים בעצמנו את ההקלטה שנשמרה (ר' services/speechToText.js). אם התמלול נכשל
+    // מכל סיבה (למשל עדיין לא הוגדר בפועל, או שגיאת רשת) - נופלים בחזרה בבטחה לערך הגולמי שימות
+    // שלחה, בדיוק כמו ההתנהגות הקודמת, כדי לא לתקוע את השיחה.
+    let speech = String(v[VAL_NAME] || "").trim();
+    if (FREE_TEXT_STATES.has(call.state) && speechToText.isConfigured()) {
+      const transcribed = await speechToText.downloadAndTranscribe(callId);
+      if (transcribed) {
+        console.log(`[WHISPER-DEBUG] שימוש בתמלול Whisper במקום זיהוי הדיבור של ימות: "${transcribed}"`);
+        speech = transcribed;
+      } else {
+        console.log("[WHISPER-DEBUG] תמלול נכשל/לא זמין - נופלים בחזרה לערך הגולמי מימות");
+      }
+    }
     appendTranscript(callId, speech);
     const draft = JSON.parse(call.draft_json || "{}");
 
@@ -75,7 +105,10 @@ function register(router) {
     if (result.hangup) {
       return text(ctx.res, 200, sayAndHangup(result.text));
     }
-    return text(ctx.res, 200, sayAndReadStt(result.text, { freeText: FREE_TEXT_STATES.has(result.nextState) }));
+    if (FREE_TEXT_STATES.has(result.nextState)) {
+      return text(ctx.res, 200, freeTextPrompt(callId, result.text));
+    }
+    return text(ctx.res, 200, sayAndReadStt(result.text));
   });
 }
 

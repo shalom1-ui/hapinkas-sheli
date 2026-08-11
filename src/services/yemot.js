@@ -42,10 +42,27 @@ function sayAndReadStt(text, opts = {}) {
   return `read=t-${safe}=${VAL_NAME},no,voice,,,,,,,`;
 }
 
+// משמיע טקסט ומבקש מימות להקליט את קול המתקשר לקובץ גולמי (מצב "record") - בניגוד ל-sayAndReadStt,
+// כאן ימות לא מנסה בכלל לזהות מה נאמר; היא רק שומרת הקלטה. אנחנו מורידים ומתמללים אותה בעצמנו
+// אח"כ באמצעות Whisper (ר' services/speechToText.js) - זה בשימוש רק כשמוגדר "זיהוי דיבור משודרג"
+// (ר' README), ורק בשלבים חסרי-קיצור-הקשה (כמו שם תלמיד) כי מצב record חוסם הקשות לגמרי בזמן ההשמעה.
+// path/fileName נקבעים מראש ע"י הקורא (ר' speechToText.recordingPath) כדי שנדע בוודאות איפה לחפש
+// את ההקלטה בהמשך, בלי להסתמך על הערך שימות מחזירה (שהפורמט המדויק שלו לא מתועד באופן רשמי אצלנו).
+function sayAndRecord(text, path, fileName) {
+  const safe = sanitizeForYemot(text);
+  // סדר האופציות: valName, re_enter_if_exists, 'record', path, file_name, no_confirm_menu (יש לבקש
+  // "no" כדי *לדלג* על תפריט "לאישור ההקלטה הקישו..." של ימות ולעבור ישר הלאה), save_on_hangup
+  // (yes - כדי שגם אם המתקשר מנתק מיד אחרי שאמר את השם, ההקלטה עדיין נשמרת), append_to_existing_file
+  // (לא רלוונטי - כל הקלטה כאן היא קובץ חדש), min_length, max_length (בשניות - 15 שניות מספיק בנדיבות
+  // לשם או תשובה קצרה, מבלי להשאיר את המתקשר מחכה יותר מדי אם הוא שקט).
+  const ops = ["no", "record", path, fileName, "no", "yes", "", "", "15"];
+  return `read=t-${safe}=${VAL_NAME},${ops.join(",")}`;
+}
+
 // משמיע טקסט ואז מנתק את השיחה (למסכי סיום)
 function sayAndHangup(text) {
   const safe = sanitizeForYemot(text);
   return `id_list_message=t-${safe}.g-hangup`;
 }
 
-module.exports = { sayAndReadStt, sayAndHangup, sanitizeForYemot, VAL_NAME };
+module.exports = { sayAndReadStt, sayAndRecord, sayAndHangup, sanitizeForYemot, VAL_NAME };
