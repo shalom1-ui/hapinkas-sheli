@@ -165,7 +165,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       if (includesAny(es, ["מטפלים", "מטפל", "דיווח", "ריפוי", "רגשי"])) return { text: "מה סוג הדיווח: ריפוי בעיסוק, טיפול רגשי, או אחר?", nextState: "therapist_role" };
       if (includesAny(es, ["הורה", "הורים"])) return startGuardianFlow(user);
       if (includesAny(es, ["מפקח", "הערת מפקח", "הערה"])) return { text: "על איזה תלמיד ההערה?", nextState: "supervisor_pick_student" };
-      return { text: `לא הבנתי. אפשר לומר: ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      return { text: `לא הבנתי.${retryHint()} אפשר לומר: ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
     }
 
     // ---------- תנועות: בחירת סוג (הכנסה/הוצאה) ----------
@@ -173,7 +173,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       const digit = onlyDigits(s);
       if (digit === "2" || includesAny(s, ["הוצאה"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
       if (digit === "1" || includesAny(s, ["הכנסה"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
-      return { text: "לא הבנתי. הכנסה או הוצאה?", nextState: "transactions_pick_type" };
+      return { text: `לא הבנתי.${retryHint()} הכנסה או הוצאה?`, nextState: "transactions_pick_type" };
     }
 
     // ---------- הוצאה ----------
@@ -222,7 +222,7 @@ async function advance(state, speech, draft, user, opts = {}) {
         };
       }
       const spokenName = String(speech || "").trim();
-      if (!spokenName) return { text: "לא שמעתי שם. מה שם התלמיד?", nextState: "mentor_pick_student" };
+      if (!spokenName) return { text: `לא שמעתי שם.${retryHint()} מה שם התלמיד?`, nextState: "mentor_pick_student" };
       return {
         text: `לא מצאתי תלמיד בשם ${spokenName} ברשימת התלמידים שלך. רוצים להוסיף אותו כתלמיד חדש?${addStudentDigitsNote(opts)}`,
         nextState: "mentor_confirm_add_student",
@@ -254,7 +254,7 @@ async function advance(state, speech, draft, user, opts = {}) {
         };
       }
       const retryName = String(speech || "").trim();
-      if (!retryName) return { text: "לא שמעתי שם. מה שם התלמיד?", nextState: "mentor_pick_student" };
+      if (!retryName) return { text: `לא שמעתי שם.${retryHint()} מה שם התלמיד?`, nextState: "mentor_pick_student" };
       return {
         text: `גם בשם ${retryName} לא מצאתי תלמיד ברשימה שלך. רוצים להוסיף אותו כתלמיד חדש?${addStudentDigitsNote(opts)}`,
         nextState: "mentor_confirm_add_student",
@@ -275,7 +275,7 @@ async function advance(state, speech, draft, user, opts = {}) {
           draft,
         };
       }
-      return { text: `לא הבנתי. ${mentorActionPrompt(draft.studentName, opts)}`, nextState: "mentor_action" };
+      return { text: `לא הבנתי.${retryHint()} ${mentorActionPrompt(draft.studentName, opts)}`, nextState: "mentor_action" };
     }
     case "mentor_remove_confirm": {
       if (!isConfirmYes(s, opts)) return { text: `בסדר, לא הסרנו. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
@@ -352,7 +352,7 @@ async function advanceSignup(state, speech, draft, opts = {}) {
   switch (state) {
     case "signup_name": {
       const fullName = String(speech || "").trim();
-      if (!fullName) return { text: "לא שמעתי שם. מה השם המלא שלכם?", nextState: "signup_name" };
+      if (!fullName) return { text: `לא שמעתי שם.${retryHint()} מה השם המלא שלכם?`, nextState: "signup_name" };
       return {
         text: `לאשר: נרשמים בשם ${fullName}, עם מספר הטלפון שממנו אתם מתקשרים כרגע? אמרו כן לאישור.${confirmSuffix(opts)}`,
         nextState: "signup_confirm",
@@ -547,6 +547,13 @@ function isConfirmYes(s, opts) {
 // (סולמית בודדת התבררה כלא אמינה במצב זיהוי דיבור של ימות - ר' isConfirmYes)
 function confirmSuffix(opts) {
   return opts && opts.digitConfirm ? " אפשר גם להקיש 1 לאישור מהיר." : "";
+}
+
+// טקסט שמצטרף לכל הודעת "לא הבנתי"/"לא שמעתי" - בבדיקה בפועל מול ימות מתברר שלפעמים אותה מילה
+// לא מזוהה, אבל ניסוח מעט שונה שלה כן (למשל "יוסי" זוהה כשר "יוסף" לא) - אז כדאי לרמוז למתקשר לנסות
+// לומר את זה קצת אחרת, לא רק לחזור בדיוק על אותה מילה.
+function retryHint() {
+  return " אם זה לא מזוהה, כדאי לנסות לומר את זה בצורה קצת שונה.";
 }
 
 // מנרמל טקסט להשוואה: מוריד רווחים מיותרים, אותיות קטנות (לא רלוונטי בעברית אבל לא מזיק), ומסיר ניקוד -
