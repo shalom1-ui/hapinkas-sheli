@@ -14,8 +14,8 @@
 
 const db = require("../db");
 const { text } = require("../router");
-const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt, OPENING_GREETING } = require("./ivr");
-const { sayAndReadStt, sayAndRecord, sayAndHangup, VAL_NAME } = require("../services/yemot");
+const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt, OPENING_GREETING, DIGIT_ENTRY_STATES } = require("./ivr");
+const { sayAndReadStt, sayAndRecord, sayAndReadDigits, sayAndHangup, VAL_NAME } = require("../services/yemot");
 const speechToText = require("../services/speechToText");
 
 // שלבים שמבקשים טקסט חופשי גרידא (שם, לא קטגוריה/ספרה) - אין בהם שום קיצור הקשה בעל משמעות,
@@ -104,6 +104,9 @@ function register(router) {
 
     if (result.hangup) {
       return text(ctx.res, 200, sayAndHangup(result.text));
+    }
+    if (DIGIT_ENTRY_STATES.has(result.nextState)) {
+      return text(ctx.res, 200, sayAndReadDigits(result.text, 4));
     }
     if (FREE_TEXT_STATES.has(result.nextState)) {
       return text(ctx.res, 200, freeTextPrompt(callId, result.text));

@@ -37,6 +37,22 @@ function sayAndGather({ text, actionPath, hints = [], timeoutSeconds = 5 }) {
 </Response>`;
 }
 
+// אומר משפט ומאזין להקשת מקלדת (DTMF) בלבד - לא לזיהוי דיבור. משמש לקוד PIN בן 4 ספרות (ר'
+// routes/ivr.js, signup_pin) - הקשת מקלדת אמינה בהרבה מזיהוי דיבור לספרות (ולא נשמעת ע"י מי
+// שנמצא ליד המתקשר, בניגוד לאמירת קוד בקול). ה-Gather עוצר אוטומטית ברגע ש-numDigits הוקשו, בלי
+// לחכות ל-# - הספרות מגיעות בבקשה הבאה בשדה "Digits" (לא "SpeechResult").
+function sayAndGatherDigits({ text, actionPath, numDigits = 4, timeoutSeconds = 10 }) {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Gather input="dtmf" numDigits="${numDigits}" timeout="${timeoutSeconds}"
+          action="${escapeXml(actionPath)}" method="POST">
+    <Say language="he-IL" voice="Google.he-IL-Wavenet-A">${escapeXml(text)}</Say>
+  </Gather>
+  <Say language="he-IL" voice="Google.he-IL-Wavenet-A">לא זיהיתי הקשה. מתקשרים לשיחה מחדש בבקשה.</Say>
+  <Hangup/>
+</Response>`;
+}
+
 // מקריא קוד שחזור סיסמה בשיחה יוצאת (בלי SMS) — בלב הפיצ'ר "שחזור סיסמה בשיחה קולית"
 function codeReadoutTwiml(code) {
   const spacedCode = String(code).split("").join(" ");
@@ -78,4 +94,4 @@ async function placeOutboundCallWithCode({ to, code }) {
   return { ok: true, callSid: data.sid };
 }
 
-module.exports = { sayAndHangup, sayAndGather, codeReadoutTwiml, placeOutboundCallWithCode, escapeXml };
+module.exports = { sayAndHangup, sayAndGather, sayAndGatherDigits, codeReadoutTwiml, placeOutboundCallWithCode, escapeXml };

@@ -56,6 +56,17 @@ async function ivrSay(callSid, speech) {
   return res.text();
 }
 
+// מדמה הקשת מקלדת (DTMF) דרך Twilio - שדה "Digits", לא "SpeechResult" (ר' DIGIT_ENTRY_STATES/
+// sayAndGatherDigits ב-routes/ivr.js ו-services/telephony.js). בדיוק מה שה-<Gather> במצב dtmf שולח בפועל.
+async function ivrTapDigits(callSid, digits) {
+  const res = await fetch(`${BASE}/api/ivr/handle`, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ CallSid: callSid, Digits: digits }),
+  });
+  return res.text();
+}
+
 // מדמה בקשת "ימות המשיח" (שלוחת API) - אותה כתובת בכל שלב, עם ApiCallId קבוע לאורך השיחה
 // ו-"speech" בלבד כשלב המשך (בדיוק כמו שהשרת שלנו מצפה - ר' services/yemot.js).
 async function yemotCall({ callId, phone, speech }) {
@@ -106,15 +117,34 @@ async function run() {
     const badLogin = await api("POST", "/api/auth/login", { username, password: "wrong" });
     assert(badLogin.status === 401, "התחברות עם סיסמה שגויה נדחתה כראוי");
 
+    // סיסמה חייבת להיות בדיוק קוד בן 4 ספרות (ר' isValidPin ב-utils/crypto.js) - כדי שאותה סיסמה
+    // תעבוד גם כקוד PIN בטלפון (ר' routes/ivr.js, signup_pin) ולהפך. נבדק כאן בכל שלושת המקומות
+    // שקובעים סיסמה: הרשמה באתר, שחזור סיסמה, ושינוי סיסמה למשתמש מחובר.
+    const badFormatSignup = await api("POST", "/api/auth/signup", {
+      full_name: "סיסמה לא תקינה", username: `badpw_${Date.now()}`, password: "abc123",
+    });
+    assert(badFormatSignup.status === 400, "הרשמה באתר עם סיסמה שאינה בדיוק 4 ספרות נדחית");
+    const shortFormatSignup = await api("POST", "/api/auth/signup", {
+      full_name: "סיסמה קצרה מדי", username: `shortpw_${Date.now()}`, password: "123",
+    });
+    assert(shortFormatSignup.status === 400, "הרשמה באתר עם סיסמה קצרה מ-4 ספרות נדחית");
+
     console.log("\n🔑 שחזור סיסמה בשיחה קולית (ללא SMS)");
     const fpReq = await api("POST", "/api/auth/forgot-password/request", { username, channel: "phone" });
     assert(fpReq.status === 200 && fpReq.data.demoCode, "בקשת שחזור סיסמה החזירה קוד דמו (מצב MOCK)");
     const fpVerify = await api("POST", "/api/auth/forgot-password/verify", { username, code: fpReq.data.demoCode });
     assert(fpVerify.status === 200 && fpVerify.data.resetToken, "אימות קוד השחזור הצליח");
+    const fpResetBadFormat = await api("POST", "/api/auth/forgot-password/reset", { resetToken: fpVerify.data.resetToken, newPassword: "12345" });
+    assert(fpResetBadFormat.status === 400, "שחזור סיסמה עם קוד שאינו בדיוק 4 ספרות נדחה");
     const fpReset = await api("POST", "/api/auth/forgot-password/reset", { resetToken: fpVerify.data.resetToken, newPassword: "9999" });
     assert(fpReset.status === 200, "קביעת סיסמה חדשה הצליחה");
     const loginNew = await api("POST", "/api/auth/login", { username, password: "9999" });
     assert(loginNew.status === 200, "התחברות עם הסיסמה החדשה הצליחה");
+
+    const changePwBadFormat = await api("PUT", "/api/me/password", { currentPassword: "9999", newPassword: "abcd" }, token);
+    assert(changePwBadFormat.status === 400, "שינוי סיסמה למשתמש מחובר עם ערך שאינו בדיוק 4 ספרות נדחה");
+    const changePwOk = await api("PUT", "/api/me/password", { currentPassword: "9999", newPassword: "4444" }, token);
+    assert(changePwOk.status === 200, "שינוי סיסמה למשתמש מחובר עם קוד 4 ספרות תקין הצליח");
 
     console.log("\n👑 תביעת 'בעל הקו' (admin) - לא 'המשתמש הראשון שנרשם', אלא מי שנרשם באתר עצמו ומאמת טלפון");
     // חשבון שנוצר דרך הטלפון (signup_channel='phone') לא כשיר לתבוע בעל הקו, גם אם הוא "המשתמש הראשון"
@@ -125,6 +155,8 @@ async function run() {
     await ivrCall(phoneOnlyCallSid, phoneOnlyPhone);
     await ivrSay(phoneOnlyCallSid, "מהטלפון בלבד");
     await ivrSay(phoneOnlyCallSid, "כן");
+    await ivrSay(phoneOnlyCallSid, "2222");
+    await ivrSay(phoneOnlyCallSid, "2222");
     await ivrSay(phoneOnlyCallSid, "דלג");
     const phoneOnlyUsername = `phone_${phoneOnlyPhone.replace(/\D/g, "").slice(-9)}`;
     const phoneOnlyResetReq = await api("POST", "/api/auth/forgot-password/request", { username: phoneOnlyUsername, channel: "phone" });
@@ -585,13 +617,32 @@ async function run() {
       "קלט לא ברור באישור השם בהרשמה חוזר על אותה שאלת אישור (עם השם שכבר נאמר), ולא מתחיל את ההרשמה מחדש בשקט"
     );
 
-    const signupEmailPrompt = await ivrSay(signupCallSid, "כן");
+    const signupPinPrompt = await ivrSay(signupCallSid, "כן");
+    assert(
+      signupPinPrompt.includes("קוד סודי") && signupPinPrompt.includes('input="dtmf"') && signupPinPrompt.includes('numDigits="4"'),
+      "אחרי אישור השם, המערכת מבקשת קוד PIN בן 4 ספרות בהקשה (DTMF) - לא בדיבור"
+    );
+
+    // תיקון בטיחות: קוד PIN שלא תואם באישור החוזר לא נשמר בשקט - חוזרים להתחיל את הגדרת ה-PIN מחדש
+    // (משתמשים כאן ב-ivrTapDigits, לא ivrSay, כדי לבדוק בפועל את שדה "Digits" האמיתי של Twilio)
+    const signupPinConfirmPrompt = await ivrTapDigits(signupCallSid, "1234");
+    assert(signupPinConfirmPrompt.includes("שוב") && signupPinConfirmPrompt.includes('input="dtmf"'), "אחרי הקשת 4 ספרות, מתבקשים להקיש אותן שוב לאישור (גם בהקשה, לא בדיבור)");
+    const signupPinMismatchPrompt = await ivrSay(signupCallSid, "9999");
+    assert(
+      signupPinMismatchPrompt.includes("לא תאמו") && signupPinMismatchPrompt.includes('input="dtmf"'),
+      "אם הספרות באישור לא תואמות למה שהוקש קודם, מתבקשים להתחיל את הגדרת ה-PIN מחדש (לא נשמר קוד שגוי בטעות)"
+    );
+    await ivrSay(signupCallSid, "1234");
+    const signupEmailPrompt = await ivrSay(signupCallSid, "1234");
     assert(
       signupEmailPrompt.includes("כתובת מייל") && signupEmailPrompt.includes("<Gather"),
-      "אחרי אישור השם, המערכת שואלת (לא חובה) על כתובת מייל לפני יצירת המשתמש"
+      "אחרי הקשה כפולה תואמת של קוד ה-PIN, המערכת שואלת (לא חובה) על כתובת מייל לפני יצירת המשתמש"
     );
     const signupDoneXml = await ivrSay(signupCallSid, "דלג");
     assert(signupDoneXml.includes("נרשמת בהצלחה") && signupDoneXml.includes("נא לציין"), "אמירת 'דלג' על שלב המייל עדיין יוצרת את המשתמש ועובר ישר לתפריט הקטגוריות הרגיל");
+
+    const signupPinLogin = await api("POST", "/api/auth/login", { username: `phone_${signupPhone.replace(/\D/g, "").slice(-9)}`, password: "1234" });
+    assert(signupPinLogin.status === 200 && signupPinLogin.data.token, "קוד ה-PIN שהוקש בטלפון בהרשמה עובד גם כסיסמה להתחברות באתר");
 
     const secondCallSameNumber = await ivrCall(`${signupCallSid}-again`, signupPhone);
     assert(
@@ -605,10 +656,12 @@ async function run() {
     await ivrCall(emailSignupCallSid, emailSignupPhone);
     await ivrSay(emailSignupCallSid, "גל שני");
     await ivrSay(emailSignupCallSid, "כן");
+    await ivrSay(emailSignupCallSid, "5678");
+    await ivrSay(emailSignupCallSid, "5678");
     const emailDoneXml = await ivrSay(emailSignupCallSid, "gal כרוכית gmail נקודה com");
     assert(
       emailDoneXml.includes("נרשמת בהצלחה") && emailDoneXml.includes("gal@gmail.com"),
-      "כתובת מייל שנאמרה בקול (עם 'כרוכית'/'נקודה' במקום @ ונקודה) מזוהה ונשמרת אצל המשתמש החדש"
+      "כתובת מייל שנאמרה בקול (עם 'כרוכית'/'נקודה' במקום @ ונקודה) מזוהה ונשמרת אצל המשתמש החדש, אחרי הגדרת קוד PIN"
     );
 
     console.log("\n☎️ מנוע השיחה הקולית מול ימות המשיח (שלוחת API) — אותה מכונת מצבים, פרוטוקול שונה");
@@ -766,10 +819,19 @@ async function run() {
     const ymSignupGreeting = await yemotCall({ callId: ymSignupCallId, phone: ymSignupPhone });
     assert(ymSignupGreeting.includes("אינו מזוהה") && ymSignupGreeting.includes("השם המלא"), "מספר לא מזוהה בימות מקבל הצעת הרשמה");
     await yemotCall({ callId: ymSignupCallId, speech: "דנה לוי" });
-    const ymSignupEmailPrompt = await yemotCall({ callId: ymSignupCallId, speech: "כן" });
-    assert(ymSignupEmailPrompt.includes("כתובת מייל"), "גם בימות, אחרי אישור השם שואלים (לא חובה) על כתובת מייל");
+    const ymSignupPinPrompt = await yemotCall({ callId: ymSignupCallId, speech: "כן" });
+    assert(
+      ymSignupPinPrompt.includes("קוד סודי") && ymSignupPinPrompt.includes(",no,4,4,"),
+      "גם בימות, אחרי אישור השם מתבקש קוד PIN בן 4 ספרות בהקשה (מצב tap - max_digits/min_digits=4)"
+    );
+    await yemotCall({ callId: ymSignupCallId, speech: "4321" });
+    const ymSignupEmailPrompt = await yemotCall({ callId: ymSignupCallId, speech: "4321" });
+    assert(ymSignupEmailPrompt.includes("כתובת מייל"), "גם בימות, אחרי הקשה כפולה תואמת של קוד ה-PIN שואלים (לא חובה) על כתובת מייל");
     const ymSignupDone = await yemotCall({ callId: ymSignupCallId, speech: "דלג" });
     assert(ymSignupDone.includes("נרשמת בהצלחה") && ymSignupDone.includes("דנה לוי"), "הרשמה טלפונית דרך ימות יוצרת משתמש ועוברת לתפריט הרגיל, גם כשמדלגים על המייל");
+
+    const ymSignupPinLogin = await api("POST", "/api/auth/login", { username: `phone_${ymSignupPhone.replace(/\D/g, "").slice(-9)}`, password: "4321" });
+    assert(ymSignupPinLogin.status === 200 && ymSignupPinLogin.data.token, "קוד ה-PIN שהוקש בימות עובד גם כסיסמה להתחברות באתר");
 
     const ymSecondCall = await yemotCall({ callId: `${ymSignupCallId}-again`, phone: ymSignupPhone });
     assert(

@@ -17,8 +17,8 @@
 const crypto = require("crypto");
 const db = require("../db");
 const { xml } = require("../router");
-const { sayAndGather, sayAndHangup } = require("../services/telephony");
-const { hashPassword } = require("../utils/crypto");
+const { sayAndGather, sayAndGatherDigits, sayAndHangup } = require("../services/telephony");
+const { hashPassword, isValidPin } = require("../utils/crypto");
 
 const MAIN_MENU_HINTS = [
   "ניהול חשבונות", "חשבונות", "תנועות", "הכנסה", "הוצאה", "יתרה",
@@ -29,6 +29,12 @@ const MAIN_MENU_HINTS = [
 // אחרת (זיהוי משתמש/הצעת הרשמה/תפריט הקטגוריות). בכוונה לא מוכפלת בשום מקום אחר באמצע השיחה
 // (למשל אחרי ביטול פעולה שחוזר לתפריט הראשי) - שם זה יישמע מוזר ומיותר לחזור שוב על "הגעתם לקו...".
 const OPENING_GREETING = "שלום וברכה, הגעתם לקו הפנקס שלי. ";
+
+// שלבים שמבקשים הקשת קוד ספרות קבוע-אורך במקלדת (כרגע: קוד PIN בהרשמה טלפונית, ר' signup_pin/
+// signup_pin_confirm) - לא זיהוי דיבור וגם לא "טקסט חופשי" (ר' FREE_TEXT_STATES ב-routes/yemot.js).
+// משותף לשני הספקים: Twilio (sayAndGatherDigits, services/telephony.js) וימות (sayAndReadDigits,
+// services/yemot.js) - שניהם עוברים למצב הקשה-בלבד (DTMF/tap) בשלבים האלה, בלי לנסות לזהות דיבור.
+const DIGIT_ENTRY_STATES = new Set(["signup_pin", "signup_pin_confirm"]);
 
 function register(router) {
   // כניסה לשיחה
@@ -61,7 +67,9 @@ function register(router) {
   // כל שאר הצעדים בשיחה
   router.post("/api/ivr/handle", async (ctx) => {
     const callSid = ctx.body.CallSid;
-    const speech = (ctx.body.SpeechResult || "").trim();
+    // "Digits" מגיע רק כשה-<Gather> הקודם היה במצב הקשה (DTMF, ר' DIGIT_ENTRY_STATES/sayAndGatherDigits)
+    // ולא כשהוא היה במצב "speech" - שני השדות לעולם לא מגיעים יחד באותה בקשה, אז מיזוג בטוח.
+    const speech = (ctx.body.Digits || ctx.body.SpeechResult || "").trim();
     const call = db.prepare("SELECT * FROM call_logs WHERE call_sid = ?").get(callSid);
     if (!call) {
       return xml(ctx.res, 200, sayAndHangup("אירעה תקלה בזיהוי השיחה. יש לנסות שוב."));
@@ -70,8 +78,9 @@ function register(router) {
     appendTranscript(callSid, speech);
     const draft = JSON.parse(call.draft_json || "{}");
 
-    // Twilio: אין כרגע קליטת הקשות (dtmf) מוגדרת ב-<Gather>, לכן אין תמיכה ב"הקישו סולמית" בערוץ הזה -
-    // ר' הערה מפורטת ב-services/yemot.js למה זה קיים רק בימות.
+    // Twilio: אין כרגע קליטת הקשות (dtmf) מוגדרת ב-<Gather> הרגיל (זיהוי דיבור), לכן אין תמיכה
+    // ב"הקישו סולמית" בערוץ הזה בשלבים רגילים - ר' הערה מפורטת ב-services/yemot.js למה זה קיים רק
+    // בימות. **חריג**: שלבי קוד PIN (DIGIT_ENTRY_STATES) כן משתמשים ב-<Gather> ייעודי במצב dtmf בלבד.
     const result = call.user_id
       ? await advance(call.state, speech, draft, db.prepare("SELECT * FROM users WHERE id = ?").get(call.user_id))
       : await advanceSignup(call.state, speech, draft);
@@ -79,6 +88,9 @@ function register(router) {
     upsertCall(callSid, result.newUserId || call.user_id, result.nextState, result.draft || draft, result.outcome);
     if (result.hangup) {
       return xml(ctx.res, 200, sayAndHangup(result.text));
+    }
+    if (DIGIT_ENTRY_STATES.has(result.nextState)) {
+      return xml(ctx.res, 200, sayAndGatherDigits({ text: result.text, actionPath: "/api/ivr/handle", numDigits: 4 }));
     }
     return xml(
       ctx.res,
@@ -416,8 +428,8 @@ async function advanceSignup(state, speech, draft, opts = {}) {
     case "signup_confirm": {
       if (isConfirmYes(s, opts)) {
         return {
-          text: "אפשר גם לצרף כתובת מייל לחשבון, זה לא חובה. אם תרצו - אמרו אותה עכשיו. אם לא, אמרו דלג.",
-          nextState: "signup_email",
+          text: "עכשיו נגדיר קוד סודי בן 4 ספרות - הוא ישמש גם לכניסה לאתר בעתיד. הקישו עכשיו 4 ספרות במקלדת הטלפון.",
+          nextState: "signup_pin",
           draft,
         };
       }
@@ -430,12 +442,42 @@ async function advanceSignup(state, speech, draft, opts = {}) {
         draft,
       };
     }
-    // מייל אופציונלי בהרשמה טלפונית - הזיהוי עצמו נשען על מספר הטלפון (Caller ID), לא על המייל/סיסמה,
-    // אבל מייל מאפשר בעתיד גם שחזור/כניסה מהאתר בצורה נוחה יותר. אם הזיהוי מהדיבור לא נשמע כמו כתובת
-    // מייל תקינה - לא תוקעים את השיחה בלולאה, פשוט ממשיכים בלי מייל (אפשר להוסיף מאוחר יותר באתר).
+    // קוד PIN בן 4 ספרות - נקבע דרך הקשת מקלדת בלבד (לא דיבור, ר' DIGIT_ENTRY_STATES/sayAndGatherDigits
+    // ב-routes/ivr.js ו-routes/yemot.js), ומשמש גם כסיסמה להתחברות באתר (ר' isValidPin ב-utils/crypto.js
+    // - אותה סיסמה בדיוק עובדת משני הכיוונים). מבקשים הקשה כפולה (כמו הגדרת PIN בכספומט) כדי לתפוס
+    // הקשה שגויה בטעות, לפני שהחשבון בכלל נוצר.
+    case "signup_pin": {
+      const digits = onlyDigits(speech);
+      if (!digits || digits.length !== 4) {
+        return { text: `לא קלטתי בדיוק 4 ספרות.${retryHint()} הקישו שוב 4 ספרות במקלדת הטלפון לקוד הסודי.`, nextState: "signup_pin", draft };
+      }
+      return {
+        text: "עכשיו הקישו שוב את אותן 4 הספרות, לאישור.",
+        nextState: "signup_pin_confirm",
+        draft: { ...draft, pendingPin: digits },
+      };
+    }
+    case "signup_pin_confirm": {
+      const digits = onlyDigits(speech);
+      if (digits && digits.length === 4 && digits === draft.pendingPin) {
+        return {
+          text: "אפשר גם לצרף כתובת מייל לחשבון, זה לא חובה. אם תרצו - אמרו אותה עכשיו. אם לא, אמרו דלג.",
+          nextState: "signup_email",
+          draft: { ...draft, pin: draft.pendingPin, pendingPin: undefined },
+        };
+      }
+      return {
+        text: "הספרות לא תאמו. ננסה שוב מההתחלה - הקישו 4 ספרות חדשות לקוד הסודי.",
+        nextState: "signup_pin",
+        draft: { ...draft, pendingPin: undefined },
+      };
+    }
+    // מייל אופציונלי בהרשמה טלפונית - הזיהוי עצמו (בשיחות הבאות) נשען על מספר הטלפון (Caller ID), לא
+    // על הסיסמה/PIN - אבל מייל מאפשר בעתיד גם שחזור סיסמה בערוץ נוסף. אם הזיהוי מהדיבור לא נשמע כמו
+    // כתובת מייל תקינה - לא תוקעים את השיחה בלולאה, פשוט ממשיכים בלי מייל (אפשר להוסיף מאוחר יותר באתר).
     case "signup_email": {
       if (includesAny(s, ["דלג", "לא", "אין", "בלי", "לדלג", "דילוג", "המשך"])) {
-        const newUser = createPhoneUser(draft.fullName, draft.phone, null);
+        const newUser = createPhoneUser(draft.fullName, draft.phone, null, draft.pin);
         return {
           text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
           nextState: "main_menu",
@@ -445,7 +487,7 @@ async function advanceSignup(state, speech, draft, opts = {}) {
         };
       }
       const email = parseSpokenEmail(speech);
-      const newUser = createPhoneUser(draft.fullName, draft.phone, email);
+      const newUser = createPhoneUser(draft.fullName, draft.phone, email, draft.pin);
       const emailNote = email ? `נשמרה גם כתובת המייל ${email}. ` : "לא זיהיתי כתובת מייל תקינה, ממשיכים בלי מייל - אפשר להוסיף אותה מאוחר יותר באתר. ";
       return {
         text: `נרשמת בהצלחה! ${emailNote}${mainMenuPrompt(newUser.full_name, opts)}`,
@@ -472,10 +514,12 @@ function parseSpokenEmail(rawSpeech) {
   return isValid ? t : null;
 }
 
-// יוצר משתמש חדש ישירות מתוך שיחת טלפון - בלי סיסמה שהמשתמש בוחר (הזיהוי בטלפון הוא לפי Caller ID
-// בלבד, לא סיסמה). אם ירצו גם גישה לאתר, יוכלו לשחזר סיסמה בכל עת דרך "שכחתי סיסמה" (ערוץ טלפון קולי) -
-// אין צורך שהם ידעו את הסיסמה האקראית שנוצרת כאן.
-function createPhoneUser(fullName, phone, email) {
+// יוצר משתמש חדש ישירות מתוך שיחת טלפון. הזיהוי בשיחות הבאות תמיד לפי Caller ID, לא סיסמה - אבל
+// pin (קוד בן 4 ספרות שהוקש בשלב signup_pin/signup_pin_confirm) נשמר כסיסמה בפועל, כדי לאפשר גם
+// כניסה לאתר (ר' isValidPin ב-utils/crypto.js - אותה סיסמה בדיוק, בלי שדה נפרד). אם מסיבה כלשהי
+// לא התקבל pin תקין (לדוגמה נתיב ישן/בדיקה) - נופלים בחזרה לסיסמה אקראית לא ידועה, כמו קודם, כדי
+// שלא ליצור משתמש בלי סיסמה בכלל.
+function createPhoneUser(fullName, phone, email, pin) {
   const digits = String(phone || "").replace(/\D/g, "").slice(-9) || "user";
   let username = `phone_${digits}`;
   let n = 1;
@@ -484,11 +528,13 @@ function createPhoneUser(fullName, phone, email) {
     username = `phone_${digits}_${n}`;
   }
   const randomPassword = crypto.randomBytes(16).toString("hex");
-  // signup_channel='phone' בכוונה מפורשת - חשבון שנוצר כך (סיסמה אקראית, לא נבחרה בפועל) לא כשיר
-  // להיות "בעל הקו" (ר' /api/me/request-admin-claim ב-routes/auth.js).
+  const passwordToUse = isValidPin(pin) ? pin : randomPassword;
+  // signup_channel='phone' בכוונה מפורשת - חשבון שנוצר כך לא כשיר להיות "בעל הקו" (ר'
+  // /api/me/request-admin-claim ב-routes/auth.js), גם אם יש לו עכשיו סיסמה/PIN ידוע - זה נשאר תלוי
+  // בערוץ ההרשמה המקורי (web בלבד), לא רק בשאלה אם יש סיסמה ידועה.
   const info = db
     .prepare("INSERT INTO users (full_name, username, password_hash, phone, email, roles, signup_channel) VALUES (?, ?, ?, ?, ?, 'private', 'phone')")
-    .run(fullName, username, hashPassword(randomPassword), phone || null, email || null);
+    .run(fullName, username, hashPassword(passwordToUse), phone || null, email || null);
   return db.prepare("SELECT * FROM users WHERE id = ?").get(info.lastInsertRowid);
 }
 
@@ -664,4 +710,5 @@ module.exports = {
   MAIN_MENU_HINTS,
   mainMenuPrompt,
   OPENING_GREETING,
+  DIGIT_ENTRY_STATES,
 };

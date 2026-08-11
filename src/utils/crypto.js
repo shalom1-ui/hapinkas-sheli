@@ -64,4 +64,15 @@ function hashCode(code) {
   return crypto.createHash("sha256").update(code).digest("hex");
 }
 
-module.exports = { hashPassword, verifyPassword, signToken, verifyToken, generateOtpCode, hashCode };
+// ---------- סיסמה = קוד PIN בן 4 ספרות בדיוק ----------
+// החלטה מכוונת: כל סיסמה בכל המערכת (בין אם נבחרה באתר או הוקשה בטלפון) חייבת להיות בדיוק 4 ספרות.
+// זה מה שמאפשר "הדדיות" מלאה - סיסמה שנבחרה באתר עובדת גם כקוד PIN בטלפון, וקוד PIN שהוקש בטלפון
+// (ר' routes/ivr.js, signup_pin) עובד גם כסיסמה להתחברות באתר - זו בדיוק אותה מחרוזת, אותו hash,
+// בלי שדה נפרד. הבחירה בדיוק 4 ספרות (ולא יותר) היא כי בטלפון אפשר רק להקיש ספרות במקלדת - סיסמה
+// ארוכה/עם אותיות פשוט לא ניתנת להזנה אמינה בערוץ הזה. משתמשים קיימים עם סיסמה "ישנה" (לא 4 ספרות,
+// מלפני השינוי הזה) ממשיכים להתחבר כרגיל - האכיפה חלה רק על סיסמה חדשה שנקבעת מעכשיו והלאה.
+function isValidPin(value) {
+  return /^\d{4}$/.test(String(value || "").trim());
+}
+
+module.exports = { hashPassword, verifyPassword, signToken, verifyToken, generateOtpCode, hashCode, isValidPin };

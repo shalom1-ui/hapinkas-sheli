@@ -1,7 +1,7 @@
 "use strict";
 const db = require("../db");
 const { json } = require("../router");
-const { hashPassword, verifyPassword, signToken, generateOtpCode, hashCode } = require("../utils/crypto");
+const { hashPassword, verifyPassword, signToken, generateOtpCode, hashCode, isValidPin } = require("../utils/crypto");
 const { requireAuth } = require("../middleware/auth");
 const { sendRecoveryCode } = require("../services/recoveryChannel");
 
@@ -28,6 +28,12 @@ function register(router) {
     const { full_name, phone, email, username, password, roles } = ctx.body;
     if (!full_name || !username || !password) {
       return json(ctx.res, 400, { error: "יש למלא שם מלא, שם משתמש וסיסמה" });
+    }
+    // הסיסמה חייבת להיות בדיוק קוד בן 4 ספרות (ר' utils/crypto.js / isValidPin) - כדי שאותה סיסמה
+    // בדיוק תעבוד גם כקוד PIN בטלפון (ר' routes/ivr.js, signup_pin), ולהפך: קוד PIN שהוגדר בטלפון
+    // יעבוד גם להתחברות כאן. משתמשים קיימים עם סיסמה ישנה לא נפגעים - האכיפה חלה רק על סיסמה חדשה.
+    if (!isValidPin(password)) {
+      return json(ctx.res, 400, { error: "הסיסמה חייבת להיות בדיוק קוד בן 4 ספרות (למשל 1234) - כדי שאותה סיסמה תעבוד גם כקוד PIN בטלפון" });
     }
     const exists = db.prepare("SELECT id FROM users WHERE username = ?").get(username);
     if (exists) return json(ctx.res, 409, { error: "שם המשתמש כבר תפוס" });
@@ -99,7 +105,9 @@ function register(router) {
     if (!payload || payload.purpose !== "password_reset") {
       return json(ctx.res, 400, { error: "טוקן שחזור לא תקין או שפג תוקפו" });
     }
-    if (!newPassword || newPassword.length < 4) return json(ctx.res, 400, { error: "סיסמה קצרה מדי" });
+    if (!isValidPin(newPassword)) {
+      return json(ctx.res, 400, { error: "הסיסמה חייבת להיות בדיוק קוד בן 4 ספרות (למשל 1234) - כדי שאותה סיסמה תעבוד גם כקוד PIN בטלפון" });
+    }
     db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(newPassword), payload.userId);
     return json(ctx.res, 200, { message: "הסיסמה עודכנה בהצלחה" });
   });
@@ -151,7 +159,9 @@ function register(router) {
     if (!verifyPassword(currentPassword || "", user.password_hash)) {
       return json(ctx.res, 400, { error: "הסיסמה הנוכחית שגויה" });
     }
-    if (!newPassword || newPassword.length < 4) return json(ctx.res, 400, { error: "סיסמה חדשה קצרה מדי" });
+    if (!isValidPin(newPassword)) {
+      return json(ctx.res, 400, { error: "הסיסמה החדשה חייבת להיות בדיוק קוד בן 4 ספרות (למשל 1234) - כדי שאותה סיסמה תעבוד גם כקוד PIN בטלפון" });
+    }
     db.prepare("UPDATE users SET password_hash = ? WHERE id = ?").run(hashPassword(newPassword), user.id);
     return json(ctx.res, 200, { message: "הסיסמה עודכנה בהצלחה" });
   }));

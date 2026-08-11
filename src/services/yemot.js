@@ -59,10 +59,24 @@ function sayAndRecord(text, path, fileName) {
   return `read=t-${safe}=${VAL_NAME},${ops.join(",")}`;
 }
 
+// משמיע טקסט ומבקש הקשת קוד ספרות קבוע-אורך במקלדת הטלפון (מצב "tap" של ימות) - משמש לקוד PIN בן
+// 4 ספרות (ר' routes/ivr.js, signup_pin). שונה לגמרי ממצב stt/voice: כאן ימות לא מנסה בכלל לזהות
+// דיבור, רק סופרת הקשות מקלדת עד שמגיעים בדיוק ל-digits ספרות, ואז ממשיכה אוטומטית (בלי לחכות
+// ל-# ובלי להקריא את הספרות בחזרה בקול - typing_playback_mode="No" - חשוב לפרטיות, כדי שקוד ה-PIN
+// לא יישמע בקול תוך כדי ההקשה למי שנמצא ליד המתקשר).
+function sayAndReadDigits(text, digits) {
+  const safe = sanitizeForYemot(text);
+  // סדר האופציות (מצב tap, ר' תיעוד מודול ה-API): valName, re_enter_if_exists, max_digits, min_digits,
+  // sec_wait (שניות המתנה בין הקשות), typing_playback_mode, block_asterisk_key, block_zero_key,
+  // replace_char, digits_allowed, amount_attempts, allow_empty, empty_val, block_change_keyboard.
+  const ops = ["no", String(digits), String(digits), "15", "No", "no", "no", "", "", "", "", "", ""];
+  return `read=t-${safe}=${VAL_NAME},${ops.join(",")}`;
+}
+
 // משמיע טקסט ואז מנתק את השיחה (למסכי סיום)
 function sayAndHangup(text) {
   const safe = sanitizeForYemot(text);
   return `id_list_message=t-${safe}.g-hangup`;
 }
 
-module.exports = { sayAndReadStt, sayAndRecord, sayAndHangup, sanitizeForYemot, VAL_NAME };
+module.exports = { sayAndReadStt, sayAndRecord, sayAndReadDigits, sayAndHangup, sanitizeForYemot, VAL_NAME };
