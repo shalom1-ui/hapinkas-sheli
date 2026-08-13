@@ -27,16 +27,30 @@ function recordingPath(callId) {
   return { path: ext, fileName: safeFileName, downloadPath: `ivr2:${ext}/${safeFileName}.wav` };
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // מוריד קובץ הקלטה ששמור בימות. מחזיר null (ולא זורק שגיאה) בכל מקרה של כישלון - כדי שהקוד הקורא
-// תמיד יוכל ליפול בחזרה בבטחה לזיהוי הדיבור הרגיל של ימות.
-async function downloadYemotRecording(downloadPath) {
+// תמיד יוכל ליפול בחזרה בבטחה (ר' routes/yemot.js - כשזה קורה, מתייחסים לזה כאילו לא נשמע דיבור,
+// לא נופלים בחזרה לזיהוי הדיבור הרגיל של ימות ולא לערך גולמי לא רלוונטי).
+//
+// ניסיון חוזר על 404: בבדיקה בפועל מול קו אמיתי התברר שהורדת ההקלטה מיד אחרי שהיא נגמרה (כלומר
+// באותה בקשה שבה ימות מדווחת שההקלטה הסתיימה) נכשלת לפעמים ב-404 - כנראה כי הקובץ עוד לא נשמר
+// בפועל אצל ימות באותו הרגע (עיכוב קצר בין סיום ההקלטה לזמינותה להורדה). ניסיון חוזר יחיד אחרי
+// המתנה קצרה (1.5 שניות) פותר את רוב המקרים האלה, בלי לעכב את השיחה יותר מדי אם זו כן תקלה אמיתית.
+async function downloadYemotRecording(downloadPath, attempt = 1) {
   if (!isConfigured()) return null;
   try {
     const token = process.env.YEMOT_API_TOKEN;
     const url = `${YEMOT_API_BASE}DownloadFile?token=${encodeURIComponent(token)}&path=${encodeURIComponent(downloadPath)}`;
     const res = await fetch(url);
     if (!res.ok) {
-      console.log(`[WHISPER-DEBUG] הורדת הקלטה מימות נכשלה: סטטוס ${res.status}, נתיב ${downloadPath}`);
+      console.log(`[WHISPER-DEBUG] הורדת הקלטה מימות נכשלה: סטטוס ${res.status}, נתיב ${downloadPath}, ניסיון ${attempt}`);
+      if (res.status === 404 && attempt < 2) {
+        await sleep(1500);
+        return downloadYemotRecording(downloadPath, attempt + 1);
+      }
       return null;
     }
     const buf = Buffer.from(await res.arrayBuffer());
@@ -44,13 +58,17 @@ async function downloadYemotRecording(downloadPath) {
     // שגיאה כטקסט/JSON מימות, גם עם סטטוס 200 - למשל אם ההקלטה עדיין לא מוכנה) - עדיף להיכשל בבטחה
     // מאשר לשלוח זבל ל-Whisper.
     if (buf.length < 44 || buf.toString("ascii", 0, 4) !== "RIFF") {
-      console.log(`[WHISPER-DEBUG] הקובץ שהתקבל מימות לא נראה כמו WAV תקין (אורך ${buf.length} בתים), נתיב ${downloadPath}`);
+      console.log(`[WHISPER-DEBUG] הקובץ שהתקבל מימות לא נראה כמו WAV תקין (אורך ${buf.length} בתים), נתיב ${downloadPath}, ניסיון ${attempt}`);
+      if (attempt < 2) {
+        await sleep(1500);
+        return downloadYemotRecording(downloadPath, attempt + 1);
+      }
       return null;
     }
-    console.log(`[WHISPER-DEBUG] הקלטה הורדה בהצלחה מימות (${buf.length} בתים), נתיב ${downloadPath}`);
+    console.log(`[WHISPER-DEBUG] הקלטה הורדה בהצלחה מימות (${buf.length} בתים), נתיב ${downloadPath}, ניסיון ${attempt}`);
     return buf;
   } catch (e) {
-    console.log(`[WHISPER-DEBUG] שגיאה בהורדת הקלטה מימות: ${e.message}`);
+    console.log(`[WHISPER-DEBUG] שגיאה בהורדת הקלטה מימות: ${e.message}, ניסיון ${attempt}`);
     return null;
   }
 }
