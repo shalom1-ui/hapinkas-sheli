@@ -119,6 +119,13 @@ function mainMenuCategoriesText() {
   return "ניהול חשבונות, תנועות, חונכות, מטפלים, הורה, או הערת מפקח.";
 }
 
+// אחרי כל פעולה שהושלמה (או הודעת מידע/שגיאה סופית כמו "אין מפגש פתוח") - במקום לנתק מיד את
+// השיחה (כמו שהיה קודם בכל מקום), חוזרים לתפריט הראשי ושואלים אם יש עוד משהו לעשות. אפשר לסיים
+// את השיחה בנימוס בכל רגע מהתפריט הראשי עצמו (ר' מילות המפתח "לסיים"/"תודה" וכו' ב-case "main_menu").
+function askMoreOrFinish(baseText, outcome) {
+  return { text: `${baseText} רוצים לעשות עוד משהו, או לסיים?`, nextState: "main_menu", hints: MAIN_MENU_HINTS, outcome };
+}
+
 // ---------- קיצורי הקשה (DTMF) לתפריט הראשי ----------
 // ימות מאפשרת הקשת ספרות תוך כדי זיהוי דיבור בלי לחסום (ר' services/yemot.js) - כלומר אפשר להקיש
 // כבר תוך כדי השמעת התפריט, בלי לחכות. הספרה שהוקשה מגיעה באותו שדה כמו הדיבור, ולכן פשוט ממירים
@@ -174,6 +181,12 @@ async function advance(state, speech, draft, user, opts = {}) {
       // אפשר להקיש ספרה (1-6) במקום לדבר - ר' MAIN_MENU_DIGIT_KEYWORDS. מתייחסים אליה כאילו נאמרה
       // מילת המפתח המתאימה, ומריצים דרך אותה לוגיקת התאמה כרגיל.
       const es = mainMenuDigitKeyword(s) || s;
+      // אפשרות לסיים את השיחה בנימוס מהתפריט הראשי עצמו (למשל אחרי ששמעו יתרה וחוזרים לכאן,
+      // ר' doBalance) - בלי זה, הדרך היחידה לסיים שיחה הייתה תמיד באמצע פעולה ספציפית (הוספת
+      // הוצאה/הכנסה וכד'), ולא היה אפשר פשוט "לצאת" מהתפריט הראשי עצמו.
+      if (includesAny(es, ["לסיים", "סיימתי", "תודה", "להתראות", "סיום", "לא תודה"])) {
+        return { text: "תודה, להתראות.", nextState: "done", hangup: true, outcome: "menu_exit" };
+      }
       if (includesAny(es, ["ניהול חשבונות", "חשבונות", "יתרה", "מצב חשבון"])) return doBalance(user);
       if (includesAny(es, ["הוצאה", "הוצאות"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
       if (includesAny(es, ["הכנסה", "הכנסות"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
@@ -216,7 +229,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       if (isConfirmYes(s, opts)) {
         db.prepare("INSERT INTO transactions (user_id, type, amount, category, source) VALUES (?, 'expense', ?, ?, 'phone')")
           .run(user.id, draft.amount, draft.category);
-        return { text: `נשמר. הוצאה של ${draft.amount} שקלים ב${draft.category}. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "expense_saved" };
+        return askMoreOrFinish(`נשמר. הוצאה של ${draft.amount} שקלים ב${draft.category}.`, "expense_saved");
       }
       if (isConfirmNo(s, opts)) return { text: `בוטל. אפשר להתחיל שוב, מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       return {
@@ -236,7 +249,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       // ר' הערה ב-expense_confirm - אותו עיקרון: מבטלים רק ב"לא" מפורש, לא בכל קלט לא ברור.
       if (isConfirmYes(s, opts)) {
         db.prepare("INSERT INTO transactions (user_id, type, amount, source) VALUES (?, 'income', ?, 'phone')").run(user.id, draft.amount);
-        return { text: `נשמר. הכנסה של ${draft.amount} שקלים. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "income_saved" };
+        return askMoreOrFinish(`נשמר. הכנסה של ${draft.amount} שקלים.`, "income_saved");
       }
       if (isConfirmNo(s, opts)) return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       return {
@@ -319,7 +332,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       // לשאול שוב. ר' הערה מפורטת יותר ב-expense_confirm.
       if (isConfirmYes(s, opts)) {
         db.prepare("UPDATE students SET active = 0 WHERE id = ? AND owner_user_id = ?").run(draft.studentId, user.id);
-        return { text: `${draft.studentName} הוסר/ה מרשימת התלמידים הפעילים שלך. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "student_removed" };
+        return askMoreOrFinish(`${draft.studentName} הוסר/ה מרשימת התלמידים הפעילים שלך.`, "student_removed");
       }
       if (isConfirmNo(s, opts)) return { text: `בסדר, לא הסרנו. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       return {
@@ -357,7 +370,7 @@ async function advance(state, speech, draft, user, opts = {}) {
         db.prepare(
           "INSERT INTO therapy_reports (student_id, professional_user_id, role_type, note, trend, transcript) VALUES (?, ?, ?, ?, 'יציבה', ?)"
         ).run(draft.studentId, user.id, draft.role, draft.note, draft.note);
-        return { text: `הדיווח נשמר עבור ${draft.studentName}. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "report_saved" };
+        return askMoreOrFinish(`הדיווח נשמר עבור ${draft.studentName}.`, "report_saved");
       }
       if (isConfirmNo(s, opts)) return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       return {
@@ -394,7 +407,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       if (isConfirmYes(s, opts)) {
         db.prepare("INSERT INTO student_comments (student_id, author_user_id, author_label, text) VALUES (?, ?, ?, ?)")
           .run(draft.studentId, user.id, `${user.full_name} (דרך השיחה הקולית)`, draft.text);
-        return { text: `ההערה נשמרה בתיק ${draft.studentName}. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "comment_saved" };
+        return askMoreOrFinish(`ההערה נשמרה בתיק ${draft.studentName}.`, "comment_saved");
       }
       if (isConfirmNo(s, opts)) return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       return {
@@ -555,25 +568,25 @@ function doBalance(user) {
     )
     .get(user.id);
   const balance = row.income - row.expense;
-  return { text: `היתרה הנוכחית שלך היא ${balance} שקלים. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "balance_read" };
+  return askMoreOrFinish(`היתרה הנוכחית שלך היא ${balance} שקלים.`, "balance_read");
 }
 
 function doCheckin(draft) {
   const student = db.prepare("SELECT * FROM students WHERE id = ?").get(draft.studentId);
-  if (student.checkin_at) return { text: "כבר קיים מפגש פתוח לתלמיד הזה. להתראות.", nextState: "done", hangup: true };
+  if (student.checkin_at) return askMoreOrFinish("כבר קיים מפגש פתוח לתלמיד הזה.");
   db.prepare("UPDATE students SET checkin_at = datetime('now') WHERE id = ?").run(student.id);
-  return { text: `נרשמה כניסה עבור ${student.name}. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "checkin_saved" };
+  return askMoreOrFinish(`נרשמה כניסה עבור ${student.name}.`, "checkin_saved");
 }
 
 function doCheckout(draft, user) {
   const student = db.prepare("SELECT * FROM students WHERE id = ?").get(draft.studentId);
-  if (!student.checkin_at) return { text: "אין מפגש פתוח לתלמיד הזה. להתראות.", nextState: "done", hangup: true };
+  if (!student.checkin_at) return askMoreOrFinish("אין מפגש פתוח לתלמיד הזה.");
   const start = new Date(student.checkin_at + "Z");
   const durationMinutes = Math.max(1, Math.round((Date.now() - start.getTime()) / 60000));
   db.prepare("INSERT INTO sessions (student_id, mentor_user_id, method, duration_minutes) VALUES (?, ?, 'checkin_checkout', ?)")
     .run(student.id, user.id, durationMinutes);
   db.prepare("UPDATE students SET checkin_at = NULL WHERE id = ?").run(student.id);
-  return { text: `נרשמה יציאה עבור ${student.name}. משך המפגש: ${durationMinutes} דקות. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "checkout_saved" };
+  return askMoreOrFinish(`נרשמה יציאה עבור ${student.name}. משך המפגש: ${durationMinutes} דקות.`, "checkout_saved");
 }
 
 function doQuickSession(draft, user) {
@@ -582,7 +595,7 @@ function doQuickSession(draft, user) {
   const minutes = u.default_session_minutes || 45;
   db.prepare("INSERT INTO sessions (student_id, mentor_user_id, method, duration_minutes) VALUES (?, ?, 'quick_preset', ?)")
     .run(student.id, user.id, minutes);
-  return { text: `נרשם מפגש עבור ${student.name}, ${minutes} דקות. תודה, להתראות.`, nextState: "done", hangup: true, outcome: "quick_session_saved" };
+  return askMoreOrFinish(`נרשם מפגש עבור ${student.name}, ${minutes} דקות.`, "quick_session_saved");
 }
 
 // מוצא את רשימת הילדים ששויכו למתקשר כהורה (טבלת student_guardians), ומחליט אם לקרוא סיכום מיד
@@ -597,7 +610,7 @@ function startGuardianFlow(user) {
     .all(user.id);
 
   if (!children.length) {
-    return { text: "לא נמצאו ילדים המשויכים אליך כהורה במערכת. תודה, להתראות.", nextState: "done", hangup: true, outcome: "guardian_no_children" };
+    return askMoreOrFinish("לא נמצאו ילדים המשויכים אליך כהורה במערכת.", "guardian_no_children");
   }
   if (children.length === 1) return guardianSummaryResult(children[0]);
 
@@ -620,8 +633,7 @@ function guardianSummaryResult(student) {
 
   let text = `הסיכום עבור ${student.name}: היו ${sessions.length} מפגשים, בסך הכל ${totalMinutes} דקות.`;
   text += latestReport ? ` הדיווח המקצועי האחרון מציין מגמה: ${latestReport.trend}.` : " אין עדיין דיווח מקצועי בתיק.";
-  text += " תודה, להתראות.";
-  return { text, nextState: "done", hangup: true, outcome: "guardian_summary_read" };
+  return askMoreOrFinish(text, "guardian_summary_read");
 }
 
 function findStudentByName(ownerUserId, spokenName) {

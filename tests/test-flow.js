@@ -717,7 +717,10 @@ async function run() {
     await yemotCall({ callId: ymCallId, speech: "45" });
     await yemotCall({ callId: ymCallId, speech: "מזון" });
     const ymConfirm = await yemotCall({ callId: ymCallId, speech: "כן" });
-    assert(ymConfirm.includes("נשמר") && ymConfirm.includes("id_list_message=") && ymConfirm.includes("g-hangup"), "זרימת הוצאה קולית מלאה דרך ימות הושלמה ואושרה, ומחזירה פקודת ניתוק תקינה");
+    assert(
+      ymConfirm.includes("נשמר") && ymConfirm.includes("רוצים לעשות עוד משהו") && !ymConfirm.includes("g-hangup"),
+      "זרימת הוצאה קולית מלאה דרך ימות הושלמה ואושרה, וחוזרת לתפריט עם שאלה אם יש עוד משהו (לא מנתקת מיד)"
+    );
 
     const afterYmTx = await api("GET", "/api/transactions", null, token);
     const ymTx = afterYmTx.data.transactions.find(t => t.source === "phone" && t.amount === 45 && t.category === "מזון");
@@ -742,7 +745,10 @@ async function run() {
       "התנועה עדיין לא נשמרה אחרי קלט לא ברור - רק אחרי אישור בפועל"
     );
     const ymUnclearThenYes = await yemotCall({ callId: ymUnclearCallId, speech: "כן" });
-    assert(ymUnclearThenYes.includes("נשמר") && ymUnclearThenYes.includes("g-hangup"), "אחרי הקלט הלא ברור, אמירת 'כן' עדיין שומרת את התנועה כרגיל");
+    assert(
+      ymUnclearThenYes.includes("נשמר") && ymUnclearThenYes.includes("רוצים לעשות עוד משהו"),
+      "אחרי הקלט הלא ברור, אמירת 'כן' עדיין שומרת את התנועה כרגיל"
+    );
     const afterUnclearYes = await api("GET", "/api/transactions", null, token);
     assert(
       afterUnclearYes.data.transactions.some(t => t.source === "phone" && t.amount === 63 && t.category === "מזון"),
@@ -761,7 +767,7 @@ async function run() {
     assert(ymDigitConfirmPrompt.includes("1 לאישור"), "שאלת האישור בימות מזכירה אפשרות הקשת 1 לאישור מהיר");
     const ymDigitConfirmDone = await yemotCall({ callId: ymDigitCallId, speech: "1" });
     assert(
-      ymDigitConfirmDone.includes("נשמר") && ymDigitConfirmDone.includes("g-hangup"),
+      ymDigitConfirmDone.includes("נשמר") && ymDigitConfirmDone.includes("רוצים לעשות עוד משהו"),
       "הקשת 1 בלבד, בלי לומר 'כן', נחשבת אישור תקף ושומרת את התנועה"
     );
     const afterDigitTx = await api("GET", "/api/transactions", null, token);
@@ -776,7 +782,7 @@ async function run() {
     await yemotCall({ callId: ymHashConfirmCallId, speech: "88" });
     const ymHashConfirmDone = await yemotCall({ callId: ymHashConfirmCallId, speech: "#" });
     assert(
-      ymHashConfirmDone.includes("נשמר") && ymHashConfirmDone.includes("g-hangup"),
+      ymHashConfirmDone.includes("נשמר") && ymHashConfirmDone.includes("רוצים לעשות עוד משהו"),
       "סולמית בודדת עדיין מתקבלת כאישור תקף אם היא כן מגיעה לשרת (גיבוי נוסף, גם אם לא מוצע יותר למתקשר)"
     );
 
@@ -784,6 +790,36 @@ async function run() {
     await yemotCall({ callId: ymBalanceCallId, phone: "+972500000001" }); // מוודאים שפורמט בינלאומי (+972) גם מזוהה
     const ymBalance = await yemotCall({ callId: ymBalanceCallId, speech: "חשבונות" });
     assert(ymBalance.includes("היתרה הנוכחית שלך היא"), "קטגוריית 'ניהול חשבונות' (מילה 'חשבונות') עובדת גם דרך ימות");
+    assert(
+      ymBalance.includes("רוצים לעשות עוד משהו") && !ymBalance.includes("g-hangup"),
+      "אחרי שמיעת היתרה לא מנתקים מיד - חוזרים לתפריט הראשי ושואלים אם יש עוד משהו"
+    );
+
+    console.log("\n🔁 כמה פעולות באותה שיחה, ואז סיום בנימוס מהתפריט הראשי");
+    // זו בדיוק היכולת החדשה: אחרי פעולה ראשונה (יתרה) לא מנתקים - אפשר להמשיך ישר לפעולה שנייה
+    // (הוצאה) באותה שיחה בדיוק, ורק בסוף לבקש לסיים במפורש מהתפריט הראשי.
+    const ymMultiCallId = `${ymCallId}-multi-action`;
+    await yemotCall({ callId: ymMultiCallId, phone: "0500000001" });
+    const ymMultiBalance = await yemotCall({ callId: ymMultiCallId, speech: "חשבונות" });
+    assert(ymMultiBalance.includes("רוצים לעשות עוד משהו"), "אחרי היתרה מוצעת אפשרות להמשיך לפעולה נוספת באותה שיחה");
+    await yemotCall({ callId: ymMultiCallId, speech: "הוצאה" });
+    await yemotCall({ callId: ymMultiCallId, speech: "33" });
+    await yemotCall({ callId: ymMultiCallId, speech: "אחר" });
+    const ymMultiExpenseDone = await yemotCall({ callId: ymMultiCallId, speech: "כן" });
+    assert(
+      ymMultiExpenseDone.includes("נשמר") && ymMultiExpenseDone.includes("רוצים לעשות עוד משהו"),
+      "פעולה שנייה (הוצאה) הושלמה בהצלחה באותה שיחה בדיוק, בלי שהשיחה נותקה בין לבין"
+    );
+    const ymMultiFinish = await yemotCall({ callId: ymMultiCallId, speech: "תודה, זהו" });
+    assert(
+      ymMultiFinish.includes("להתראות") && ymMultiFinish.includes("g-hangup"),
+      "אמירת 'תודה' מהתפריט הראשי מסיימת את השיחה בנימוס ומנתקת בפועל"
+    );
+    const afterMulti = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterMulti.data.transactions.some(t => t.source === "phone" && t.amount === 33 && t.category === "אחר"),
+      "התנועה שנוספה כפעולה שנייה באותה שיחה אכן נשמרה במסד הנתונים"
+    );
 
     console.log("\n#️⃣ קיצורי הקשה (DTMF) בתפריט - במקום לדבר, ובלי לחכות שהמערכת תסיים להקריא");
     const ymDigitMenuCallId = `${ymCallId}-digit-menu`;
@@ -799,7 +835,10 @@ async function run() {
     assert(ymDigitIncome.includes("מה סכום ההכנסה"), "הקשת 1 בבחירת סוג תנועה שקולה לאמירת 'הכנסה'");
     await yemotCall({ callId: ymDigitTxCallId, speech: "500" });
     const ymDigitIncomeConfirm = await yemotCall({ callId: ymDigitTxCallId, speech: "#" });
-    assert(ymDigitIncomeConfirm.includes("נשמר") && ymDigitIncomeConfirm.includes("g-hangup"), "זרימה מלאה של תנועה דרך הקשות בלבד (בלי מילה אחת בדיבור) עובדת עד הסוף");
+    assert(
+      ymDigitIncomeConfirm.includes("נשמר") && ymDigitIncomeConfirm.includes("רוצים לעשות עוד משהו"),
+      "זרימה מלאה של תנועה דרך הקשות בלבד (בלי מילה אחת בדיבור) עובדת עד הסוף"
+    );
 
     const ymDigitMentorCallId = `${ymCallId}-digit-mentor`;
     await yemotCall({ callId: ymDigitMentorCallId, phone: "0500000001" });
@@ -833,7 +872,10 @@ async function run() {
     const ymRemoveConfirmPrompt = await yemotCall({ callId: ymRemoveCallId, speech: "4" }); // 4 = הסרת התלמיד
     assert(ymRemoveConfirmPrompt.includes("לאשר") && ymRemoveConfirmPrompt.includes("להסיר את משה ישראלי"), "הקשת 4 בשלב הפעולה מציעה לאשר הסרת התלמיד, ולא מסירה מיד בלי אישור");
     const ymRemoveDone = await yemotCall({ callId: ymRemoveCallId, speech: "כן" });
-    assert(ymRemoveDone.includes("הוסר") && ymRemoveDone.includes("g-hangup"), "אישור ההסרה מסתיים בניתוק תקין עם הודעת אישור");
+    assert(
+      ymRemoveDone.includes("הוסר") && ymRemoveDone.includes("רוצים לעשות עוד משהו"),
+      "אישור ההסרה חוזר לתפריט עם שאלה אם יש עוד משהו, ולא מנתק מיד"
+    );
     const studentsAfterRemove = await api("GET", "/api/students", null, token);
     assert(!studentsAfterRemove.data.students.some(s => s.name === "משה ישראלי"), "אחרי ההסרה, התלמיד כבר לא מופיע ברשימת התלמידים הפעילים (/api/students)");
 
