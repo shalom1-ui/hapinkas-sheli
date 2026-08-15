@@ -13,7 +13,7 @@
 "use strict";
 
 const db = require("../db");
-const { text } = require("../router");
+const { text, json } = require("../router");
 const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt, OPENING_GREETING, DIGIT_ENTRY_STATES } = require("./ivr");
 const { sayAndReadStt, sayAndRecord, sayAndReadDigits, sayAndHangup, VAL_NAME } = require("../services/yemot");
 const speechToText = require("../services/speechToText");
@@ -136,6 +136,40 @@ function register(router) {
       return text(ctx.res, 200, freeTextPrompt(callId, result.text));
     }
     return text(ctx.res, 200, sayAndReadStt(result.text));
+  });
+
+  // --- אבחון זמני: בדיקת הקלטות Whisper ישירות מול ימות (ר' README, סעיף "זיהוי דיבור משודרג") ---
+  // נועד לענות סופית על השאלה "האם ההקלטה בכלל נשמרת אצל ימות, ואיפה בדיוק" - בלי להסתמך על ניווט
+  // ידני מבלבל באתר הניהול של ימות (שקשה להסביר צעד-אחר-צעד למשתמש לא-טכני). קורא ל-API הרשמי
+  // GetIVR2Dir של ימות (עם הטוקן שכבר מוגדר אצלנו כמשתנה סביבה) ומחזיר את רשימת הקבצים שנמצאים
+  // בפועל בתיקיית השלוחה שאנחנו שומרים בה הקלטות (ר' services/speechToText.js, recordingPath).
+  // מוגן במילת-מעבר קבועה בפרמטר key בכתובת (לא סוד אמיתי - רק כדי שלא כל מי שמנחש את הכתובת
+  // יוכל לראות רשימת קבצים) - יש להסיר את הנתיב הזה אחרי שהתקלה תיפתר.
+  const DEBUG_KEY = "hapinkas-diag-9427";
+  router.get("/api/debug/yemot-dir", async (ctx) => {
+    if (ctx.query.key !== DEBUG_KEY) {
+      return json(ctx.res, 403, { error: "אין הרשאה - חסר או שגוי פרמטר key" });
+    }
+    if (!process.env.YEMOT_API_TOKEN) {
+      return json(ctx.res, 400, { error: "חסר משתנה סביבה YEMOT_API_TOKEN" });
+    }
+    const ext = process.env.YEMOT_EXTENSION_NUMBER || "";
+    const targetPath = ctx.query.path || ext || "/";
+    try {
+      const url = `https://www.call2all.co.il/ym/api/GetIVR2Dir?token=${encodeURIComponent(process.env.YEMOT_API_TOKEN)}&path=${encodeURIComponent(targetPath)}`;
+      const yemotRes = await fetch(url);
+      const rawText = await yemotRes.text();
+      let data;
+      try { data = JSON.parse(rawText); } catch { data = { rawResponse: rawText }; }
+      return json(ctx.res, 200, {
+        checkedPath: targetPath,
+        yemotExtensionEnv: ext,
+        httpStatus: yemotRes.status,
+        yemotResponse: data,
+      });
+    } catch (e) {
+      return json(ctx.res, 500, { error: e.message });
+    }
   });
 }
 
