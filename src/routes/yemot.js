@@ -24,7 +24,13 @@ const speechToText = require("../services/speechToText");
 // כשמוגדר "זיהוי דיבור משודרג" (speechToText.isConfigured() - ר' services/speechToText.js), אותם
 // שלבים בדיוק עוברים למצב "record" גולמי + תמלול Whisper במקום מנוע ההקלטה-לזיהוי של ימות עצמו -
 // ר' הערות בהמשך הקובץ במקומות שבהם נבדק FREE_TEXT_STATES.
-const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "signup_email"]);
+//
+// "main_menu" נוסף כאן בעקבות תקלות חוזרות בפועל: התפריט הראשי (בחירת קטגוריה, שם/מילים כמו "ניהול
+// חשבונות") הוא בדיוק המקום שבו מנוע הזיהוי המקורי של ימות נכשל הכי הרבה ("לא זוהה דיבור" שוב ושוב),
+// כי המילים ארוכות/מורכבות יחסית. המחיר: **רק** במצב שבו Whisper מוגדר בפועל, הקשת ספרה בתפריט
+// הראשי (1-6, ר' MAIN_MENU_DIGIT_KEYWORDS) מפסיקה לעבוד, כי מצב "הקלטה" חוסם הקשות לגמרי - ר' opts.menuVoiceOnly
+// ב-mainMenuPrompt (routes/ivr.js) שמסיר גם את ההזכרה המילולית של האפשרות הזו במצב הזה, כדי לא להטעות.
+const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "signup_email", "main_menu"]);
 
 // בונה את תגובת הפרוטוקול לבקשת קלט טקסט חופשי (שם וכו') עבור שלב נתון - בוחר בין שלוש אפשרויות:
 // (1) אם מוגדר זיהוי דיבור משודרג (Whisper) - מבקשים הקלטה גולמית (sayAndRecord) שנתמלל בעצמנו
@@ -72,7 +78,12 @@ function register(router) {
       }
 
       upsertCall(callId, user.id, "main_menu", {});
-      return text(ctx.res, 200, sayAndReadStt(`${OPENING_GREETING}${mainMenuPrompt(user.full_name, { digitConfirm: true })}`));
+      const menuVoiceOnly = speechToText.isConfigured();
+      return text(
+        ctx.res,
+        200,
+        freeTextPrompt(callId, `${OPENING_GREETING}${mainMenuPrompt(user.full_name, { digitConfirm: true, menuVoiceOnly })}`)
+      );
     }
 
     // ---------- המשך שיחה קיימת ----------
@@ -105,9 +116,13 @@ function register(router) {
 
     // digitConfirm: true - בימות אפשר להקיש (כולל סולמית) תוך כדי זיהוי דיבור בלי לחסום את זה
     // (ר' services/yemot.js / sayAndReadStt), אז מוסיפים אפשרות אישור מהירה בהקשה בכל שאלת "אמרו כן לאישור".
+    // menuVoiceOnly: ר' הערה מפורטת ב-mainMenuPrompt (routes/ivr.js) - רק כשזה true מוסתרת ההזכרה
+    // המילולית של הקשת 1-6 בתפריט הראשי (כי היא לא זמינה במצב הקלטה של Whisper); לשאר שאלות האישור
+    // בשיחה (שאינן מצב הקלטה) זה לא משפיע - הן ממשיכות להשתמש ב-digitConfirm הרגיל.
+    const opts = { digitConfirm: true, menuVoiceOnly: speechToText.isConfigured() };
     const result = call.user_id
-      ? await advance(call.state, speech, draft, db.prepare("SELECT * FROM users WHERE id = ?").get(call.user_id), { digitConfirm: true })
-      : await advanceSignup(call.state, speech, draft, { digitConfirm: true });
+      ? await advance(call.state, speech, draft, db.prepare("SELECT * FROM users WHERE id = ?").get(call.user_id), opts)
+      : await advanceSignup(call.state, speech, draft, opts);
 
     upsertCall(callId, result.newUserId || call.user_id, result.nextState, result.draft || draft, result.outcome);
 
