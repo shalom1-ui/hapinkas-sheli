@@ -37,10 +37,18 @@ const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "signup_
 // (1) אם מוגדר זיהוי דיבור משודרג (Whisper) - מבקשים הקלטה גולמית (sayAndRecord) שנתמלל בעצמנו
 //     בבקשה הבאה; (2) אחרת - מנוע ה"הקלטה-לזיהוי" הרגיל של ימות (freeText); (3) לשלבים שאינם
 //     free-text כלל - זיהוי דיבור (stt) רגיל, כמו קודם.
+// תוקן (אבחון בפועל מול קו אמיתי - ר' README): מתברר שהפרמטר no_confirm_menu לא באמת מדלג על תפריט
+// האישור של ימות במצב record דרך שלוחת ה-API (למרות מה שהתיעוד הכללי (הלא-ספציפי ל-API) מרמז) - גם
+// אחרי שהגדרנו אותו ל-"yes", ימות המשיכה להשמיע תפריט "לאישור ההקלטה הקישו..." ולעולם לא שמרה בפועל
+// את הקובץ אם המתקשר לא הקיש בו במפורש. הפתרון בפועל: מבקשים במפורש מהמתקשר להקיש סולמית (#) בסיום
+// הדיבור - זו התנהגות ידועה ומתועדת בהקשרים אחרים של ימות (record_ok=#) שגורמת לאישור/שמירה מיידיים
+// של ההקלטה בלי להשמיע תפריט אינטראקטיבי בכלל.
+const RECORD_PRESS_HASH_HINT = " בסיום דיבורכם, הקישו סולמית.";
+
 function freeTextPrompt(callId, text_) {
   if (speechToText.isConfigured()) {
     const { path, fileName } = speechToText.recordingPath(callId);
-    return sayAndRecord(text_, path, fileName);
+    return sayAndRecord(`${text_}${RECORD_PRESS_HASH_HINT}`, path, fileName);
   }
   return sayAndReadStt(text_, { freeText: true });
 }
