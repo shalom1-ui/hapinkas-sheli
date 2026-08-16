@@ -217,6 +217,11 @@ db.exec(`
 for (const alterSql of [
   "ALTER TABLE sessions ADD COLUMN note TEXT",
   "ALTER TABLE users ADD COLUMN signup_channel TEXT NOT NULL DEFAULT 'web'",
+  // תוקן (ארכיטקטורת שלוחת הקלטה נפרדת בימות, ר' routes/yemot.js): צריך "phone" ו-"updated_at"
+  // כדי לאתר מחדש שיחה שהועברה זמנית לשלוחת ההקלטה, למקרה ש-ApiCallId משתנה במעבר בין שלוחות
+  // (לא מתועד במפורש - ר' הערה מפורטת ב-routes/yemot.js/reattachRecordingCall).
+  "ALTER TABLE call_logs ADD COLUMN phone TEXT",
+  "ALTER TABLE call_logs ADD COLUMN updated_at TEXT",
 ]) {
   try {
     db.exec(alterSql);

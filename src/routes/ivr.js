@@ -737,14 +737,20 @@ function normalize(text) {
     .replace(/\s+/g, " ");
 }
 
-function upsertCall(callSid, userId, state, draft, outcome) {
+// תוקן (ארכיטקטורת שלוחת הקלטה נפרדת בימות): פרמטר "phone" חדש, אופציונלי (ר' routes/yemot.js) -
+// נשמר בעמודה ייעודית (לא רק בתוך draft_json) כדי לאפשר לאתר מחדש שיחה לפי מספר טלפון, למקרה
+// ש-ApiCallId משתנה כשימות מעבירה שיחה בין שלוחות. גם מעדכן תמיד updated_at, כדי שאפשר יהיה למצוא
+// "שיחה שהתחילה לפני רגע" (ולא שיחה ישנה באותו מספר) - ר' reattachRecordingCall ב-routes/yemot.js.
+function upsertCall(callSid, userId, state, draft, outcome, phone) {
   const existing = db.prepare("SELECT id FROM call_logs WHERE call_sid = ?").get(callSid);
   if (existing) {
-    db.prepare("UPDATE call_logs SET user_id = COALESCE(?, user_id), state = ?, draft_json = ?, outcome = COALESCE(?, outcome) WHERE call_sid = ?")
-      .run(userId || null, state, JSON.stringify(draft || {}), outcome || null, callSid);
+    db.prepare(
+      "UPDATE call_logs SET user_id = COALESCE(?, user_id), state = ?, draft_json = ?, outcome = COALESCE(?, outcome), phone = COALESCE(?, phone), updated_at = datetime('now') WHERE call_sid = ?"
+    ).run(userId || null, state, JSON.stringify(draft || {}), outcome || null, phone || null, callSid);
   } else {
-    db.prepare("INSERT INTO call_logs (call_sid, user_id, state, draft_json, outcome) VALUES (?, ?, ?, ?, ?)")
-      .run(callSid, userId || null, state, JSON.stringify(draft || {}), outcome || null);
+    db.prepare(
+      "INSERT INTO call_logs (call_sid, user_id, state, draft_json, outcome, phone, updated_at) VALUES (?, ?, ?, ?, ?, ?, datetime('now'))"
+    ).run(callSid, userId || null, state, JSON.stringify(draft || {}), outcome || null, phone || null);
   }
 }
 

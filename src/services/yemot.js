@@ -42,35 +42,17 @@ function sayAndReadStt(text, opts = {}) {
   return `read=t-${safe}=${VAL_NAME},no,voice,,,,,,,`;
 }
 
-// משמיע טקסט ומבקש מימות להקליט את קול המתקשר לקובץ גולמי (מצב "record") - בניגוד ל-sayAndReadStt,
-// כאן ימות לא מנסה בכלל לזהות מה נאמר; היא רק שומרת הקלטה. אנחנו מורידים ומתמללים אותה בעצמנו
-// אח"כ באמצעות Whisper (ר' services/speechToText.js) - זה בשימוש רק כשמוגדר "זיהוי דיבור משודרג"
-// (ר' README), ורק בשלבים חסרי-קיצור-הקשה (כמו שם תלמיד) כי מצב record חוסם הקשות לגמרי בזמן ההשמעה.
-// path/fileName נקבעים מראש ע"י הקורא (ר' speechToText.recordingPath) כדי שנדע בוודאות איפה לחפש
-// את ההקלטה בהמשך, בלי להסתמך על הערך שימות מחזירה (שהפורמט המדויק שלו לא מתועד באופן רשמי אצלנו).
-function sayAndRecord(text, path, fileName) {
+// תוקן (שינוי ארכיטקטורה, ר' README/CHANGELOG להיסטוריה המלאה): הניסיון הקודם - להקליט "בתוך" שלוחת
+// ה-API עצמה, דרך read=...,record,... - מעולם לא הצליח בפועל (ההקלטה מעולם לא נשמרה בשלוחה, לפי
+// GetIVR2Dir), למרות כמה ניסיונות תיקון פרמטרים שונים. עברנו לארכיטקטורה מוכחת-בשטח שמפתחים אחרים
+// משתמשים בה בהצלחה: שלוחה **נפרדת** מסוג type=record (המשתמש מגדיר אותה בממשק הניהול של ימות -
+// ר' README), שאליה מעבירים את השיחה זמנית עם go_to_folder, ושמוגדרת לחזור אוטומטית לשלוחת ה-API
+// שלנו (record_end_goto) אחרי שההקלטה נשמרת בוודאות. הפונקציה הזו משמיעה הנחיה קצרה ואז מעבירה את
+// השיחה לשלוחת ההקלטה, בפורמט "id_list_message=t-<טקסט>.g-<יעד>" (בדיוק כמו sayAndHangup, רק עם
+// יעד השלוחה במקום "hangup") - "g-/<מספר>" הוא נתיב מוחלט לשלוחה מהשורש.
+function sayAndGoToRecordExtension(text, recordExtension) {
   const safe = sanitizeForYemot(text);
-  // סדר האופציות: valName, re_enter_if_exists, 'record', path, file_name, no_confirm_menu, save_on_hangup,
-  // append_to_existing_file, min_length, max_length.
-  //
-  // תוקן שוב (אחרי מחקר עומק על ספריית הקוד הפתוח yemot-router2, שרבים משתמשים בה בהצלחה מול קווי
-  // ימות אמיתיים - ר' yemot-support-question.md/README להיסטוריה המלאה): התברר ששני התיקונים
-  // הקודמים היו **שניהם שגויים**, ולהפך ממה שחשבנו:
-  //   1) no_confirm_menu צריך להיות המחרוזת המילולית "no" (לא "yes"!) כדי לדלג על תפריט האישור -
-  //      "no" כאן פירושו המילולי "לא [להשמיע] תפריט אישור", לא "לא לדלג". "yes" כנראה נחשב ערך לא-תקין
-  //      ומתעלמים ממנו (מה שמסביר גם למה בדיקה בפועל לא הראתה שום הבדל בין "yes" ל"no" הישן - שניהם
-  //      בפועל גרמו לאותה התנהגות: השארת תפריט האישור פעיל).
-  //   2) path צריך להיות מספר שלוחה גולמי (למשל "1"), **בלי** קידומת "ivr2:" - הקידומת הזו שייכת רק
-  //      ל-DownloadFile/GetIVR2Dir (API אחר לגמרי), לא לפרמטר הזה בתוך פקודת read=.
-  // בנוסף, גילינו רמז חשוב: לפי תיעוד ימות, הקלטות **שלא אושרו** (או שהמתקשר ניתק תוך כדי, אם
-  // save_on_hangup לא מוגדר) נשמרות בתיקיית מחזור מיוחדת בשם "ApiRecord" ולא בנתיב שביקשנו - שווה
-  // לבדוק שם דרך כלי האבחון אם התיקון הזה עדיין לא עוזר.
-  // save_on_hangup="yes" - כדי שגם אם המתקשר מנתק מיד אחרי שאמר את השם, ההקלטה עדיין נשמרת (ברירת
-  // המחדל של ימות עצמה כאן היא דווקא "לא לשמור"!).
-  // append_to_existing_file - לא רלוונטי (כל הקלטה כאן היא קובץ חדש). min_length/max_length (שניות) -
-  // 15 שניות מספיק בנדיבות לשם או תשובה קצרה, מבלי להשאיר את המתקשר מחכה יותר מדי אם הוא שקט.
-  const ops = ["no", "record", path, fileName, "no", "yes", "", "", "15"];
-  return `read=t-${safe}=${VAL_NAME},${ops.join(",")}`;
+  return `id_list_message=t-${safe}.g-/${recordExtension}`;
 }
 
 // משמיע טקסט ומבקש הקשת קוד ספרות קבוע-אורך במקלדת הטלפון (מצב "tap" של ימות) - משמש לקוד PIN בן
@@ -93,4 +75,4 @@ function sayAndHangup(text) {
   return `id_list_message=t-${safe}.g-hangup`;
 }
 
-module.exports = { sayAndReadStt, sayAndRecord, sayAndReadDigits, sayAndHangup, sanitizeForYemot, VAL_NAME };
+module.exports = { sayAndReadStt, sayAndGoToRecordExtension, sayAndReadDigits, sayAndHangup, sanitizeForYemot, VAL_NAME };

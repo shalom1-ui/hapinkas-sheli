@@ -15,7 +15,7 @@
 const db = require("../db");
 const { text, json } = require("../router");
 const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt, OPENING_GREETING, DIGIT_ENTRY_STATES } = require("./ivr");
-const { sayAndReadStt, sayAndRecord, sayAndReadDigits, sayAndHangup, VAL_NAME } = require("../services/yemot");
+const { sayAndReadStt, sayAndGoToRecordExtension, sayAndReadDigits, sayAndHangup, VAL_NAME } = require("../services/yemot");
 const speechToText = require("../services/speechToText");
 const debugLog = require("../debugLog");
 
@@ -36,42 +36,69 @@ const debugLog = require("../debugLog");
 // (transactions_pick_type וכו') שגם הם לא ב-FREE_TEXT_STATES - כדי שהקשת הספרה תעבוד בלי חסימה.
 const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "main_menu"]);
 
-// בונה את תגובת הפרוטוקול לבקשת קלט טקסט חופשי (שם וכו') עבור שלב נתון - בוחר בין שלוש אפשרויות:
-// (1) אם מוגדר זיהוי דיבור משודרג (Whisper) - מבקשים הקלטה גולמית (sayAndRecord) שנתמלל בעצמנו
-//     בבקשה הבאה; (2) אחרת - מנוע ה"הקלטה-לזיהוי" הרגיל של ימות (freeText); (3) לשלבים שאינם
-//     free-text כלל - זיהוי דיבור (stt) רגיל, כמו קודם.
-// תוקן שוב (מחקר עומק על ספריית קוד פתוח בשימוש בהצלחה מול קווי ימות אמיתיים - ר' services/yemot.js
-// להסבר המלא): הגילוי המרכזי הוא ש-no_confirm_menu צריך להיות המחרוזת "no" (לא "yes" כמו שחשבנו
-// בעבר!) כדי לדלג בפועל על תפריט האישור. אם התיקון הזה עובד, כבר לא אמור להישמע תפריט אישור בכלל -
-// אבל משאירים את ההנחיה הזו כרשת ביטחון (לא מזיקה אם התפריט לא מופיע בכלל, ועוזרת אם בכל זאת כן).
-const RECORD_CONFIRM_HINT = " אם תישמע שאלה בתום דיבורכם, הקישו 1 לאישור ושמירה.";
+// בונה את תגובת הפרוטוקול לבקשת קלט טקסט חופשי (שם וכו') עבור שלב נתון - בוחר בין שתי אפשרויות:
+// (1) אם מוגדר זיהוי דיבור משודרג (Whisper) - מעבירים את השיחה זמנית לשלוחת ההקלטה הנפרדת
+//     (sayAndGoToRecordExtension, ר' services/yemot.js) שתשמור את ההקלטה ותחזיר את השיחה אלינו;
+//     (2) אחרת - מנוע ה"הקלטה-לזיהוי" הרגיל של ימות (freeText), כמו קודם.
+// תוקן (שינוי ארכיטקטורה נוסף - "הקלטה נפרדת", ר' README/CHANGELOG): הניסיון הקודם - להקליט "בתוך"
+// שלוחת ה-API עצמה (read=...,record,...) - מעולם לא הצליח בפועל. הפתרון הנוכחי מעביר בפועל את
+// השיחה לשלוחה אחרת (type=record) שמוגדרת בממשק הניהול של ימות - ר' README - ולכן אין יותר צורך
+// בהנחיה "הקישו X לאישור" כאן: האישור/הקישה קורים כבר **בתוך** שלוחת ההקלטה עצמה (לפי הגדרת
+// record_ok שם), לפני שהשיחה חוזרת אלינו בכלל.
+const RECORD_CONFIRM_HINT = "";
 
-// דגל בקרה למצב ה"הקלטה גולמית + Whisper" (ר' README, סעיף "זיהוי דיבור משודרג"). הופעל מחדש
-// (אחרי כיבוי זמני) בעקבות תיקון חדש מבוסס-ראיות אמיתיות (לא ניחוש) ב-services/yemot.js ו-
-// services/speechToText.js: no_confirm_menu="no" (לא "yes"), ו-path בלי קידומת "ivr2:" - שני
-// התיקונים הקודמים בכיוון ההפוך היו שגויים. **אם זה עדיין לא עוזר** - יש לבדוק את תיקיית "ApiRecord"
-// (תיקיית מחזור שאליה ימות שומרת הקלטות שלא אושרו/לא הושלמו, ר' /api/debug/yemot-dir?path=ApiRecord),
-// ואם גם זה לא מוביל לפתרון - לשקול מעבר לארכיטקטורה המוכחת-בשטח: שלוחה נפרדת מסוג type=record
-// (לא type=api) עם record_ok=go_to_folder שמעבירה לשלוחת ה-api רק אחרי שההקלטה כבר נשמרה בוודאות -
-// זה הדפוס שמפתחים אחרים בפועל משתמשים בו בהצלחה, לפי מחקר בפורומי המפתחים של ימות.
+// דגל בקרה למצב ה"הקלטה נפרדת + Whisper" (ר' README, סעיף "זיהוי דיבור משודרג"). מופעל רק אם גם
+// המפתחות מוגדרים (ר' speechToText.isConfigured, כולל YEMOT_RECORD_EXTENSION) וגם הדגל כאן מופעל -
+// כך שאפשר להשאיר את המפתחות מוגדרים בסביבת הייצור (Render) בלי חשש, וכל הבקרה על הפעלה/כיבוי
+// בפועל היא רק דרך הדגל הזה, בלי צריך לגעת במשתני הסביבה.
 const WHISPER_RECORD_MODE_ENABLED = true;
 
-// true רק כשגם המפתחות מוגדרים (YEMOT_API_TOKEN/YEMOT_EXTENSION_NUMBER/OPENAI_API_KEY) וגם הדגל
-// למעלה מופעל - כך שאפשר להשאיר את המפתחות מוגדרים בסביבת הייצור (Render) בלי חשש, וכל הבקרה על
-// הפעלה/כיבוי בפועל היא רק דרך הדגל הזה, במקום צריך.
 function whisperRecordModeActive() {
   return WHISPER_RECORD_MODE_ENABLED && speechToText.isConfigured();
 }
 
+// מייצר draft חדש לשמירה: אם עוברים למצב שדורש הקלטה נפרדת (whisper מופעל) - מסמנים
+// "_recording: true" כדי שכשהשיחה תחזור אלינו משלוחת ההקלטה (ר' reattachRecordingCall/הבדיקה
+// בתחילת הטיפול בבקשה למטה) נדע לתמלל את ההקלטה במקום להתייחס לשדה "speech" הרגיל. אם לא -
+// מוודאים שהדגל הזה לא נשאר דלוק בטעות משלב קודם.
+function withRecordingFlag(draft, active) {
+  const d = { ...(draft || {}) };
+  if (active) {
+    d._recording = true;
+  } else {
+    delete d._recording;
+  }
+  return d;
+}
+
 function freeTextPrompt(callId, text_) {
   if (whisperRecordModeActive()) {
-    // תוקן (ניסיון נוסף, ר' הערה מפורטת ב-speechToText.recordingPath): שולחים לפקודת ההקלטה את
-    // recordPath (עם קידומת "ivr2:", כמו ש-DownloadFile דורשת) במקום path הגולמי (כמו ש-GetIVR2Dir
-    // מקבל) - זו אי-ההתאמה היחידה שעוד לא נבדקה בין הפרוטוקולים המתועדים אצלנו.
-    const { recordPath, fileName } = speechToText.recordingPath(callId);
-    return sayAndRecord(`${text_}${RECORD_CONFIRM_HINT}`, recordPath, fileName);
+    const recordExt = process.env.YEMOT_RECORD_EXTENSION;
+    return sayAndGoToRecordExtension(`${text_}${RECORD_CONFIRM_HINT}`, recordExt);
   }
   return sayAndReadStt(text_, { freeText: true });
+}
+
+// תוקן (ארכיטקטורת שלוחת הקלטה נפרדת): לא מתועד במפורש אם ApiCallId נשאר זהה אחרי שימות מעבירה
+// שיחה (go_to_folder) לשלוחת ההקלטה וחזרה (record_end_goto) - ייתכן שימות "פותחת" שיחה חדשה
+// מבחינתה ושולחת ApiCallId חדש. כרשת ביטחון: אם לא נמצאה שיחה קיימת לפי ApiCallId החדש, מחפשים
+// שיחה אחרונה מאותו מספר טלפון שסומנה כ"ממתינה להקלטה" (_recording:true) ועודכנה לאחרונה (בתוך
+// 3 דקות) - ואם נמצאה, "מאמצים" אותה: משנים את call_sid שלה ל-ApiCallId החדש, כאילו זו אותה שיחה
+// מההתחלה. אם ApiCallId בכל זאת נשאר זהה (הארכיטקטורה "מתנהגת יפה") - הפונקציה הזו פשוט לא תמצא
+// כלום ולא משנה שום התנהגות קיימת.
+function reattachRecordingCall(callId, phone) {
+  const candidates = phoneCandidates(phone);
+  if (!candidates.length) return null;
+  const placeholders = candidates.map(() => "?").join(",");
+  const row = db
+    .prepare(
+      `SELECT * FROM call_logs WHERE phone IN (${placeholders}) AND draft_json LIKE '%"_recording":true%' AND updated_at >= datetime('now', '-3 minutes') ORDER BY updated_at DESC LIMIT 1`
+    )
+    .get(...candidates);
+  if (!row) return null;
+  db.prepare("UPDATE call_logs SET call_sid = ?, updated_at = datetime('now') WHERE id = ?").run(callId, row.id);
+  console.log(`[YEMOT-DEBUG] אימוץ שיחה קיימת (id=${row.id}) תחת ApiCallId חדש (${callId}) לפי מספר טלפון - ApiCallId כנראה השתנה במעבר בין שלוחות`);
+  return { ...row, call_sid: callId };
 }
 
 function register(router) {
@@ -95,11 +122,19 @@ function register(router) {
 
     let call = db.prepare("SELECT * FROM call_logs WHERE call_sid = ?").get(callId);
 
+    // אם לא נמצאה שיחה לפי ApiCallId החדש - ייתכן שזו בכלל שיחה קיימת שחזרה משלוחת ההקלטה עם
+    // ApiCallId שונה (ר' הערה מפורטת ב-reattachRecordingCall למעלה). מנסים לאמץ אותה לפי טלפון
+    // לפני שמתייחסים לזה כאילו זו שיחה חדשה לגמרי.
+    if (!call) {
+      call = reattachRecordingCall(callId, v.ApiPhone);
+    }
+
     // ---------- תחילת שיחה חדשה: מזהים משתמש לפי מספר טלפון ----------
     if (!call) {
+      const whisperOn = whisperRecordModeActive();
       const user = findUserByPhone(v.ApiPhone);
       if (!user) {
-        upsertCall(callId, null, "signup_name", { phone: v.ApiPhone });
+        upsertCall(callId, null, "signup_name", withRecordingFlag({ phone: v.ApiPhone }, whisperOn), null, v.ApiPhone);
         return text(
           ctx.res,
           200,
@@ -107,8 +142,8 @@ function register(router) {
         );
       }
 
-      upsertCall(callId, user.id, "main_menu", {});
-      const menuVoiceOnly = whisperRecordModeActive();
+      upsertCall(callId, user.id, "main_menu", withRecordingFlag({}, whisperOn), null, v.ApiPhone);
+      const menuVoiceOnly = whisperOn;
       return text(
         ctx.res,
         200,
@@ -117,32 +152,31 @@ function register(router) {
     }
 
     // ---------- המשך שיחה קיימת ----------
-    // אם השלב הקודם היה בקשת הקלטה גולמית (ר' freeTextPrompt) - הערך שימות שולחת בשדה "speech" הוא
-    // לא הטקסט שהמתקשר אמר (ימות לא ניסתה בכלל לזהות דיבור במצב record), אלא ערך לא רלוונטי. במקום
-    // זאת מורידים ומתמללים בעצמנו את ההקלטה שנשמרה (ר' services/speechToText.js). אם התמלול נכשל
-    // מכל סיבה (למשל עדיין לא הוגדר בפועל, או שגיאת רשת) - נופלים בחזרה בבטחה לערך הגולמי שימות
-    // שלחה, בדיוק כמו ההתנהגות הקודמת, כדי לא לתקוע את השיחה.
+    const draft = JSON.parse(call.draft_json || "{}");
     let speech = String(v[VAL_NAME] || "").trim();
-    // באג אמיתי שתוקן כאן: כשמוגדר זיהוי דיבור משודרג (Whisper), שלב טקסט חופשי עובר למצב "record"
-    // הגולמי של ימות (ר' freeTextPrompt) - ובמצב הזה השדה "speech" ש-ימות שולחת הוא **לא** דיבור
-    // שזוהה בכלל, אלא ערך פנימי לא רלוונטי (בפועל: משהו כמו נתיב/שם הקובץ של ההקלטה עצמה, למשל
-    // "0775325817/hp-...wav"). בעבר, כשהתמלול נכשל (למשל שגיאת 404 בהורדת ההקלטה), הקוד "נפל בחזרה"
-    // לערך הגולמי הזה **כאילו** הוא מה שהמתקשר אמר - וזה גרם לתקלה אמיתית בפועל: השם שנשמר בפועל
-    // בהרשמה היה מחרוזת קטע-נתיב חסרת משמעות, שגם הוקראה בחזרה למתקשר (ר' README/CHANGELOG). התיקון:
-    // כשהתמלול נכשל *במצב record* (כלומר isConfigured()==true) - מתייחסים לזה כאילו לא נשמע כלום
-    // (speech ריק), כדי שהלוגיקה הרגילה של "לא שמעתי שם, נסו שוב" תיכנס לפעולה - בלי לקבל זבל כתשובה.
-    if (FREE_TEXT_STATES.has(call.state) && whisperRecordModeActive()) {
-      const transcribed = await speechToText.downloadAndTranscribe(callId);
-      if (transcribed) {
-        console.log(`[WHISPER-DEBUG] שימוש בתמלול Whisper במקום זיהוי הדיבור של ימות: "${transcribed}"`);
-        speech = transcribed;
+    // אם draft._recording דלוק - השלב הקודם העביר את השיחה לשלוחת ההקלטה הנפרדת (ר' freeTextPrompt/
+    // withRecordingFlag), וזו הבקשה שמגיעה בחזרה משם (record_end_goto). השדה "speech" בבקשה הזו
+    // הוא לא דיבור שזוהה בכלל - במקום זאת מורידים ומתמללים בעצמנו את ההקלטה האחרונה ששמורה בשלוחת
+    // ההקלטה (ר' services/speechToText.js). אם התמלול נכשל מכל סיבה - מתייחסים לזה כאילו לא נשמע
+    // כלום (speech ריק), כדי שהלוגיקה הרגילה של "לא שמעתי, נסו שוב" תיכנס לפעולה - בלי לקבל זבל כתשובה.
+    if (draft._recording) {
+      delete draft._recording;
+      if (whisperRecordModeActive()) {
+        const transcribed = await speechToText.downloadAndTranscribe();
+        if (transcribed) {
+          console.log(`[WHISPER-DEBUG] שימוש בתמלול Whisper במקום זיהוי הדיבור של ימות: "${transcribed}"`);
+          speech = transcribed;
+        } else {
+          console.log("[WHISPER-DEBUG] תמלול נכשל/לא זמין - מתייחסים לכך כאילו לא נשמע דיבור");
+          speech = "";
+        }
       } else {
-        console.log("[WHISPER-DEBUG] תמלול נכשל/לא זמין - מתייחסים לכך כאילו לא נשמע דיבור (לא נעשה שימוש בערך הגולמי - הוא לא טקסט אמיתי במצב record)");
+        // Whisper כובה בינתיים תוך כדי שהמתקשר היה בשלוחת ההקלטה - מצב קצה נדיר, לא סומכים על
+        // "speech" הגולמי (הוא לא טקסט אמיתי מבחינת שלוחת record) ומתייחסים לזה כאילו לא נשמע כלום.
         speech = "";
       }
     }
     appendTranscript(callId, speech);
-    const draft = JSON.parse(call.draft_json || "{}");
 
     // digitConfirm: true - בימות אפשר להקיש (כולל סולמית) תוך כדי זיהוי דיבור בלי לחסום את זה
     // (ר' services/yemot.js / sayAndReadStt), אז מוסיפים אפשרות אישור מהירה בהקשה בכל שאלת "אמרו כן לאישור".
@@ -154,7 +188,10 @@ function register(router) {
       ? await advance(call.state, speech, draft, db.prepare("SELECT * FROM users WHERE id = ?").get(call.user_id), opts)
       : await advanceSignup(call.state, speech, draft, opts);
 
-    upsertCall(callId, result.newUserId || call.user_id, result.nextState, result.draft || draft, result.outcome);
+    const goingToFreeText = !result.hangup && !DIGIT_ENTRY_STATES.has(result.nextState) && FREE_TEXT_STATES.has(result.nextState);
+    const draftToSave = withRecordingFlag(result.draft || draft, goingToFreeText && whisperRecordModeActive());
+
+    upsertCall(callId, result.newUserId || call.user_id, result.nextState, draftToSave, result.outcome, v.ApiPhone);
 
     if (result.hangup) {
       return text(ctx.res, 200, sayAndHangup(result.text));
@@ -172,7 +209,7 @@ function register(router) {
   // נועד לענות סופית על השאלה "האם ההקלטה בכלל נשמרת אצל ימות, ואיפה בדיוק" - בלי להסתמך על ניווט
   // ידני מבלבל באתר הניהול של ימות (שקשה להסביר צעד-אחר-צעד למשתמש לא-טכני). קורא ל-API הרשמי
   // GetIVR2Dir של ימות (עם הטוקן שכבר מוגדר אצלנו כמשתנה סביבה) ומחזיר את רשימת הקבצים שנמצאים
-  // בפועל בתיקיית השלוחה שאנחנו שומרים בה הקלטות (ר' services/speechToText.js, recordingPath).
+  // בפועל בתיקיית שלוחת ההקלטה הנפרדת (ר' services/speechToText.js, findLatestRecording).
   // מוגן במילת-מעבר קבועה בפרמטר key בכתובת (לא סוד אמיתי - רק כדי שלא כל מי שמנחש את הכתובת
   // יוכל לראות רשימת קבצים) - יש להסיר את הנתיב הזה אחרי שהתקלה תיפתר.
   const DEBUG_KEY = "hapinkas-diag-9427";

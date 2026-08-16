@@ -1,56 +1,90 @@
-// speechToText.js — תמלול קולי משודרג לערוץ ימות המשיח: מוריד הקלטה גולמית שנשמרה בימות (מצב
-// "record" של הפרוטוקול, ר' sayAndRecord ב-services/yemot.js) ומתמלל אותה באמצעות Whisper (OpenAI),
-// כתחליף מדויק יותר למנוע זיהוי הדיבור המובנה של ימות - שבבדיקה בפועל התברר כלא אמין מספיק במיוחד
-// לשמות אנשים (ר' README, סעיף "זיהוי דיבור משודרג").
+// speechToText.js — תמלול קולי משודרג לערוץ ימות המשיח: מוריד הקלטה גולמית שנשמרה בימות ומתמלל
+// אותה באמצעות Whisper (OpenAI), כתחליף מדויק יותר למנוע זיהוי הדיבור המובנה של ימות - שבבדיקה
+// בפועל התברר כלא אמין מספיק במיוחד לשמות אנשים (ר' README, סעיף "זיהוי דיבור משודרג").
 //
-// חשוב: זו תוספת חדשה שלא נבדקה עדיין מול קו ימות אמיתי (אין לנו דרך לבדוק שיחות טלפון אמיתיות
-// מהסביבה שבה הקוד נכתב) - היא בנויה בזהירות רבה לגמרי (MOCK כברירת מחדל, נכשלת בשקט לזיהוי הדיבור
-// הרגיל של ימות אם משהו משתבש) אבל חייבת להיבדק בפועל אחרי הפריסה. לוגים מפורטים (`[WHISPER-DEBUG]`)
-// נועדו לעזור לאבחן בדיוק כמו שעשינו עם `[YEMOT-DEBUG]`.
+// תוקן (שינוי ארכיטקטורה, אחרי כמה ניסיונות כושלים עם הקלטה גולמית embedded בתוך שלוחת ה-API עצמה -
+// ר' README/CHANGELOG להיסטוריה המלאה): במקום read=...,record,... בתוך שלוחת ה-API (ששם ההקלטה אף
+// פעם לא נשמרה בפועל, לפי GetIVR2Dir), עוברים לארכיטקטורה מוכחת-בשטח שמפתחים אחרים משתמשים בה
+// בהצלחה: שלוחה **נפרדת** מסוג type=record (מוגדרת ע"י המשתמש בממשק הניהול של ימות - ר' README),
+// שהשיחה מועברת אליה זמנית (go_to_folder, ר' services/yemot.js/sayAndGoToRecordExtension), ואחרי
+// שההקלטה נשמרת בוודאות שם - חוזרת לשלוחת ה-API שלנו (record_end_goto בהגדרות השלוחה החדשה). כיוון
+// ששלוחת ההקלטה קובעת בעצמה את שם הקובץ (לא אנחנו) - מחפשים את ההקלטה **החדשה ביותר** בתיקיית
+// השלוחה הזו (ר' findLatestRecording), במקום נתיב/שם קובץ קבוע מראש כמו קודם.
 //
-// במצב MOCK (ברירת מחדל, כל עוד לא הוגדרו YEMOT_API_TOKEN, YEMOT_EXTENSION_NUMBER, ו-OPENAI_API_KEY
-// יחד): הפונקציות מחזירות null - מה שגורם לקוד הקורא (routes/yemot.js) לחזור אוטומטית לזיהוי הדיבור
-// הרגיל של ימות (freeText STT), בלי שום שינוי בהתנהגות עד שכל המפתחות יוגדרו בפועל בייצור.
+// חשוב: זו עדיין תוספת חדשה שלא נבדקה במלואה מול קו ימות אמיתי - חלק מהפרטים המדויקים (למשל פורמט
+// ה-mtime שימות מחזירה) התבססו על דוגמאות שנצפו בפועל, אבל ייתכנו עוד הפתעות. לוגים מפורטים
+// (`[WHISPER-DEBUG]`) נועדו לעזור לאבחן בדיוק כמו שעשינו עד כה.
+//
+// במצב MOCK (ברירת מחדל, כל עוד לא הוגדרו כל המפתחות הנדרשים יחד): הפונקציות מחזירות null - מה
+// שגורם לקוד הקורא (routes/yemot.js) לחזור אוטומטית לזיהוי הדיבור הרגיל של ימות (freeText STT),
+// בלי שום שינוי בהתנהגות עד שכל המפתחות יוגדרו בפועל בייצור.
 "use strict";
 
 const YEMOT_API_BASE = "https://www.call2all.co.il/ym/api/";
 
 function isConfigured() {
-  return !!(process.env.YEMOT_API_TOKEN && process.env.YEMOT_EXTENSION_NUMBER && process.env.OPENAI_API_KEY);
-}
-
-// בונה את הנתיב (path) שבו ההקלטה נשמרת/מחופשת בימות - קבוע ונגזר מ-callId, כדי שנוכל לדעת בדיוק
-// איפה לחפש אותה בהמשך בלי להסתמך על מה שימות מחזירה בתגובה (שהפורמט המדויק שלה לא מתועד במלואו).
-//
-// תוקן (בעקבות ניסיון קודם שגוי - ר' README/yemot-support-question.md להיסטוריה): בעבר ניסינו קידומת
-// "ivr2:" גם בפרמטר ה-path בתוך פקודת ההקלטה עצמה (read=...,record,...), מתוך אנלוגיה שגויה ל-
-// DownloadFile. מחקר מעמיק בספריית קוד פתוח (yemot-router2) ששימשה בהצלחה מול קווי ימות אמיתיים
-// הראה בבירור: ה-path *בתוך* פקודת ה-read= צריך להיות מספר שלוחה גולמי בלבד ("1"), **בלי** שום
-// קידומת - הקידומת "ivr2:" שייכת אך ורק ל-GetIVR2Dir/DownloadFile (API אחר, נפרד לגמרי). recordPath
-// ו-path זהים עכשיו בכוונה (recordPath נשאר קיים כשם נפרד רק כדי לא לשנות את שאר הקוד שקורא לו).
-function recordingPath(callId) {
-  const ext = process.env.YEMOT_EXTENSION_NUMBER;
-  const safeFileName = `hp-${String(callId || "").replace(/[^a-zA-Z0-9_-]/g, "")}`;
-  return {
-    path: ext,
-    recordPath: ext,
-    fileName: safeFileName,
-    downloadPath: `ivr2:${ext}/${safeFileName}.wav`,
-  };
+  return !!(
+    process.env.YEMOT_API_TOKEN &&
+    process.env.YEMOT_EXTENSION_NUMBER &&
+    process.env.YEMOT_RECORD_EXTENSION &&
+    process.env.OPENAI_API_KEY
+  );
 }
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// ימות מחזירה mtime בפורמט "DD/MM/YYYY HH:mm" (נצפה בפועל דרך GetIVR2Dir) - לא ניתן לפרסור ישיר
+// עם Date.parse (שמניח פורמט אמריקאי MM/DD/YYYY). ממירים ידנית ל-ISO כדי שאפשר יהיה למיין לפי זמן
+// אמיתי. מחזיר null אם הפורמט לא כמצופה (כדי שנופלים בחזרה למיון לפי שם, ר' findLatestRecording).
+function parseYemotMtime(mtimeStr) {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}):(\d{2})/.exec(String(mtimeStr || ""));
+  if (!m) return null;
+  const [, dd, mm, yyyy, hh, min] = m;
+  const iso = `${yyyy}-${mm}-${dd}T${hh}:${min}:00`;
+  const ts = Date.parse(iso);
+  return Number.isNaN(ts) ? null : ts;
+}
+
+// מוצא את ההקלטה החדשה ביותר בתיקיית שלוחת ההקלטה הנפרדת (YEMOT_RECORD_EXTENSION) - כי בארכיטקטורה
+// הזו ימות עצמה קובעת את שם הקובץ (לא אנחנו, בניגוד לניסיון הקודם עם path/file_name בתוך read=).
+// מחזיר את שם הקובץ (למשל "0000.wav") או null אם לא נמצא/שגיאה.
+async function findLatestRecording() {
+  if (!isConfigured()) return null;
+  try {
+    const token = process.env.YEMOT_API_TOKEN;
+    const recordExt = process.env.YEMOT_RECORD_EXTENSION;
+    const url = `${YEMOT_API_BASE}GetIVR2Dir?token=${encodeURIComponent(token)}&path=${encodeURIComponent(recordExt)}`;
+    const res = await fetch(url);
+    const rawText = await res.text();
+    console.log(`[WHISPER-DEBUG] רשימת קבצים בשלוחת ההקלטה (${recordExt}): ${rawText.slice(0, 500)}`);
+    let data;
+    try { data = JSON.parse(rawText); } catch { data = null; }
+    if (!data || !Array.isArray(data.files) || !data.files.length) {
+      console.log(`[WHISPER-DEBUG] שלוחת ההקלטה ריקה או שגיאה בקריאת הרשימה (status ${res.status})`);
+      return null;
+    }
+    const audioFiles = data.files.filter((f) => /\.(wav|mp3)$/i.test(f.name || ""));
+    if (!audioFiles.length) return null;
+    audioFiles.sort((a, b) => {
+      const ta = parseYemotMtime(a.mtime);
+      const tb = parseYemotMtime(b.mtime);
+      if (ta !== null && tb !== null) return tb - ta; // חדש קודם, לפי זמן אמיתי
+      return String(b.name).localeCompare(String(a.name)); // גיבוי: לפי שם, אם אין mtime תקין
+    });
+    return audioFiles[0].name;
+  } catch (e) {
+    console.log(`[WHISPER-DEBUG] שגיאה בחיפוש ההקלטה האחרונה: ${e.message}`);
+    return null;
+  }
+}
+
 // מוריד קובץ הקלטה ששמור בימות. מחזיר null (ולא זורק שגיאה) בכל מקרה של כישלון - כדי שהקוד הקורא
-// תמיד יוכל ליפול בחזרה בבטחה (ר' routes/yemot.js - כשזה קורה, מתייחסים לזה כאילו לא נשמע דיבור,
-// לא נופלים בחזרה לזיהוי הדיבור הרגיל של ימות ולא לערך גולמי לא רלוונטי).
+// תמיד יוכל ליפול בחזרה בבטחה (ר' routes/yemot.js - כשזה קורה, מתייחסים לזה כאילו לא נשמע דיבור).
 //
-// ניסיון חוזר על 404: בבדיקה בפועל מול קו אמיתי התברר שהורדת ההקלטה מיד אחרי שהיא נגמרה (כלומר
-// באותה בקשה שבה ימות מדווחת שההקלטה הסתיימה) נכשלת לפעמים ב-404 - כנראה כי הקובץ עוד לא נשמר
-// בפועל אצל ימות באותו הרגע (עיכוב קצר בין סיום ההקלטה לזמינותה להורדה). ניסיון חוזר יחיד אחרי
-// המתנה קצרה (1.5 שניות) פותר את רוב המקרים האלה, בלי לעכב את השיחה יותר מדי אם זו כן תקלה אמיתית.
+// ניסיון חוזר על 404: יתכן שיש עיכוב קצר בין סיום/אישור ההקלטה לזמינותה להורדה. ניסיון חוזר יחיד
+// אחרי המתנה קצרה (1.5 שניות) פותר את רוב המקרים האלה, בלי לעכב את השיחה יותר מדי אם זו כן תקלה אמיתית.
 async function downloadYemotRecording(downloadPath, attempt = 1) {
   if (!isConfigured()) return null;
   try {
@@ -67,8 +101,7 @@ async function downloadYemotRecording(downloadPath, attempt = 1) {
     }
     const buf = Buffer.from(await res.arrayBuffer());
     // בדיקת שפיות בסיסית: קובץ WAV אמיתי תמיד מתחיל בבתים "RIFF". אם קיבלנו משהו אחר (למשל הודעת
-    // שגיאה כטקסט/JSON מימות, גם עם סטטוס 200 - למשל אם ההקלטה עדיין לא מוכנה) - עדיף להיכשל בבטחה
-    // מאשר לשלוח זבל ל-Whisper.
+    // שגיאה כטקסט/JSON מימות, גם עם סטטוס 200) - עדיף להיכשל בבטחה מאשר לשלוח זבל ל-Whisper.
     if (buf.length < 44 || buf.toString("ascii", 0, 4) !== "RIFF") {
       console.log(`[WHISPER-DEBUG] הקובץ שהתקבל מימות לא נראה כמו WAV תקין (אורך ${buf.length} בתים), נתיב ${downloadPath}, ניסיון ${attempt}`);
       if (attempt < 2) {
@@ -86,9 +119,8 @@ async function downloadYemotRecording(downloadPath, attempt = 1) {
 }
 
 // שולח קובץ שמע לתמלול אצל OpenAI ומחזיר את הטקסט המתומלל בעברית, או null אם נכשל/לא מוגדר.
-// המודל: gpt-4o-mini-transcribe (לא whisper-1 הישן) - זול יותר (כ-0.003$ לדקה, לעומת מודלים אחרים
-// אצל OpenAI) ומופיע כמודל התמלול הנוכחי בתיעוד המחירים הרשמי של OpenAI (whisper-1 כבר לא מופיע שם
-// באופן מפורש נכון לעכשיו) - ר' README, סעיף "זיהוי דיבור משודרג" להסבר עלויות מלא.
+// המודל: gpt-4o-mini-transcribe (לא whisper-1 הישן) - זול יותר (כ-0.003$ לדקה) ומופיע כמודל התמלול
+// הנוכחי בתיעוד המחירים הרשמי של OpenAI - ר' README, סעיף "זיהוי דיבור משודרג" להסבר עלויות מלא.
 async function transcribeAudio(audioBuffer) {
   if (!isConfigured() || !audioBuffer) return null;
   try {
@@ -116,14 +148,17 @@ async function transcribeAudio(audioBuffer) {
   }
 }
 
-// פונקציית נוחות משולבת: מורידה ומתמללת בפעולה אחת. מחזירה null בכל כישלון בדרך (ואז הקוד הקורא
-// נופל בחזרה לזיהוי הדיבור הרגיל של ימות במקום לתקוע את השיחה).
-async function downloadAndTranscribe(callId) {
+// פונקציית נוחות משולבת: מוצאת את ההקלטה האחרונה בשלוחת ההקלטה, מורידה ומתמללת אותה בפעולה אחת.
+// מחזירה null בכל כישלון בדרך (ואז הקוד הקורא נופל בחזרה לזיהוי הדיבור הרגיל של ימות).
+async function downloadAndTranscribe() {
   if (!isConfigured()) return null;
-  const { downloadPath } = recordingPath(callId);
+  const fileName = await findLatestRecording();
+  if (!fileName) return null;
+  const recordExt = process.env.YEMOT_RECORD_EXTENSION;
+  const downloadPath = `ivr2:${recordExt}/${fileName}`;
   const audio = await downloadYemotRecording(downloadPath);
   if (!audio) return null;
   return transcribeAudio(audio);
 }
 
-module.exports = { isConfigured, recordingPath, downloadYemotRecording, transcribeAudio, downloadAndTranscribe };
+module.exports = { isConfigured, findLatestRecording, downloadYemotRecording, transcribeAudio, downloadAndTranscribe };

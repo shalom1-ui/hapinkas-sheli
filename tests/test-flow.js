@@ -970,13 +970,21 @@ async function run() {
     const speechToText = require("../src/services/speechToText");
     assert(
       speechToText.isConfigured() === false,
-      "isConfigured() מחזיר false כל עוד YEMOT_API_TOKEN/YEMOT_EXTENSION_NUMBER/OPENAI_API_KEY לא מוגדרים יחד (מצב הבדיקות)"
+      "isConfigured() מחזיר false כל עוד YEMOT_API_TOKEN/YEMOT_EXTENSION_NUMBER/YEMOT_RECORD_EXTENSION/OPENAI_API_KEY לא מוגדרים יחד (מצב הבדיקות)"
     );
     const whisperMockResult = await speechToText.downloadAndTranscribe("some-call-id");
     assert(whisperMockResult === null, "downloadAndTranscribe() מחזיר null במצב MOCK, בלי לנסות פנייה רשתית כלשהי");
     assert(
       ymSignupGreeting.includes(",no,voice,") && !ymSignupGreeting.includes(",no,record,"),
       "כשלא מוגדר זיהוי דיבור משודרג, שלב טקסט חופשי בימות (שם בהרשמה) עדיין משתמש במנוע ה-STT הרגיל של ימות ולא במצב הקלטה גולמית"
+    );
+    // תוקן (ארכיטקטורת שלוחת הקלטה נפרדת): בדיקת יחידה על הפורמט המדויק של פקודת המעבר לשלוחה -
+    // לא ניתן לבדוק את מלוא הזרימה מקצה-לקצה כאן (דורש קו ימות אמיתי, ר' README), אבל לפחות מוודאים
+    // שהמחרוזת שנשלחת לימות תואמת בדיוק לתחביר g-/<שלוחה> המתועד (כמו sayAndHangup, עם g-hangup).
+    const { sayAndGoToRecordExtension } = require("../src/services/yemot");
+    assert(
+      sayAndGoToRecordExtension("מה שמך", "2") === "id_list_message=t-מה שמך.g-/2",
+      "sayAndGoToRecordExtension בונה פקודת מעבר-שלוחה בפורמט id_list_message=t-<טקסט>.g-/<שלוחה> - כמו sayAndHangup, עם יעד שלוחה במקום hangup"
     );
 
   } catch (err) {
