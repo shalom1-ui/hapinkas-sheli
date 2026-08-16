@@ -21,10 +21,26 @@ function isConfigured() {
 
 // בונה את הנתיב (path) שבו ההקלטה נשמרת/מחופשת בימות - קבוע ונגזר מ-callId, כדי שנוכל לדעת בדיוק
 // איפה לחפש אותה בהמשך בלי להסתמך על מה שימות מחזירה בתגובה (שהפורמט המדויק שלה לא מתועד במלואו).
+//
+// תוקן (ניסיון נוסף, מבוסס אבחון בפועל - ר' README): שמנו לב לאי-התאמה בין שתי קריאות API שונות של
+// ימות שכן מתועדות אצלנו: GetIVR2Dir מקבל path **בלי** קידומת ("1"), בעוד ש-DownloadFile דורש path
+// **עם** קידומת "ivr2:" ("ivr2:1/קובץ"). כל הניסיונות הקודמים לתקן את פקודת ההקלטה עצמה (read=...,record,...)
+// התמקדו בפרמטרים אחרי ה-path (no_confirm_menu, הקשת אישור) ולא בפורמט של ה-path עצמו - העברנו לשם
+// את הערך הגולמי "1" (כמו ב-GetIVR2Dir), מתוך הנחה לא-מבוססת שזה אותו פורמט. יכול להיות שפקודת
+// ה-record, בדיוק כמו DownloadFile (ששתיהן עוסקות ב"איפה בדיוק לשמור/לקרוא קובץ" ולא ב"רשימת תיקייה"),
+// דווקא כן דורשת את קידומת "ivr2:" כדי לדעת לאיזה "namespace" לשמור את הקובץ - וכשהיא מקבלת "1" גולמי
+// בלי הקידומת, ייתכן שהיא נכשלת בשקט (או שומרת למקום לא-צפוי) בלי להחזיר שגיאה גלויה לנו, מה שמסביר
+// למה GetIVR2Dir על אותה תיקייה תמיד חוזר עם files:[] ריק. recordPath הוא הניסיון החדש: אותה קידומת
+// "ivr2:" בדיוק כמו ב-downloadPath, בשביל פקודת ההקלטה עצמה.
 function recordingPath(callId) {
   const ext = process.env.YEMOT_EXTENSION_NUMBER;
   const safeFileName = `hp-${String(callId || "").replace(/[^a-zA-Z0-9_-]/g, "")}`;
-  return { path: ext, fileName: safeFileName, downloadPath: `ivr2:${ext}/${safeFileName}.wav` };
+  return {
+    path: ext,
+    recordPath: `ivr2:${ext}`,
+    fileName: safeFileName,
+    downloadPath: `ivr2:${ext}/${safeFileName}.wav`,
+  };
 }
 
 function sleep(ms) {

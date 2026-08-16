@@ -47,8 +47,11 @@ const RECORD_CONFIRM_HINT = " בתום דיבורכם תישמע שאלה, הק�
 
 function freeTextPrompt(callId, text_) {
   if (speechToText.isConfigured()) {
-    const { path, fileName } = speechToText.recordingPath(callId);
-    return sayAndRecord(`${text_}${RECORD_CONFIRM_HINT}`, path, fileName);
+    // תוקן (ניסיון נוסף, ר' הערה מפורטת ב-speechToText.recordingPath): שולחים לפקודת ההקלטה את
+    // recordPath (עם קידומת "ivr2:", כמו ש-DownloadFile דורשת) במקום path הגולמי (כמו ש-GetIVR2Dir
+    // מקבל) - זו אי-ההתאמה היחידה שעוד לא נבדקה בין הפרוטוקולים המתועדים אצלנו.
+    const { recordPath, fileName } = speechToText.recordingPath(callId);
+    return sayAndRecord(`${text_}${RECORD_CONFIRM_HINT}`, recordPath, fileName);
   }
   return sayAndReadStt(text_, { freeText: true });
 }
