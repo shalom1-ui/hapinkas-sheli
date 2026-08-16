@@ -31,7 +31,10 @@ const debugLog = require("../debugLog");
 // כי המילים ארוכות/מורכבות יחסית. המחיר: **רק** במצב שבו Whisper מוגדר בפועל, הקשת ספרה בתפריט
 // הראשי (1-6, ר' MAIN_MENU_DIGIT_KEYWORDS) מפסיקה לעבוד, כי מצב "הקלטה" חוסם הקשות לגמרי - ר' opts.menuVoiceOnly
 // ב-mainMenuPrompt (routes/ivr.js) שמסיר גם את ההזכרה המילולית של האפשרות הזו במצב הזה, כדי לא להטעות.
-const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "signup_email", "main_menu"]);
+// תוקן: signup_email הוסר מכאן - השלב הזה כבר לא מבקש מהמתקשר לדבר בכלל (ר' הערה מפורטת ב-routes/ivr.js,
+// case "signup_email") - הוא רק בחירת ספק מייל בהקשת ספרה (1/2/0), בדיוק כמו שאר תפריטי ההקשה
+// (transactions_pick_type וכו') שגם הם לא ב-FREE_TEXT_STATES - כדי שהקשת הספרה תעבוד בלי חסימה.
+const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "main_menu"]);
 
 // בונה את תגובת הפרוטוקול לבקשת קלט טקסט חופשי (שם וכו') עבור שלב נתון - בוחר בין שלוש אפשרויות:
 // (1) אם מוגדר זיהוי דיבור משודרג (Whisper) - מבקשים הקלטה גולמית (sayAndRecord) שנתמלל בעצמנו

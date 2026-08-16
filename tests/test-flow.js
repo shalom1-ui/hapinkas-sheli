@@ -681,18 +681,27 @@ async function run() {
       "שיחה חוזרת מאותו מספר אחרי ההרשמה כבר מזהה את המשתמש (בלי הצעת הרשמה נוספת)"
     );
 
-    console.log("\n📧 הרשמה בטלפון עם כתובת מייל אופציונלית שנאמרה בקול");
+    // תוקן (אבחון בפועל מול קו אמיתי): בעבר ביקשנו לומר את כל כתובת המייל בקול - זה נכשל כמעט תמיד
+    // בפועל ("לא זוהה דיבור" על "שטרודל"/"נקודה"). עכשיו לא מבקשים לבטא שום דבר בשלב הזה - רק הקשת
+    // ספרה לבחירת ספק (1=ג'ימייל, 2=אאוטלוק), והחלק הראשון של הכתובת נבנה אוטומטית מהשם המלא.
+    console.log("\n📧 הרשמה בטלפון עם כתובת מייל אופציונלית - נבחרת בהקשת ספרה (ג'ימייל/אאוטלוק), בלי לבטא שום דבר בקול");
     const emailSignupCallSid = `${callSid}-signup-email`;
     const emailSignupPhone = "+972500000078";
     await ivrCall(emailSignupCallSid, emailSignupPhone);
     await ivrSay(emailSignupCallSid, "גל שני");
     await ivrSay(emailSignupCallSid, "כן");
     await ivrSay(emailSignupCallSid, "5678");
-    await ivrSay(emailSignupCallSid, "5678");
-    const emailDoneXml = await ivrSay(emailSignupCallSid, "gal כרוכית gmail נקודה com");
+    const emailPromptXml = await ivrSay(emailSignupCallSid, "5678");
     assert(
-      emailDoneXml.includes("נרשמת בהצלחה") && emailDoneXml.includes("gal@gmail.com"),
-      "כתובת מייל שנאמרה בקול (עם 'כרוכית'/'נקודה' במקום @ ונקודה) מזוהה ונשמרת אצל המשתמש החדש, אחרי הגדרת קוד PIN"
+      emailPromptXml.includes("1 לכתובת ג'ימייל") && emailPromptXml.includes("2 לכתובת אאוטלוק"),
+      "אחרי הגדרת קוד PIN, מוצעת בחירת ספק מייל בהקשת ספרה (1=ג'ימייל, 2=אאוטלוק) - בלי לבקש לבטא כתובת בקול"
+    );
+    // בערוץ Twilio (זיהוי דיבור בלבד, בלי הקשות - ר' הערה למעלה ב-routes/ivr.js) הבחירה נעשית באמירת
+    // שם הספק במקום הקשת ספרה - "ג'ימייל" בלבד, בלי שום סימן נוסף.
+    const emailDoneXml = await ivrSay(emailSignupCallSid, "ג'ימייל");
+    assert(
+      emailDoneXml.includes("נרשמת בהצלחה") && emailDoneXml.includes("gl.shni@gmail.com"),
+      "אמירת 'ג'ימייל' (מילה אחת פשוטה, בלי סימנים) בונה כתובת מייל אוטומטית מתוך השם המלא שכבר נאמר בהצלחה קודם, ושומרת אותה"
     );
 
     console.log("\n☎️ מנוע השיחה הקולית מול ימות המשיח (שלוחת API) — אותה מכונת מצבים, פרוטוקול שונה");
@@ -935,6 +944,26 @@ async function run() {
     assert(
       ymSecondCall.includes("דנה לוי") && !ymSecondCall.includes("אינו מזוהה"),
       "שיחת ימות חוזרת מאותו מספר אחרי ההרשמה כבר מזהה את המשתמש שנוצר"
+    );
+
+    // הדרך המרכזית שלשמה בכלל בנינו את זה: בימות אפשר ממש להקיש 1/2 בפועל (לא רק לומר בקול) - זה
+    // המסלול הכי אמין, כי הוא לא תלוי בזיהוי דיבור בכלל.
+    console.log("\n📧 הרשמה בימות עם כתובת מייל שנבחרת בהקשת ספרה אמיתית (1=ג'ימייל), בלי מילה אחת בדיבור");
+    const ymEmailCallId = `${ymCallId}-signup-email-digit`;
+    const ymEmailPhone = "+972500000079";
+    await yemotCall({ callId: ymEmailCallId, phone: ymEmailPhone });
+    await yemotCall({ callId: ymEmailCallId, speech: "עידן ברק" });
+    await yemotCall({ callId: ymEmailCallId, speech: "כן" });
+    await yemotCall({ callId: ymEmailCallId, speech: "1122" });
+    await yemotCall({ callId: ymEmailCallId, speech: "1122" });
+    const ymEmailDigitDone = await yemotCall({ callId: ymEmailCallId, speech: "1" }); // הקשת 1 = ג'ימייל
+    // הטקסט המושמע בקול "מנוקה" מנקודות (ר' sanitizeForYemot ב-services/yemot.js - תווי בקרה בפרוטוקול
+    // ימות) - זה תקין, זו רק ההקראה. בודקים את הכתובת האמיתית שנשמרה במסד הנתונים דרך התחברות.
+    assert(ymEmailDigitDone.includes("נרשמת בהצלחה"), "בימות, הקשת 1 ממש (לא אמירה בקול) בשלב בחירת ספק המייל משלימה את ההרשמה");
+    const ymEmailLogin = await api("POST", "/api/auth/login", { username: `phone_${ymEmailPhone.replace(/\D/g, "").slice(-9)}`, password: "1122" });
+    assert(
+      ymEmailLogin.status === 200 && ymEmailLogin.data.user?.email === "aidn.brk@gmail.com",
+      "הקשת 1 בשלב בחירת ספק המייל בונה כתובת ג'ימייל אוטומטית מהשם המלא (עם נקודה תקינה) ושומרת אותה בפועל במסד הנתונים"
     );
 
     console.log("\n🎙️ זיהוי דיבור משודרג (ימות + Whisper) — במצב MOCK (בלי מפתחות) נשאר שקוף לחלוטין");

@@ -488,7 +488,7 @@ async function advanceSignup(state, speech, draft, opts = {}) {
       const digits = onlyDigits(speech);
       if (digits && digits.length === 4 && digits === draft.pendingPin) {
         return {
-          text: "הקוד הוגדר בהצלחה. אפשר גם לצרף כתובת מייל לחשבון, זה לא חובה. אם תרצו - אמרו אותה עכשיו. אם לא, אמרו דלג.",
+          text: "הקוד הוגדר בהצלחה. אפשר גם לצרף כתובת מייל לחשבון, זה לא חובה - אין צורך לדבר, רק הקישו: 1 לכתובת ג'ימייל, 2 לכתובת אאוטלוק, או 0 להמשך בלי מייל.",
           nextState: "signup_email",
           draft: { ...draft, pin: draft.pendingPin, pendingPin: undefined },
         };
@@ -499,11 +499,21 @@ async function advanceSignup(state, speech, draft, opts = {}) {
         draft: { ...draft, pendingPin: undefined },
       };
     }
-    // מייל אופציונלי בהרשמה טלפונית - הזיהוי עצמו (בשיחות הבאות) נשען על מספר הטלפון (Caller ID), לא
-    // על הסיסמה/PIN - אבל מייל מאפשר בעתיד גם שחזור סיסמה בערוץ נוסף. אם הזיהוי מהדיבור לא נשמע כמו
-    // כתובת מייל תקינה - לא תוקעים את השיחה בלולאה, פשוט ממשיכים בלי מייל (אפשר להוסיף מאוחר יותר באתר).
+    // תוקן (אבחון בפועל מול קו אמיתי - ר' README/yemot-support-question.md): בעבר ביקשנו מהמתקשר
+    // לומר את כל כתובת המייל בקול (כולל "שטרודל"/"נקודה") - בבדיקה בפועל התברר שזה נכשל כמעט תמיד
+    // ("לא זוהה דיבור"), כי הקראת סימנים כאלה בקול היא תוכן קשה במיוחד לזיהוי דיבור, בכל מנוע. התיקון:
+    // בכלל לא מבקשים לדבר בשלב הזה - החלק הראשון של הכתובת (לפני השטרודל) נבנה אוטומטית מהשם המלא
+    // שכבר נאמר בהצלחה קודם בשיחה (ר' buildEmailLocalPart), והספק (gmail/outlook) נבחר בהקשת ספרה
+    // בלבד (אמינה כמעט תמיד, בניגוד לזיהוי דיבור) - כך שלא צריך לבטא שום סימן בקול בכלל.
     case "signup_email": {
-      if (includesAny(s, ["דלג", "לא", "אין", "בלי", "לדלג", "דילוג", "המשך"])) {
+      const digit = onlyDigits(s);
+      const wantsGmail = digit === "1" || includesAny(s, ["גימייל", "גימיל", "ג'ימייל"]);
+      const wantsOutlook = digit === "2" || includesAny(s, ["אאוטלוק", "אוטלוק"]);
+      const domain = wantsGmail ? "gmail.com" : wantsOutlook ? "outlook.com" : null;
+
+      // גם 0/"דלג" מפורש, וגם כל קלט אחר לא ברור (למשל "לא זוהה דיבור" שלא הגיע אלינו בכלל, או מילה
+      // לא מזוהה) - פשוט ממשיכים בלי מייל, לא תוקעים בלולאה (מייל ממילא לא חובה, אפשר להוסיף באתר).
+      if (!domain) {
         const newUser = createPhoneUser(draft.fullName, draft.phone, null, draft.pin);
         return {
           text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
@@ -513,9 +523,11 @@ async function advanceSignup(state, speech, draft, opts = {}) {
           outcome: "phone_signup_completed",
         };
       }
-      const email = parseSpokenEmail(speech);
+
+      const localPart = buildEmailLocalPart(draft.fullName);
+      const email = localPart ? `${localPart}@${domain}` : null;
       const newUser = createPhoneUser(draft.fullName, draft.phone, email, draft.pin);
-      const emailNote = email ? `נשמרה גם כתובת המייל ${email}. ` : "לא זיהיתי כתובת מייל תקינה, ממשיכים בלי מייל - אפשר להוסיף אותה מאוחר יותר באתר. ";
+      const emailNote = email ? `נשמרה גם כתובת המייל ${email} (אפשר לשנות אותה מאוחר יותר באתר). ` : "";
       return {
         text: `נרשמת בהצלחה! ${emailNote}${mainMenuPrompt(newUser.full_name, opts)}`,
         nextState: "main_menu",
@@ -529,16 +541,29 @@ async function advanceSignup(state, speech, draft, opts = {}) {
   }
 }
 
-// ניסיון "כמיטב היכולת" להמיר מה שנאמר בקול לכתובת מייל: זיהוי דיבור בעברית לא קורא תווים כמו @ ונקודה
-// כמו שהם, אז אנשים בדרך כלל אומרים "כרוכית"/"שטרודל" או "at" במקום @, ו"נקודה"/"dot" במקום נקודה.
-// מחזיר null אם התוצאה לא נראית כמו כתובת מייל תקינה - כדי שלא נשמור זבל בשדה המייל.
-function parseSpokenEmail(rawSpeech) {
-  let t = String(rawSpeech || "").trim().toLowerCase();
-  t = t.replace(/\s*(כרוכית|שטרודל|@|\bat\b)\s*/g, "@");
-  t = t.replace(/\s*(נקודה|\bdot\b|\.)\s*/g, ".");
-  t = t.replace(/\s+/g, "");
-  const isValid = /^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/.test(t);
-  return isValid ? t : null;
+// טבלת תעתיק גס (עיצורים בעיקר, עם ניחוש סביר לתנועות ע"י ו/י) מעברית ללטינית - נועדה לבנות חלק
+// ראשון סביר לכתובת מייל (לפני השטרודל) מתוך השם המלא שכבר נאמר ונקלט בהצלחה קודם בשיחה, בלי לבקש
+// מהמתקשר לבטא שום דבר נוסף בקול. לא מדויקת מבחינה בלשנית (עברית כתובה לא כוללת את כל התנועות) - אבל
+// זה בסדר: המטרה היא כתובת ASCII סבירה וייחודית, לא תעתיק מושלם - אפשר תמיד לתקן אותה אח"כ באתר.
+const HEBREW_TO_LATIN = {
+  א: "a", ב: "b", ג: "g", ד: "d", ה: "h", ו: "v", ז: "z", ח: "ch", ט: "t",
+  י: "i", כ: "k", ך: "k", ל: "l", מ: "m", ם: "m", נ: "n", ן: "n", ס: "s",
+  ע: "a", פ: "p", ף: "f", צ: "tz", ץ: "tz", ק: "k", ר: "r", ש: "sh", ת: "t",
+};
+function buildEmailLocalPart(fullName) {
+  const transliterated = String(fullName || "")
+    .trim()
+    .toLowerCase()
+    .split("")
+    .map(ch => HEBREW_TO_LATIN[ch] ?? ch)
+    .join("");
+  const local = transliterated
+    .replace(/[^a-z0-9\s._-]/g, "")
+    .trim()
+    .replace(/\s+/g, ".")
+    .replace(/\.+/g, ".")
+    .replace(/^\.+|\.+$/g, "");
+  return local || null;
 }
 
 // יוצר משתמש חדש ישירות מתוך שיחת טלפון. הזיהוי בשיחות הבאות תמיד לפי Caller ID, לא סיסמה - אבל
