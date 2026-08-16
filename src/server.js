@@ -6,6 +6,17 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const { Router, json, html } = require("./router");
+const debugLog = require("./debugLog");
+
+// עוטפים את console.log כדי לתפוס אוטומטית כל שורת אבחון [YEMOT-DEBUG]/[WHISPER-DEBUG] לתוך
+// debugLog (ר' שם) - כדי שאפשר יהיה לראות אותן ישירות דרך /api/debug/yemot-recent, בלי לדפדף
+// ב-Logs של Render. לא נוגעים בהתנהגות הרגילה של console.log (עדיין מודפס כרגיל ל-Logs).
+const originalConsoleLog = console.log;
+console.log = (...args) => {
+  const line = args.map(String).join(" ");
+  if (/^\[(YEMOT|WHISPER)-DEBUG\]/.test(line)) debugLog.push(line);
+  originalConsoleLog(...args);
+};
 
 const router = new Router();
 

@@ -17,6 +17,7 @@ const { text, json } = require("../router");
 const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt, OPENING_GREETING, DIGIT_ENTRY_STATES } = require("./ivr");
 const { sayAndReadStt, sayAndRecord, sayAndReadDigits, sayAndHangup, VAL_NAME } = require("../services/yemot");
 const speechToText = require("../services/speechToText");
+const debugLog = require("../debugLog");
 
 // שלבים שמבקשים טקסט חופשי גרידא (שם, לא קטגוריה/ספרה) - אין בהם שום קיצור הקשה בעל משמעות,
 // ולכן אפשר להעביר אותם למנוע ה"הקלטה" של ימות (freeText ב-sayAndReadStt) לזיהוי דיבור מדויק
@@ -170,6 +171,40 @@ function register(router) {
     } catch (e) {
       return json(ctx.res, 500, { error: e.message });
     }
+  });
+
+  // --- אבחון זמני, גרסה מהירה: הכל בכתובת אחת ---
+  // במקום "תתקשר -> תיכנס ל-Render -> תצלם מסך של Logs -> תשלח" בכל פעם, מסך אחד שמראה גם את
+  // שורות ה-[YEMOT-DEBUG]/[WHISPER-DEBUG] האחרונות (מ-debugLog, ר' שם) וגם את רשימת הקבצים
+  // העדכנית בתיקיית השלוחה (GetIVR2Dir) - טקסט פשוט שאפשר להעתיק-להדביק ישירות, בלי צילום מסך.
+  router.get("/api/debug/yemot-recent", async (ctx) => {
+    if (ctx.query.key !== DEBUG_KEY) {
+      return json(ctx.res, 403, { error: "אין הרשאה - חסר או שגוי פרמטר key" });
+    }
+    const lines = debugLog.getAll();
+    const logsText = lines.length
+      ? lines.map((e) => `${e.time}  ${e.line}`).join("\n")
+      : "(אין עדיין שורות אבחון בזיכרון - יתאפסו אחרי כל פריסה/הפעלה מחדש של השרת; תתקשר קודם ואז תרענן את הדף הזה)";
+
+    let filesText = "(לא נבדק - חסר YEMOT_API_TOKEN)";
+    if (process.env.YEMOT_API_TOKEN) {
+      const ext = process.env.YEMOT_EXTENSION_NUMBER || "";
+      const targetPath = ctx.query.path || ext || "/";
+      try {
+        const url = `https://www.call2all.co.il/ym/api/GetIVR2Dir?token=${encodeURIComponent(process.env.YEMOT_API_TOKEN)}&path=${encodeURIComponent(targetPath)}`;
+        const yemotRes = await fetch(url);
+        const rawText = await yemotRes.text();
+        filesText = rawText;
+      } catch (e) {
+        filesText = `שגיאה בבדיקת קבצים: ${e.message}`;
+      }
+    }
+
+    return text(
+      ctx.res,
+      200,
+      `=== שורות אבחון אחרונות (מהזיכרון, מתאפסות בכל פריסה מחדש) ===\n${logsText}\n\n=== רשימת קבצים נוכחית בשלוחה (GetIVR2Dir) ===\n${filesText}\n`
+    );
   });
 }
 
