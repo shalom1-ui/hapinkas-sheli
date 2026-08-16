@@ -45,8 +45,24 @@ const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "signup_
 // מראש בדיוק מה לעשות במקום לנחש/להתבלבל בין האפשרויות בזמן אמת.
 const RECORD_CONFIRM_HINT = " בתום דיבורכם תישמע שאלה, הקישו 1 לאישור ושמירה.";
 
+// כיבוי זמני של מצב ה"הקלטה גולמית + Whisper" (ר' README, סעיף "זיהוי דיבור משודרג"): אחרי כמה
+// ניסיונות תיקון שלא הצליחו (no_confirm_menu, הקשת #, הקשת 1, קידומת "ivr2:" ב-path) - ההקלטה עדיין
+// אף פעם לא נשמרת בפועל אצל ימות (GetIVR2Dir תמיד מחזיר files ריק), למרות שהפרוטוקול עצמו כן מפוענח
+// נכון על ידי ימות. שלחנו שאלה מפורטת לתמיכה הטכנית של ימות (ר' yemot-support-question.md) - עד
+// שתתקבל תשובה מועילה, חוזרים למנוע הזיהוי-לזיהוי הרגיל של ימות (freeText ב-sayAndReadStt) שכבר עובד
+// בפועל, כדי שההרשמה/התפריטים לא יישארו תקועים. **כדי להפעיל מחדש** את מצב ה-Whisper אחרי שהבעיה
+// תיפתר (למשל בעקבות תשובת התמיכה) - מספיק לשנות את הערך הבא ל-true, בלי שום שינוי קוד נוסף.
+const WHISPER_RECORD_MODE_ENABLED = false;
+
+// true רק כשגם המפתחות מוגדרים (YEMOT_API_TOKEN/YEMOT_EXTENSION_NUMBER/OPENAI_API_KEY) וגם הדגל
+// למעלה מופעל - כך שאפשר להשאיר את המפתחות מוגדרים בסביבת הייצור (Render) בלי חשש, וכל הבקרה על
+// הפעלה/כיבוי בפועל היא רק דרך הדגל הזה, במקום צריך.
+function whisperRecordModeActive() {
+  return WHISPER_RECORD_MODE_ENABLED && speechToText.isConfigured();
+}
+
 function freeTextPrompt(callId, text_) {
-  if (speechToText.isConfigured()) {
+  if (whisperRecordModeActive()) {
     // תוקן (ניסיון נוסף, ר' הערה מפורטת ב-speechToText.recordingPath): שולחים לפקודת ההקלטה את
     // recordPath (עם קידומת "ivr2:", כמו ש-DownloadFile דורשת) במקום path הגולמי (כמו ש-GetIVR2Dir
     // מקבל) - זו אי-ההתאמה היחידה שעוד לא נבדקה בין הפרוטוקולים המתועדים אצלנו.
@@ -90,7 +106,7 @@ function register(router) {
       }
 
       upsertCall(callId, user.id, "main_menu", {});
-      const menuVoiceOnly = speechToText.isConfigured();
+      const menuVoiceOnly = whisperRecordModeActive();
       return text(
         ctx.res,
         200,
@@ -113,7 +129,7 @@ function register(router) {
     // בהרשמה היה מחרוזת קטע-נתיב חסרת משמעות, שגם הוקראה בחזרה למתקשר (ר' README/CHANGELOG). התיקון:
     // כשהתמלול נכשל *במצב record* (כלומר isConfigured()==true) - מתייחסים לזה כאילו לא נשמע כלום
     // (speech ריק), כדי שהלוגיקה הרגילה של "לא שמעתי שם, נסו שוב" תיכנס לפעולה - בלי לקבל זבל כתשובה.
-    if (FREE_TEXT_STATES.has(call.state) && speechToText.isConfigured()) {
+    if (FREE_TEXT_STATES.has(call.state) && whisperRecordModeActive()) {
       const transcribed = await speechToText.downloadAndTranscribe(callId);
       if (transcribed) {
         console.log(`[WHISPER-DEBUG] שימוש בתמלול Whisper במקום זיהוי הדיבור של ימות: "${transcribed}"`);
@@ -131,7 +147,7 @@ function register(router) {
     // menuVoiceOnly: ר' הערה מפורטת ב-mainMenuPrompt (routes/ivr.js) - רק כשזה true מוסתרת ההזכרה
     // המילולית של הקשת 1-6 בתפריט הראשי (כי היא לא זמינה במצב הקלטה של Whisper); לשאר שאלות האישור
     // בשיחה (שאינן מצב הקלטה) זה לא משפיע - הן ממשיכות להשתמש ב-digitConfirm הרגיל.
-    const opts = { digitConfirm: true, menuVoiceOnly: speechToText.isConfigured() };
+    const opts = { digitConfirm: true, menuVoiceOnly: whisperRecordModeActive() };
     const result = call.user_id
       ? await advance(call.state, speech, draft, db.prepare("SELECT * FROM users WHERE id = ?").get(call.user_id), opts)
       : await advanceSignup(call.state, speech, draft, opts);
