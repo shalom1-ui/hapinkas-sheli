@@ -864,6 +864,24 @@ async function run() {
     const addedStudent = studentsAfterAdd.data.students.find(s => s.name === "משה ישראלי");
     assert(!!addedStudent, "התלמיד החדש שנוסף בטלפון אכן נשמר במסד הנתונים תחת החונך הנכון");
 
+    // תוקן (אבחון בפועל מול קו אמיתי): מילת המפתח "להוסיף" (צורת מקור/עתיד, הניסוח הכי טבעי בעברית
+    // לענות על "רוצים להוסיף אותו כתלמיד חדש?") הייתה חסרה מרשימת מילות המפתח - היו רק "הוסף"/"הוסיפו"
+    // (ציווי) - ולכן נפלה בטעות למסלול "מנסים שוב כאילו זה שם תלמיד" במקום להוסיף בפועל.
+    const ymAddStudentSpokenCallId = `${ymCallId}-add-student-spoken`;
+    await yemotCall({ callId: ymAddStudentSpokenCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymAddStudentSpokenCallId, speech: "חונכות" });
+    await yemotCall({ callId: ymAddStudentSpokenCallId, speech: "יוסי כהן" });
+    const ymAddStudentSpokenDone = await yemotCall({ callId: ymAddStudentSpokenCallId, speech: "להוסיף" });
+    assert(
+      ymAddStudentSpokenDone.includes("נוסף תלמיד חדש") && ymAddStudentSpokenDone.includes("יוסי כהן"),
+      "אמירת 'להוסיף' (לא רק 'הוסף'/הקשת 1) בשלב אישור הוספת תלמיד חדש אכן מוסיפה אותו בפועל, ולא מתפרשת בטעות כניסיון נוסף לומר שם"
+    );
+    const studentsAfterSpokenAdd = await api("GET", "/api/students", null, token);
+    assert(
+      studentsAfterSpokenAdd.data.students.some(s => s.name === "יוסי כהן"),
+      "התלמיד שנוסף באמירת 'להוסיף' אכן נשמר במסד הנתונים"
+    );
+
     console.log("\n➖ חונכות: הסרת תלמיד (מחיקה רכה, active=0) - גם מהטלפון וגם מהאתר");
     const ymRemoveCallId = `${ymCallId}-remove-student`;
     await yemotCall({ callId: ymRemoveCallId, phone: "0500000001" });

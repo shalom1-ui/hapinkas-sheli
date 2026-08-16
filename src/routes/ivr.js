@@ -284,7 +284,11 @@ async function advance(state, speech, draft, user, opts = {}) {
     }
     case "mentor_confirm_add_student": {
       const digit = onlyDigits(s);
-      const wantsAdd = digit === "1" || includesAny(s, ["כן", "אישור", "מאשר", "לאשר", "מאושר", "הוסיפו", "הוסף"]);
+      // תוקן (אבחון בפועל מול קו אמיתי): "להוסיף" (צורת המקור/עתיד, "אני רוצה להוסיף") היה חסר מרשימת
+      // מילות המפתח - היו רק "הוסף"/"הוסיפו" (ציווי). מי שענה על השאלה "רוצים להוסיף אותו כתלמיד חדש?"
+      // באופן טבעי ביותר בעברית ("כן, להוסיף") לא זוהה בכלל כאישור, ונפל בטעות למסלול "מנסים שוב כאילו
+      // זה שם תלמיד" (השורות למטה) - כלומר המערכת "חשבה" שהמילה "להוסיף" היא ניסיון נוסף לומר שם.
+      const wantsAdd = digit === "1" || includesAny(s, ["כן", "אישור", "מאשר", "לאשר", "מאושר", "הוסיפו", "הוסף", "להוסיף"]);
       const wantsCancel = digit === "2" || includesAny(s, ["לא", "ביטול", "בטל"]);
       if (wantsAdd) {
         const info = db.prepare("INSERT INTO students (owner_user_id, name) VALUES (?, ?)").run(user.id, draft.pendingStudentName);
