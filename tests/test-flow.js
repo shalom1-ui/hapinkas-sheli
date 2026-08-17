@@ -986,6 +986,16 @@ async function run() {
       sayAndGoToRecordExtension("מה שמך", "2") === "id_list_message=t-מה שמך.g-/2",
       "sayAndGoToRecordExtension בונה פקודת מעבר-שלוחה בפורמט id_list_message=t-<טקסט>.g-/<שלוחה> - כמו sayAndHangup, עם יעד שלוחה במקום hangup"
     );
+    // תוקן (באג אמיתי שהתגלה בבדיקה חיה - ר' README): רשת הביטחון שמזהה תמלול "מוזה" בכתב לא-עברי
+    // (Whisper החזיר בפועל "Conchód"/"Холхот"/"خونخود" במקום "חונכות" בעברית) - containsHebrew.
+    assert(
+      speechToText.containsHebrew("שלום שטיינברג") === true,
+      "containsHebrew מזהה נכון טקסט עברי תקין"
+    );
+    assert(
+      speechToText.containsHebrew("Conchód.") === false && speechToText.containsHebrew("Холхот") === false && speechToText.containsHebrew("خونخود") === false,
+      "containsHebrew מזהה נכון תמלול 'מוזה' בכתב לטיני/קירילי/ערבי (בלי אף אות עברית) - כמו שנצפה בפועל בבדיקה חיה עם gpt-4o-mini-transcribe"
+    );
 
   } catch (err) {
     failed++;

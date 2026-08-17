@@ -36,6 +36,16 @@ const debugLog = require("../debugLog");
 // (transactions_pick_type וכו') שגם הם לא ב-FREE_TEXT_STATES - כדי שהקשת הספרה תעבוד בלי חסימה.
 const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "main_menu"]);
 
+// תוקן (באג אמיתי שהתגלה בבדיקה חיה - ר' הערה מפורטת ב-speechToText.transcribeAudio): "רמז אוצר
+// מילים" ל-Whisper, לפי השלב הנוכחי בשיחה - מוטה את התמלול לכיוון עברית ולכיוון המילים הצפויות
+// באמת בשלב הזה. הכי משמעותי בתפריט הראשי, ששם יש רשימת מילים סגורה וידועה מראש (קטגוריות) -
+// זה בדיוק השלב שבו נצפתה "הזיה" של תמלול בכתב לא-עברי (לטיני/קירילי/ערבי) לגמרי חסר משמעות.
+function vocabularyHintFor(state) {
+  if (state === "main_menu") return "ניהול חשבונות, תנועות, חונכות, מטפלים, הורה, הערת מפקח";
+  if (state === "signup_name" || state === "mentor_pick_student") return "שם פרטי ושם משפחה בעברית, לדוגמה: שלום כהן, דוד לוי, רחל אברהם";
+  return undefined;
+}
+
 // בונה את תגובת הפרוטוקול לבקשת קלט טקסט חופשי (שם וכו') עבור שלב נתון - בוחר בין שתי אפשרויות:
 // (1) אם מוגדר זיהוי דיבור משודרג (Whisper) - מעבירים את השיחה זמנית לשלוחת ההקלטה הנפרדת
 //     (sayAndGoToRecordExtension, ר' services/yemot.js) שתשמור את ההקלטה ותחזיר את השיחה אלינו;
@@ -83,22 +93,43 @@ function freeTextPrompt(callId, text_) {
 // שיחה (go_to_folder) לשלוחת ההקלטה וחזרה (record_end_goto) - ייתכן שימות "פותחת" שיחה חדשה
 // מבחינתה ושולחת ApiCallId חדש. כרשת ביטחון: אם לא נמצאה שיחה קיימת לפי ApiCallId החדש, מחפשים
 // שיחה אחרונה מאותו מספר טלפון שסומנה כ"ממתינה להקלטה" (_recording:true) ועודכנה לאחרונה (בתוך
-// 3 דקות) - ואם נמצאה, "מאמצים" אותה: משנים את call_sid שלה ל-ApiCallId החדש, כאילו זו אותה שיחה
+// 90 שניות) - ואם נמצאה, "מאמצים" אותה: משנים את call_sid שלה ל-ApiCallId החדש, כאילו זו אותה שיחה
 // מההתחלה. אם ApiCallId בכל זאת נשאר זהה (הארכיטקטורה "מתנהגת יפה") - הפונקציה הזו פשוט לא תמצא
 // כלום ולא משנה שום התנהגות קיימת.
+//
+// תוקן (באג אמיתי שהתגלה בבדיקה חיה - ר' README): בגרסה הראשונה, הפונקציה הזו הופעלה על **כל**
+// בקשה שלא נמצאה לה שיחה - כולל בקשת "פתיחת שיחה" הראשונה של חיוג חדש לגמרי (ApiExtension ריק).
+// זה גרם לתקלה מבלבלת: כשמתקשר ניתק באמצע (למשל תוך כדי שהשיחה עדיין "תקועה" עם _recording:true),
+// וחייג שוב תוך פחות מ-3 דקות - הבקשה הראשונה של החיוג ה**חדש** (ApiExtension ריק, לא קשור בכלל
+// לשלוחת ההקלטה) "אומצה" בטעות לתוך השיחה הישנה והתקועה, במקום להתחיל שיחה חדשה נקייה עם ברכת
+// פתיחה רגילה - מה שנראה למתקשר כאילו "המערכת לא ממשיכה" (כי בפועל היא ניסתה לתמלל הקלטה ישנה
+// במקום להשמיע ברכה). התיקון: (1) קוראים לפונקציה הזו רק כשיש ApiExtension בבקשה (כלומר זו לא
+// בקשת הפתיחה הראשונה של חיוג - ר' הקריאה למטה); (2) בכל ניתוק (hangup=yes) מנקים את הדגל
+// _recording מהשיחה הפעילה (ר' למטה) כדי ששיחה שנגמרה לעולם לא תאומץ בטעות ע"י חיוג עתידי.
 function reattachRecordingCall(callId, phone) {
   const candidates = phoneCandidates(phone);
   if (!candidates.length) return null;
   const placeholders = candidates.map(() => "?").join(",");
   const row = db
     .prepare(
-      `SELECT * FROM call_logs WHERE phone IN (${placeholders}) AND draft_json LIKE '%"_recording":true%' AND updated_at >= datetime('now', '-3 minutes') ORDER BY updated_at DESC LIMIT 1`
+      `SELECT * FROM call_logs WHERE phone IN (${placeholders}) AND draft_json LIKE '%"_recording":true%' AND updated_at >= datetime('now', '-90 seconds') ORDER BY updated_at DESC LIMIT 1`
     )
     .get(...candidates);
   if (!row) return null;
   db.prepare("UPDATE call_logs SET call_sid = ?, updated_at = datetime('now') WHERE id = ?").run(callId, row.id);
   console.log(`[YEMOT-DEBUG] אימוץ שיחה קיימת (id=${row.id}) תחת ApiCallId חדש (${callId}) לפי מספר טלפון - ApiCallId כנראה השתנה במעבר בין שלוחות`);
   return { ...row, call_sid: callId };
+}
+
+// מנקה את דגל "_recording" משיחה שמסתיימת (ר' הערה מפורטת ב-reattachRecordingCall למעלה) - כדי
+// ששיחה שהמתקשר ניתק ממנה תוך כדי שהיא "ממתינה להקלטה" לעולם לא תיאמץ בטעות לתוך חיוג עתידי חדש.
+function clearRecordingFlagOnHangup(callId) {
+  const row = db.prepare("SELECT draft_json FROM call_logs WHERE call_sid = ?").get(callId);
+  if (!row) return;
+  const draft = JSON.parse(row.draft_json || "{}");
+  if (!draft._recording) return;
+  delete draft._recording;
+  db.prepare("UPDATE call_logs SET draft_json = ?, updated_at = datetime('now') WHERE call_sid = ?").run(JSON.stringify(draft), callId);
 }
 
 function register(router) {
@@ -115,8 +146,10 @@ function register(router) {
       return text(ctx.res, 200, "בקשה זו אינה בקשת ימות המשיח תקינה (חסר ApiCallId)");
     }
 
-    // המתקשר ניתק - אין מה להשיב
+    // המתקשר ניתק - אין מה להשיב. גם מנקים את דגל _recording אם היה דלוק (ר' clearRecordingFlagOnHangup
+    // למעלה) - כדי שהשיחה הזו לעולם לא תיאמץ בטעות ע"י חיוג חדש עתידי מאותו מספר.
     if (v.hangup === "yes") {
+      clearRecordingFlagOnHangup(callId);
       return text(ctx.res, 200, "");
     }
 
@@ -124,8 +157,10 @@ function register(router) {
 
     // אם לא נמצאה שיחה לפי ApiCallId החדש - ייתכן שזו בכלל שיחה קיימת שחזרה משלוחת ההקלטה עם
     // ApiCallId שונה (ר' הערה מפורטת ב-reattachRecordingCall למעלה). מנסים לאמץ אותה לפי טלפון
-    // לפני שמתייחסים לזה כאילו זו שיחה חדשה לגמרי.
-    if (!call) {
+    // לפני שמתייחסים לזה כאילו זו שיחה חדשה לגמרי. תוקן (באג אמיתי): מנסים לאמץ **רק** אם יש
+    // ApiExtension בבקשה - בקשת ה"פתיחה" הראשונה של חיוג חדש לגמרי (ApiExtension ריק) לעולם לא
+    // אמורה להיות ניסיון "חזרה" משלוחת הקלטה, ולכן לא בודקים אותה מול שיחות ישנות בכלל.
+    if (!call && v.ApiExtension) {
       call = reattachRecordingCall(callId, v.ApiPhone);
     }
 
@@ -162,7 +197,7 @@ function register(router) {
     if (draft._recording) {
       delete draft._recording;
       if (whisperRecordModeActive()) {
-        const transcribed = await speechToText.downloadAndTranscribe();
+        const transcribed = await speechToText.downloadAndTranscribe(vocabularyHintFor(call.state));
         if (transcribed) {
           console.log(`[WHISPER-DEBUG] שימוש בתמלול Whisper במקום זיהוי הדיבור של ימות: "${transcribed}"`);
           speech = transcribed;

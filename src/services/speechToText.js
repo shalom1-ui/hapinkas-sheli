@@ -118,16 +118,34 @@ async function downloadYemotRecording(downloadPath, attempt = 1) {
   }
 }
 
-// שולח קובץ שמע לתמלול אצל OpenAI ומחזיר את הטקסט המתומלל בעברית, או null אם נכשל/לא מוגדר.
-// המודל: gpt-4o-mini-transcribe (לא whisper-1 הישן) - זול יותר (כ-0.003$ לדקה) ומופיע כמודל התמלול
-// הנוכחי בתיעוד המחירים הרשמי של OpenAI - ר' README, סעיף "זיהוי דיבור משודרג" להסבר עלויות מלא.
-async function transcribeAudio(audioBuffer) {
+// בודק שיש לפחות אות עברית אחת בטקסט (טווח יוניקוד של עברית: א-ת, כולל ניקוד/גרשיים).
+function containsHebrew(str) {
+  return /[֐-׿]/.test(String(str || ""));
+}
+
+// תוקן (באג אמיתי שהתגלה בבדיקה חיה בפועל - ר' README): המודל gpt-4o-mini-transcribe, למרות
+// שהתבקש בפירוש language="he", "הזה" (hallucinate) לפעמים את התמלול בכתב **לא-עברי** לגמרי -
+// בדיקות חוזרות מול קו אמיתי הראו את אותה מילה בעברית ("חונכות") מתומללת בכל פעם בכתב אחר לגמרי:
+// פעם אחת כאותיות לטיניות ("Conchód"), פעם כקיריליות ("Холхот"), פעם כערבית ("خونخود") - אף פעם
+// לא בעברית עצמה! גם שם (Shalom Steinberg) תומלל נכון מבחינת התוכן אבל בכתב לטיני במקום עברי.
+// המעבר למודל whisper-1 (הישן והבוגר יותר, בניגוד לגרסאות ה"4o" החדשות) נועד לשפר את זה - הוא
+// מודל שנבדק במשך שנים על תמלול רב-לשוני ונחשב אמין יותר עבור שפות שאינן אנגלית. בנוסף, כרשת
+// ביטחון (ר' containsHebrew למעלה) - אם בכל זאת מתקבל תמלול בלי אף אות עברית אחת, מתייחסים לזה
+// כאל כישלון (מחזירים null) במקום לנסות להשתמש בטקסט חסר-משמעות הזה - כדי שהמערכת תבקש מהמתקשר
+// לנסות שוב, במקום "להיתקע" בלולאה שמנסה להתאים קטגוריה/שם לטקסט שלעולם לא יתאים.
+async function transcribeAudio(audioBuffer, vocabularyHint) {
   if (!isConfigured() || !audioBuffer) return null;
   try {
     const form = new FormData();
     form.append("file", new Blob([audioBuffer], { type: "audio/wav" }), "recording.wav");
-    form.append("model", "gpt-4o-mini-transcribe");
+    form.append("model", "whisper-1");
     form.append("language", "he"); // מבקשים במפורש עברית - עוזר לדיוק, גם אם המודל יודע לזהות שפה לבד
+    // "prompt" של Whisper: לא הוראה למודל, אלא "רמז אוצר מילים" - מוטה את התמלול לכיוון מילים/כתיב
+    // שמופיעים בו. שימושי במיוחד לשלבים עם רשימת מילים סגורה וידועה מראש (כמו קטגוריות התפריט
+    // הראשי) - ר' קריאה ב-routes/yemot.js שמעבירה כאן את המילים הרלוונטיות לשלב הנוכחי בשיחה.
+    if (vocabularyHint) {
+      form.append("prompt", vocabularyHint);
+    }
     const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
       method: "POST",
       headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
@@ -141,6 +159,10 @@ async function transcribeAudio(audioBuffer) {
     const data = await res.json();
     const transcribed = String(data.text || "").trim();
     console.log(`[WHISPER-DEBUG] תמלול Whisper: "${transcribed}"`);
+    if (transcribed && !containsHebrew(transcribed)) {
+      console.log(`[WHISPER-DEBUG] התמלול לא מכיל אף אות עברית ("${transcribed}") - כנראה "הזיה" של המודל (שפה/כתב שגויים), מתייחסים לזה כאילו נכשל`);
+      return null;
+    }
     return transcribed || null;
   } catch (e) {
     console.log(`[WHISPER-DEBUG] שגיאה בתמלול Whisper: ${e.message}`);
@@ -150,7 +172,8 @@ async function transcribeAudio(audioBuffer) {
 
 // פונקציית נוחות משולבת: מוצאת את ההקלטה האחרונה בשלוחת ההקלטה, מורידה ומתמללת אותה בפעולה אחת.
 // מחזירה null בכל כישלון בדרך (ואז הקוד הקורא נופל בחזרה לזיהוי הדיבור הרגיל של ימות).
-async function downloadAndTranscribe() {
+// vocabularyHint אופציונלי - ר' הערה ב-transcribeAudio - מועבר משם השלב הנוכחי בשיחה (routes/yemot.js).
+async function downloadAndTranscribe(vocabularyHint) {
   if (!isConfigured()) return null;
   const fileName = await findLatestRecording();
   if (!fileName) return null;
@@ -158,7 +181,7 @@ async function downloadAndTranscribe() {
   const downloadPath = `ivr2:${recordExt}/${fileName}`;
   const audio = await downloadYemotRecording(downloadPath);
   if (!audio) return null;
-  return transcribeAudio(audio);
+  return transcribeAudio(audio, vocabularyHint);
 }
 
-module.exports = { isConfigured, findLatestRecording, downloadYemotRecording, transcribeAudio, downloadAndTranscribe };
+module.exports = { isConfigured, findLatestRecording, downloadYemotRecording, transcribeAudio, downloadAndTranscribe, containsHebrew };
