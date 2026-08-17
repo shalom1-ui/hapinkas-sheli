@@ -177,6 +177,28 @@ function addStudentDigitsNote(opts) {
   return opts && opts.digitConfirm ? " אפשר גם להקיש: 1 להוספה, 2 לביטול." : "";
 }
 
+// מנסה להתאים קטגוריה בתפריט הראשי (כולל מילות סיום שיחה) - מחזיר null אם לא זוהתה אף קטגוריה,
+// כדי שהקורא יחליט מה לעשות עם קלט לא מזוהה (הודעת "לא הבנתי" משלו). משותף גם לתפריט הראשי עצמו
+// (case "main_menu") וגם לכל שלב אחר שרוצה "ליפול חזרה" לאותה התאמה - כרגע: balance_next_action,
+// כדי שאפשר יהיה למשל לומר "חונכות" גם ישר אחרי קריאת יתרה, בלי לחזור קודם לתפריט הראשי במפורש.
+function matchMainMenuCategory(es, opts, user) {
+  // אפשרות לסיים את השיחה בנימוס מכל מקום שמריץ את ההתאמה הזו (למשל אחרי ששמעו יתרה וחוזרים לכאן,
+  // ר' doBalance) - בלי זה, הדרך היחידה לסיים שיחה הייתה תמיד באמצע פעולה ספציפית (הוספת
+  // הוצאה/הכנסה וכד'), ולא היה אפשר פשוט "לצאת" מהתפריט הראשי עצמו.
+  if (includesAny(es, ["לסיים", "סיימתי", "תודה", "להתראות", "סיום", "לא תודה"])) {
+    return { text: "תודה, להתראות.", nextState: "done", hangup: true, outcome: "menu_exit" };
+  }
+  if (includesAny(es, ["ניהול חשבונות", "חשבונות", "יתרה", "מצב חשבון"])) return doBalance(user);
+  if (includesAny(es, ["הוצאה", "הוצאות"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
+  if (includesAny(es, ["הכנסה", "הכנסות"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
+  if (includesAny(es, ["תנועות", "תנועה"])) return { text: transactionsTypePrompt(opts), nextState: "transactions_pick_type" };
+  if (includesAny(es, ["חונכות", "תלמיד"])) return { text: "מה שם התלמיד?", nextState: "mentor_pick_student" };
+  if (includesAny(es, ["מטפלים", "מטפל", "דיווח", "ריפוי", "רגשי"])) return { text: "מה סוג הדיווח: ריפוי בעיסוק, טיפול רגשי, או אחר?", nextState: "therapist_role" };
+  if (includesAny(es, ["הורה", "הורים"])) return startGuardianFlow(user);
+  if (includesAny(es, ["מפקח", "הערת מפקח", "הערה"])) return { text: "על איזה תלמיד ההערה?", nextState: "supervisor_pick_student" };
+  return null;
+}
+
 // ---------- מכונת המצבים ----------
 // כל צומת מקבל (speech, draft, user, opts) ומחזיר { text, nextState, draft?, hints?, hangup?, outcome? }
 // opts.digitConfirm: true בערוצים שתומכים בהקשת ספרות/סולמית תוך כדי זיהוי דיבור (כרגע: ימות בלבד -
@@ -189,21 +211,29 @@ async function advance(state, speech, draft, user, opts = {}) {
       // אפשר להקיש ספרה (1-6) במקום לדבר - ר' MAIN_MENU_DIGIT_KEYWORDS. מתייחסים אליה כאילו נאמרה
       // מילת המפתח המתאימה, ומריצים דרך אותה לוגיקת התאמה כרגיל.
       const es = mainMenuDigitKeyword(s) || s;
-      // אפשרות לסיים את השיחה בנימוס מהתפריט הראשי עצמו (למשל אחרי ששמעו יתרה וחוזרים לכאן,
-      // ר' doBalance) - בלי זה, הדרך היחידה לסיים שיחה הייתה תמיד באמצע פעולה ספציפית (הוספת
-      // הוצאה/הכנסה וכד'), ולא היה אפשר פשוט "לצאת" מהתפריט הראשי עצמו.
-      if (includesAny(es, ["לסיים", "סיימתי", "תודה", "להתראות", "סיום", "לא תודה"])) {
-        return { text: "תודה, להתראות.", nextState: "done", hangup: true, outcome: "menu_exit" };
-      }
-      if (includesAny(es, ["ניהול חשבונות", "חשבונות", "יתרה", "מצב חשבון"])) return doBalance(user);
-      if (includesAny(es, ["הוצאה", "הוצאות"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
-      if (includesAny(es, ["הכנסה", "הכנסות"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
-      if (includesAny(es, ["תנועות", "תנועה"])) return { text: transactionsTypePrompt(opts), nextState: "transactions_pick_type" };
-      if (includesAny(es, ["חונכות", "תלמיד"])) return { text: "מה שם התלמיד?", nextState: "mentor_pick_student" };
-      if (includesAny(es, ["מטפלים", "מטפל", "דיווח", "ריפוי", "רגשי"])) return { text: "מה סוג הדיווח: ריפוי בעיסוק, טיפול רגשי, או אחר?", nextState: "therapist_role" };
-      if (includesAny(es, ["הורה", "הורים"])) return startGuardianFlow(user);
-      if (includesAny(es, ["מפקח", "הערת מפקח", "הערה"])) return { text: "על איזה תלמיד ההערה?", nextState: "supervisor_pick_student" };
+      const match = matchMainMenuCategory(es, opts, user);
+      if (match) return match;
       return { text: `לא הבנתי.${retryHint()} אפשר לומר: ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+    }
+
+    // ---------- אחרי קריאת יתרה (ר' doBalance): הצעה להוסיף הכנסה/הוצאה ----------
+    // תוקן (משוב אמיתי ממשתמש): "ניהול חשבונות" קרא רק את היתרה וחזר לתפריט הראשי הרגיל - המשתמש
+    // ציפה (בדיוק כמו באתר) שישאל מיד אם להוסיף הכנסה/הוצאה, כולל קיצור הקשה ייעודי (1=הכנסה,
+    // 2=הוצאה - **שונה** מהמיפוי הרגיל של 1/2 בתפריט הראשי, ר' MAIN_MENU_DIGIT_KEYWORDS, בדיוק כמו
+    // ב-transactions_pick_type). כל שאר הקטגוריות (חונכות, תנועות וכו') וגם מילות הסיום עדיין
+    // עובדות מכאן, דרך אותה matchMainMenuCategory משותפת עם main_menu - כדי לא לאבד גמישות.
+    case "balance_next_action": {
+      const digit = onlyDigits(s);
+      if (digit === "1" || includesAny(s, ["הכנסה", "הכנסות"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
+      if (digit === "2" || includesAny(s, ["הוצאה", "הוצאות"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
+      const es = mainMenuDigitKeyword(s) || s;
+      const match = matchMainMenuCategory(es, opts, user);
+      if (match) return match;
+      return {
+        text: `לא הבנתי.${retryHint()} רוצים להוסיף הכנסה או הוצאה, או לסיים? אפשר גם להקיש: 1 להכנסה, 2 להוצאה.`,
+        nextState: "balance_next_action",
+        hints: MAIN_MENU_HINTS,
+      };
     }
 
     // ---------- תנועות: בחירת סוג (הכנסה/הוצאה) ----------
@@ -493,8 +523,8 @@ async function advanceSignup(state, speech, draft, opts = {}) {
       const digits = onlyDigits(speech);
       if (digits && digits.length === 4 && digits === draft.pendingPin) {
         return {
-          text: "הקוד הוגדר בהצלחה. אפשר גם לצרף כתובת מייל לחשבון, זה לא חובה - אין צורך לדבר, רק הקישו: 1 לכתובת ג'ימייל, 2 לכתובת אאוטלוק, או 0 להמשך בלי מייל.",
-          nextState: "signup_email",
+          text: "הקוד הוגדר בהצלחה. רוצים לצרף כתובת מייל קיימת לחשבון? זה לא חובה. אמרו כן, או הקישו 1. אם לא, אמרו לא, או הקישו 0.",
+          nextState: "signup_email_offer",
           draft: { ...draft, pin: draft.pendingPin, pendingPin: undefined },
         };
       }
@@ -504,21 +534,25 @@ async function advanceSignup(state, speech, draft, opts = {}) {
         draft: { ...draft, pendingPin: undefined },
       };
     }
-    // תוקן (אבחון בפועל מול קו אמיתי - ר' README/yemot-support-question.md): בעבר ביקשנו מהמתקשר
-    // לומר את כל כתובת המייל בקול (כולל "שטרודל"/"נקודה") - בבדיקה בפועל התברר שזה נכשל כמעט תמיד
-    // ("לא זוהה דיבור"), כי הקראת סימנים כאלה בקול היא תוכן קשה במיוחד לזיהוי דיבור, בכל מנוע. התיקון:
-    // בכלל לא מבקשים לדבר בשלב הזה - החלק הראשון של הכתובת (לפני השטרודל) נבנה אוטומטית מהשם המלא
-    // שכבר נאמר בהצלחה קודם בשיחה (ר' buildEmailLocalPart), והספק (gmail/outlook) נבחר בהקשת ספרה
-    // בלבד (אמינה כמעט תמיד, בניגוד לזיהוי דיבור) - כך שלא צריך לבטא שום סימן בקול בכלל.
-    case "signup_email": {
-      const digit = onlyDigits(s);
-      const wantsGmail = digit === "1" || includesAny(s, ["גימייל", "גימיל", "ג'ימייל"]);
-      const wantsOutlook = digit === "2" || includesAny(s, ["אאוטלוק", "אוטלוק"]);
-      const domain = wantsGmail ? "gmail.com" : wantsOutlook ? "outlook.com" : null;
-
-      // גם 0/"דלג" מפורש, וגם כל קלט אחר לא ברור (למשל "לא זוהה דיבור" שלא הגיע אלינו בכלל, או מילה
-      // לא מזוהה) - פשוט ממשיכים בלי מייל, לא תוקעים בלולאה (מייל ממילא לא חובה, אפשר להוסיף באתר).
-      if (!domain) {
+    // תוקן (משוב אמיתי ממשתמש בבדיקה חיה): בעבר בשלב הזה לא ביקשנו לדבר בכלל - רק בחירת ספק בהקשה
+    // (1/2/0), וה"כתובת" עצמה נבנתה אוטומטית מתעתיק לטיני של השם המלא (ר' buildEmailLocalPart/
+    // HEBREW_TO_LATIN שהוסרו). זו לא הייתה כתובת אמיתית שאפשר לשלוח אליה שום דבר - בדיוק מה שגרם
+    // לבלבול ("לחצתי 1 וזה לא נכון"). התיקון: קודם שואלים כן/לא רגיל אם יש כתובת קיימת לצרף (שלב
+    // "רגיל" - לא טקסט חופשי, בדיוק כמו expense_confirm וכו') - ורק אם "כן", עוברים לבקש להכתיב את
+    // הכתובת האמיתית בקול (case "signup_email_speak", כן טקסט חופשי - ר' FREE_TEXT_STATES ב-
+    // routes/yemot.js). בניסיון קודם (מתועד למטה, ר' parseSpokenEmail) הכתבת מייל בקול נכשלה כמעט
+    // תמיד מול מנוע הזיהוי המובנה של ימות - אבל עכשיו, עם אותו מנגנון תמלול Whisper מדויק שכבר
+    // עובד היטב בתפריט הראשי, יש סיכוי טוב בהרבה שזה יעבוד. אם בכל זאת לא מצליחים לפענח כתובת
+    // תקינה - פשוט מדלגים (בלי מייל, אפשר להוסיף אח"כ באתר) במקום להמציא כתובת מזויפת.
+    case "signup_email_offer": {
+      if (isConfirmYes(s, opts)) {
+        return {
+          text: "אמרו את כתובת המייל שלכם עכשיו, לאט אם אפשר. לדוגמה: שם המשתמש, שטרודל, ג'ימייל.",
+          nextState: "signup_email_speak",
+          draft,
+        };
+      }
+      if (isConfirmNo(s, opts)) {
         const newUser = createPhoneUser(draft.fullName, draft.phone, null, draft.pin);
         return {
           text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
@@ -528,17 +562,61 @@ async function advanceSignup(state, speech, draft, opts = {}) {
           outcome: "phone_signup_completed",
         };
       }
-
-      const localPart = buildEmailLocalPart(draft.fullName);
-      const email = localPart ? `${localPart}@${domain}` : null;
-      const newUser = createPhoneUser(draft.fullName, draft.phone, email, draft.pin);
-      const emailNote = email ? `נשמרה גם כתובת המייל ${email} (אפשר לשנות אותה מאוחר יותר באתר). ` : "";
       return {
-        text: `נרשמת בהצלחה! ${emailNote}${mainMenuPrompt(newUser.full_name, opts)}`,
-        nextState: "main_menu",
-        newUserId: newUser.id,
-        hints: MAIN_MENU_HINTS,
-        outcome: "phone_signup_completed",
+        text: `לא הבנתי.${retryHint()} רוצים לצרף כתובת מייל קיימת לחשבון? זה לא חובה. אמרו כן, או הקישו 1. אם לא, אמרו לא, או הקישו 0.`,
+        nextState: "signup_email_offer",
+        draft,
+      };
+    }
+    case "signup_email_speak": {
+      const spokenTrim = String(speech || "").trim();
+      // אם אין כלום, או שנאמרה בפירוש מילת דילוג/ויתור - ממשיכים בלי מייל (לא תוקעים בלולאה).
+      if (!spokenTrim || includesAny(s, ["דלג", "לא רוצה", "בלי מייל", "ללא מייל", "ביטול"])) {
+        const newUser = createPhoneUser(draft.fullName, draft.phone, null, draft.pin);
+        return {
+          text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
+          nextState: "main_menu",
+          newUserId: newUser.id,
+          hints: MAIN_MENU_HINTS,
+          outcome: "phone_signup_completed",
+        };
+      }
+      const parsed = parseSpokenEmail(speech);
+      if (!parsed) {
+        return {
+          text: `לא הצלחתי להבין כתובת מייל תקינה מתוך "${spokenTrim}".${retryHint()} אפשר לנסות שוב לאט, למשל: השם שלכם, שטרודל, ג'ימייל. או להגיד "דלג" כדי להמשיך בלי מייל.`,
+          nextState: "signup_email_speak",
+          draft,
+        };
+      }
+      return {
+        text: `לאשר: כתובת המייל שלכם היא ${parsed}? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        nextState: "signup_email_confirm",
+        draft: { ...draft, pendingEmail: parsed },
+      };
+    }
+    case "signup_email_confirm": {
+      if (isConfirmYes(s, opts)) {
+        const newUser = createPhoneUser(draft.fullName, draft.phone, draft.pendingEmail, draft.pin);
+        return {
+          text: `נרשמת בהצלחה! נשמרה גם כתובת המייל ${draft.pendingEmail} (אפשר לשנות אותה מאוחר יותר באתר). ${mainMenuPrompt(newUser.full_name, opts)}`,
+          nextState: "main_menu",
+          newUserId: newUser.id,
+          hints: MAIN_MENU_HINTS,
+          outcome: "phone_signup_completed",
+        };
+      }
+      if (isConfirmNo(s, opts)) {
+        return {
+          text: "בסדר, ננסה שוב. אמרו את כתובת המייל שלכם עכשיו, לאט אם אפשר.",
+          nextState: "signup_email_speak",
+          draft: { ...draft, pendingEmail: undefined },
+        };
+      }
+      return {
+        text: `לא הבנתי.${retryHint()} לאשר: כתובת המייל שלכם היא ${draft.pendingEmail}? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        nextState: "signup_email_confirm",
+        draft,
       };
     }
     default:
@@ -546,29 +624,83 @@ async function advanceSignup(state, speech, draft, opts = {}) {
   }
 }
 
-// טבלת תעתיק גס (עיצורים בעיקר, עם ניחוש סביר לתנועות ע"י ו/י) מעברית ללטינית - נועדה לבנות חלק
-// ראשון סביר לכתובת מייל (לפני השטרודל) מתוך השם המלא שכבר נאמר ונקלט בהצלחה קודם בשיחה, בלי לבקש
-// מהמתקשר לבטא שום דבר נוסף בקול. לא מדויקת מבחינה בלשנית (עברית כתובה לא כוללת את כל התנועות) - אבל
-// זה בסדר: המטרה היא כתובת ASCII סבירה וייחודית, לא תעתיק מושלם - אפשר תמיד לתקן אותה אח"כ באתר.
+// ---------- כתובת מייל בהרשמה טלפונית: פענוח הכתבה בקול ----------
+// מזהה מילות סימנים נפוצות בעברית ("שטרודל"/"כרוכית" ל-@, "נקודה" לנקודה וכו') וגם ספקי מייל
+// נפוצים - ומחזיר כתובת מייל תקינה אם אפשר לזהות אחת בבירור, אחרת null (ואז מבקשים לנסות שוב,
+// ר' case "signup_email_speak"). לא מנסה לפרש ספרות שנאמרו במילים (למשל "שמונים וחמש") - Whisper
+// בדרך כלל כבר מתמלל מספרים קצרים כספרות; אם לא, המשתמש יתפוס את זה בקריאה חוזרת לאישור
+// (ר' signup_email_confirm) וינסה שוב.
+// תוקן (נבדק ידנית מול כמה ניסוחים אמיתיים אפשריים): גרסה קודמת "מחקה" מילת ספק כמו "ג'ימייל" מהטקסט
+// כדי להשלים סיומת ".com" אוטומטית - אבל זה שבר בדיוק את המקרה הכי טבעי, שבו המתקשר כן אומר את כל
+// הכתובת במפורש כולל שם הספק ("...שטרודל ג'ימייל נקודה קום") - המילה "gmail" עצמה נמחקה בטעות ונשארה
+// כתובת שבורה כמו "...@.com". התיקון: **מחליפים** מילת ספק בשם הלטיני שלה (לא מוחקים), כך שהיא
+// נשארת חלק אמיתי מהכתובת בכל מקרה; והשלמת סיומת דומיין קורית רק בסוף, אם אחרי כל ההחלפות עדיין
+// אין נקודה בחלק הדומיין (כלומר המתקשר אמר רק "ג'ימייל" בלי "נקודה קום" בכלל).
+const PROVIDER_WORD_TO_ASCII = [
+  { words: ["ג'ימייל", "גימייל", "גימיל", "gmail"], ascii: "gmail" },
+  { words: ["אאוטלוק", "אוטלוק", "outlook"], ascii: "outlook" },
+  { words: ["הוטמייל", "hotmail"], ascii: "hotmail" },
+  { words: ["וואלה", "walla"], ascii: "walla" },
+  { words: ["יאהו", "yahoo"], ascii: "yahoo" },
+];
+// סיומת דומיין ידועה לכל ספק - משמשת רק כשלא נאמרה סיומת מפורשת בכלל (ר' PROVIDER_WORD_TO_ASCII).
+const PROVIDER_TLD = { gmail: "gmail.com", outlook: "outlook.com", hotmail: "hotmail.com", walla: "walla.co.il", yahoo: "yahoo.com" };
+const EMAIL_REGEX = /^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/;
+
+// טבלת תעתיק גס (עיצורים בעיקר) מעברית ללטינית - לא לבניית כתובת מזויפת (ר' ההערה למעלה על מה
+// שהוסר), אלא כדי **לתעתק את מה שהמתקשר בפועל אמר**: Whisper מתמלל דיבור עברי באותיות עבריות
+// תמיד, גם אם המתקשר בעצם התכוון לשם משתמש/כתובת שהם באנגלית (למשל "שלום 85" ולא "shalom85") -
+// בלי תעתיק, החלק שנאמר בעברית היה נמחק לגמרי (ר' הסינון ל-a-z0-9 בהמשך) והכתובת הייתה תמיד ריקה.
+// לא מדויק בלשנית - אבל זה בסדר: התוצאה תמיד מוקראת בחזרה לאישור, כך שהמתקשר יתפוס ניחוש שגוי.
 const HEBREW_TO_LATIN = {
   א: "a", ב: "b", ג: "g", ד: "d", ה: "h", ו: "v", ז: "z", ח: "ch", ט: "t",
   י: "i", כ: "k", ך: "k", ל: "l", מ: "m", ם: "m", נ: "n", ן: "n", ס: "s",
   ע: "a", פ: "p", ף: "f", צ: "tz", ץ: "tz", ק: "k", ר: "r", ש: "sh", ת: "t",
 };
-function buildEmailLocalPart(fullName) {
-  const transliterated = String(fullName || "")
-    .trim()
-    .toLowerCase()
+
+function parseSpokenEmail(rawSpeech) {
+  let t = String(rawSpeech || "").trim().toLowerCase();
+  if (!t) return null;
+
+  // מחליפים מילת ספק (בעברית או באנגלית) בשם הלטיני התקני שלה - **החלפה**, לא מחיקה (ר' הערה למעלה).
+  for (const p of PROVIDER_WORD_TO_ASCII) {
+    for (const w of p.words) {
+      if (t.includes(w)) t = t.split(w).join(p.ascii);
+    }
+  }
+
+  t = t
+    // "נקודה קום/נט/אורג" כרצף אחד -> סיומת דומיין ישירה (לפני ההחלפה הכללית של "נקודה" בלבד ל-".")
+    // - כדי לתמוך בניסוח הכי טבעי ("...ג'ימייל נקודה קום") בלי תלות בהשלמה האוטומטית שבסוף הפונקציה.
+    .replace(/נקודה\s*קום/g, ".com")
+    .replace(/נקודה\s*נט/g, ".net")
+    .replace(/נקודה\s*אורג/g, ".org")
+    .replace(/שטרודל|כרוכית/g, "@")
+    .replace(/\bat\b/g, "@")
+    .replace(/נקודה/g, ".")
+    .replace(/\bdot\b/g, ".")
+    .replace(/מקף/g, "-")
+    .replace(/קו תחתון|אנדרסקור/g, "_")
+    .replace(/\s+/g, "")
     .split("")
-    .map(ch => HEBREW_TO_LATIN[ch] ?? ch)
-    .join("");
-  const local = transliterated
-    .replace(/[^a-z0-9\s._-]/g, "")
-    .trim()
-    .replace(/\s+/g, ".")
-    .replace(/\.+/g, ".")
-    .replace(/^\.+|\.+$/g, "");
-  return local || null;
+    .map(ch => HEBREW_TO_LATIN[ch] ?? ch) // מתעתק כל אות עברית שנשארה (ר' הערה למעלה)
+    .join("")
+    .replace(/[^a-z0-9@._-]/g, ""); // מסיר את מה שנשאר ולא ניתן לתעתק/סימן לא רלוונטי
+
+  if (!t.includes("@")) return null;
+
+  const atIdx = t.indexOf("@");
+  const local = t.slice(0, atIdx);
+  let domainPart = t.slice(atIdx + 1).replace(/@/g, ""); // רק ה-@ הראשון נחשב
+
+  if (!local || !domainPart) return null;
+  if (!domainPart.includes(".")) {
+    // נאמר רק שם ספק בלי סיומת מפורשת (למשל "@gmail" בלי "נקודה קום") - משלימים אוטומטית.
+    if (!PROVIDER_TLD[domainPart]) return null;
+    domainPart = PROVIDER_TLD[domainPart];
+  }
+  const candidate = `${local}@${domainPart}`;
+  return EMAIL_REGEX.test(candidate) ? candidate : null;
 }
 
 // יוצר משתמש חדש ישירות מתוך שיחת טלפון. הזיהוי בשיחות הבאות תמיד לפי Caller ID, לא סיסמה - אבל
@@ -595,6 +727,9 @@ function createPhoneUser(fullName, phone, email, pin) {
   return db.prepare("SELECT * FROM users WHERE id = ?").get(info.lastInsertRowid);
 }
 
+// תוקן (משוב אמיתי ממשתמש): לא חוזרים ישר לתפריט הראשי הכללי אחרי קריאת היתרה - שואלים במפורש
+// אם להוסיף הכנסה/הוצאה (עם קיצור הקשה ייעודי 1/2, ר' case "balance_next_action"), בדיוק כמו שיש
+// באתר. עדיין אפשר לומר כל קטגוריה אחרת או לסיים מכאן - ר' matchMainMenuCategory.
 function doBalance(user) {
   const row = db
     .prepare(
@@ -605,7 +740,12 @@ function doBalance(user) {
     )
     .get(user.id);
   const balance = row.income - row.expense;
-  return askMoreOrFinish(`היתרה הנוכחית שלך היא ${balance} שקלים.`, "balance_read");
+  return {
+    text: `היתרה הנוכחית שלך היא ${balance} שקלים. רוצים להוסיף הכנסה או הוצאה, או לסיים? אפשר גם להקיש: 1 להכנסה, 2 להוצאה.`,
+    nextState: "balance_next_action",
+    hints: MAIN_MENU_HINTS,
+    outcome: "balance_read",
+  };
 }
 
 function doCheckin(draft) {
@@ -773,4 +913,5 @@ module.exports = {
   mainMenuPrompt,
   OPENING_GREETING,
   DIGIT_ENTRY_STATES,
+  parseSpokenEmail, // מיוצא כדי לאפשר בדיקה ישירה (ר' tests/test-flow.js) - בלי לעבור זרימת שיחה מלאה
 };

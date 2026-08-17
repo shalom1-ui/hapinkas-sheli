@@ -31,18 +31,24 @@ const debugLog = require("../debugLog");
 // כי המילים ארוכות/מורכבות יחסית. המחיר: **רק** במצב שבו Whisper מוגדר בפועל, הקשת ספרה בתפריט
 // הראשי (1-6, ר' MAIN_MENU_DIGIT_KEYWORDS) מפסיקה לעבוד, כי מצב "הקלטה" חוסם הקשות לגמרי - ר' opts.menuVoiceOnly
 // ב-mainMenuPrompt (routes/ivr.js) שמסיר גם את ההזכרה המילולית של האפשרות הזו במצב הזה, כדי לא להטעות.
-// תוקן: signup_email הוסר מכאן - השלב הזה כבר לא מבקש מהמתקשר לדבר בכלל (ר' הערה מפורטת ב-routes/ivr.js,
-// case "signup_email") - הוא רק בחירת ספק מייל בהקשת ספרה (1/2/0), בדיוק כמו שאר תפריטי ההקשה
-// (transactions_pick_type וכו') שגם הם לא ב-FREE_TEXT_STATES - כדי שהקשת הספרה תעבוד בלי חסימה.
-const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "main_menu"]);
+// "balance_next_action" נוסף בעקבות משוב אמיתי: אחרי קריאת יתרה (ר' doBalance ב-routes/ivr.js), שואלים
+// אם להוסיף הכנסה/הוצאה - שלב עם גם מילים חופשיות וגם קיצורי הקשה (1/2), בדיוק כמו main_menu.
+// "signup_email_speak" נוסף בעקבות משוב אמיתי נוסף: בעבר "signup_email" היה רק בחירת ספק בהקשה
+// (1/2/0) עם כתובת מזויפת שנבנתה אוטומטית מהשם - זה בלבל, כי זו לא כתובת אמיתית (ר' הערה מפורטת
+// ב-routes/ivr.js, פונקציית parseSpokedEmail/case "signup_email_speak"). עכשיו מבקשים מהמתקשר
+// להכתיב את הכתובת האמיתית שלו בקול, ולכן זה חייב לעבור דרך אותו מנגנון תמלול Whisper מדויק.
+// "signup_email_offer"/"signup_email_confirm" **לא** כאן בכוונה - אלה שלבי כן/לא רגילים (בדיוק כמו
+// expense_confirm וכו'), לא טקסט חופשי.
+const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "main_menu", "balance_next_action", "signup_email_speak"]);
 
 // תוקן (באג אמיתי שהתגלה בבדיקה חיה - ר' הערה מפורטת ב-speechToText.transcribeAudio): "רמז אוצר
 // מילים" ל-Whisper, לפי השלב הנוכחי בשיחה - מוטה את התמלול לכיוון עברית ולכיוון המילים הצפויות
 // באמת בשלב הזה. הכי משמעותי בתפריט הראשי, ששם יש רשימת מילים סגורה וידועה מראש (קטגוריות) -
 // זה בדיוק השלב שבו נצפתה "הזיה" של תמלול בכתב לא-עברי (לטיני/קירילי/ערבי) לגמרי חסר משמעות.
 function vocabularyHintFor(state) {
-  if (state === "main_menu") return "ניהול חשבונות, תנועות, חונכות, מטפלים, הורה, הערת מפקח";
+  if (state === "main_menu" || state === "balance_next_action") return "ניהול חשבונות, תנועות, חונכות, מטפלים, הורה, הערת מפקח, הכנסה, הוצאה";
   if (state === "signup_name" || state === "mentor_pick_student") return "שם פרטי ושם משפחה בעברית, לדוגמה: שלום כהן, דוד לוי, רחל אברהם";
+  if (state === "signup_email_speak") return "כתובת אימייל, שטרודל, כרוכית, נקודה, ג'ימייל, אאוטלוק, הוטמייל";
   return undefined;
 }
 

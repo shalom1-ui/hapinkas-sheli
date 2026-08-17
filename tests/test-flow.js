@@ -157,7 +157,7 @@ async function run() {
     await ivrSay(phoneOnlyCallSid, "כן");
     await ivrSay(phoneOnlyCallSid, "2222");
     await ivrSay(phoneOnlyCallSid, "2222");
-    await ivrSay(phoneOnlyCallSid, "דלג");
+    await ivrSay(phoneOnlyCallSid, "לא");
     const phoneOnlyUsername = `phone_${phoneOnlyPhone.replace(/\D/g, "").slice(-9)}`;
 
     // תיקון UX חשוב: מי שנרשם בטלפון מקבל שם משתמש אוטומטי (phone_XXXXXXXXX) שאף פעם לא נאמר לו
@@ -578,6 +578,12 @@ async function run() {
     await ivrCall(balanceCallSid, "+972500000001");
     const balanceXml = await ivrSay(balanceCallSid, "ניהול חשבונות");
     assert(balanceXml.includes("היתרה הנוכחית שלך היא"), "קטגוריית 'ניהול חשבונות' מקריאה את היתרה");
+    assert(
+      balanceXml.includes("רוצים להוסיף הכנסה או הוצאה") && balanceXml.includes("1 להכנסה"),
+      "מיד אחרי קריאת היתרה מוצעת הוספת הכנסה/הוצאה (בדיוק כמו באתר), עם קיצור הקשה ייעודי (1=הכנסה, 2=הוצאה)"
+    );
+    const balanceIncomeAmount = await ivrSay(balanceCallSid, "הכנסה");
+    assert(balanceIncomeAmount.includes("מה סכום ההכנסה"), "אמירת 'הכנסה' מיד אחרי היתרה עוברת ישר לזרימת הוספת הכנסה, בלי לחזור לתפריט הראשי הכללי");
 
     const txCallSid = `${callSid}-transactions`;
     await ivrCall(txCallSid, "+972500000001");
@@ -664,13 +670,13 @@ async function run() {
       "אם הספרות באישור לא תואמות למה שהוקש קודם, מתבקשים להתחיל את הגדרת ה-PIN מחדש (לא נשמר קוד שגוי בטעות)"
     );
     await ivrSay(signupCallSid, "1234");
-    const signupEmailPrompt = await ivrSay(signupCallSid, "1234");
+    const signupEmailOfferPrompt = await ivrSay(signupCallSid, "1234");
     assert(
-      signupEmailPrompt.includes("הוגדר בהצלחה") && signupEmailPrompt.includes("כתובת מייל") && signupEmailPrompt.includes("<Gather"),
-      "אחרי הקשה כפולה תואמת של קוד ה-PIN, המערכת שואלת (לא חובה) על כתובת מייל לפני יצירת המשתמש, עם אישור ברור שהקוד הוגדר"
+      signupEmailOfferPrompt.includes("הוגדר בהצלחה") && signupEmailOfferPrompt.includes("כתובת מייל") && signupEmailOfferPrompt.includes("<Gather"),
+      "אחרי הקשה כפולה תואמת של קוד ה-PIN, המערכת שואלת (כן/לא, לא חובה) על כתובת מייל לפני יצירת המשתמש, עם אישור ברור שהקוד הוגדר"
     );
-    const signupDoneXml = await ivrSay(signupCallSid, "דלג");
-    assert(signupDoneXml.includes("נרשמת בהצלחה") && signupDoneXml.includes("נא לציין"), "אמירת 'דלג' על שלב המייל עדיין יוצרת את המשתמש ועובר ישר לתפריט הקטגוריות הרגיל");
+    const signupDoneXml = await ivrSay(signupCallSid, "לא");
+    assert(signupDoneXml.includes("נרשמת בהצלחה") && signupDoneXml.includes("נא לציין"), "אמירת 'לא' על הצעת המייל עדיין יוצרת את המשתמש ועובר ישר לתפריט הקטגוריות הרגיל, בלי כתובת מזויפת כלשהי");
 
     const signupPinLogin = await api("POST", "/api/auth/login", { username: `phone_${signupPhone.replace(/\D/g, "").slice(-9)}`, password: "1234" });
     assert(signupPinLogin.status === 200 && signupPinLogin.data.token, "קוד ה-PIN שהוקש בטלפון בהרשמה עובד גם כסיסמה להתחברות באתר");
@@ -681,28 +687,64 @@ async function run() {
       "שיחה חוזרת מאותו מספר אחרי ההרשמה כבר מזהה את המשתמש (בלי הצעת הרשמה נוספת)"
     );
 
-    // תוקן (אבחון בפועל מול קו אמיתי): בעבר ביקשנו לומר את כל כתובת המייל בקול - זה נכשל כמעט תמיד
-    // בפועל ("לא זוהה דיבור" על "שטרודל"/"נקודה"). עכשיו לא מבקשים לבטא שום דבר בשלב הזה - רק הקשת
-    // ספרה לבחירת ספק (1=ג'ימייל, 2=אאוטלוק), והחלק הראשון של הכתובת נבנה אוטומטית מהשם המלא.
-    console.log("\n📧 הרשמה בטלפון עם כתובת מייל אופציונלית - נבחרת בהקשת ספרה (ג'ימייל/אאוטלוק), בלי לבטא שום דבר בקול");
+    // תוקן (משוב אמיתי ממשתמש בבדיקה חיה): בעבר בחירת ספק (1=ג'ימייל/2=אאוטלוק) בנתה אוטומטית כתובת
+    // מזויפת מתוך תעתיק השם - זו לא הייתה כתובת אמיתית, וזה בדיוק מה שבלבל. עכשיו מבקשים מהמתקשר
+    // להכתיב את הכתובת האמיתית שלו בקול, עם קריאה חוזרת לאישור לפני השמירה.
+    console.log("\n📧 הרשמה בטלפון עם כתובת מייל אמיתית שמוכתבת בקול (לא נבנית אוטומטית מהשם)");
     const emailSignupCallSid = `${callSid}-signup-email`;
     const emailSignupPhone = "+972500000078";
     await ivrCall(emailSignupCallSid, emailSignupPhone);
     await ivrSay(emailSignupCallSid, "גל שני");
     await ivrSay(emailSignupCallSid, "כן");
     await ivrSay(emailSignupCallSid, "5678");
-    const emailPromptXml = await ivrSay(emailSignupCallSid, "5678");
+    const emailOfferXml = await ivrSay(emailSignupCallSid, "5678");
     assert(
-      emailPromptXml.includes("1 לכתובת ג'ימייל") && emailPromptXml.includes("2 לכתובת אאוטלוק"),
-      "אחרי הגדרת קוד PIN, מוצעת בחירת ספק מייל בהקשת ספרה (1=ג'ימייל, 2=אאוטלוק) - בלי לבקש לבטא כתובת בקול"
+      emailOfferXml.includes("רוצים לצרף כתובת מייל") && emailOfferXml.includes("<Gather"),
+      "אחרי הגדרת קוד PIN, נשאלת שאלת כן/לא רגילה אם לצרף כתובת מייל קיימת - לא נבנית שום כתובת אוטומטית"
     );
-    // בערוץ Twilio (זיהוי דיבור בלבד, בלי הקשות - ר' הערה למעלה ב-routes/ivr.js) הבחירה נעשית באמירת
-    // שם הספק במקום הקשת ספרה - "ג'ימייל" בלבד, בלי שום סימן נוסף.
-    const emailDoneXml = await ivrSay(emailSignupCallSid, "ג'ימייל");
+    const emailSpeakPromptXml = await ivrSay(emailSignupCallSid, "כן");
+    assert(emailSpeakPromptXml.includes("אמרו את כתובת המייל"), "אחרי 'כן', מתבקשים להכתיב את כתובת המייל האמיתית בקול");
+    const emailConfirmXml = await ivrSay(emailSignupCallSid, "gal.shani@gmail.com");
     assert(
-      emailDoneXml.includes("נרשמת בהצלחה") && emailDoneXml.includes("gl.shni@gmail.com"),
-      "אמירת 'ג'ימייל' (מילה אחת פשוטה, בלי סימנים) בונה כתובת מייל אוטומטית מתוך השם המלא שכבר נאמר בהצלחה קודם, ושומרת אותה"
+      emailConfirmXml.includes("לאשר") && emailConfirmXml.includes("gal.shani@gmail.com"),
+      "הכתובת שהוכתבה (כאן כבר בפורמט אנגלי תקני, כפי שתמלול Whisper יכול להחזיר) מוקראת בחזרה לאישור לפני השמירה"
     );
+    const emailDoneXml = await ivrSay(emailSignupCallSid, "כן");
+    assert(
+      emailDoneXml.includes("נרשמת בהצלחה") && emailDoneXml.includes("gal.shani@gmail.com"),
+      "אישור הכתובת שהוכתבה שומר אותה בפועל אצל המשתמש החדש"
+    );
+
+    console.log("\n📧 הכתבת מייל בעברית (עם שטרודל/נקודה מדוברים) - מתועתקת ומורכבת לכתובת תקינה");
+    const emailHebrewSignupCallSid = `${callSid}-signup-email-he`;
+    const emailHebrewSignupPhone = "+972500000079";
+    await ivrCall(emailHebrewSignupCallSid, emailHebrewSignupPhone);
+    await ivrSay(emailHebrewSignupCallSid, "רונית לוי");
+    await ivrSay(emailHebrewSignupCallSid, "כן");
+    await ivrSay(emailHebrewSignupCallSid, "4321");
+    await ivrSay(emailHebrewSignupCallSid, "4321");
+    await ivrSay(emailHebrewSignupCallSid, "כן");
+    const emailHebrewConfirmXml = await ivrSay(emailHebrewSignupCallSid, "רונית שטרודל ג'ימייל נקודה קום");
+    assert(
+      emailHebrewConfirmXml.includes("לאשר") && emailHebrewConfirmXml.includes("@gmail.com"),
+      "הכתבה בעברית מלאה ('שטרודל'/'נקודה'/'קום', ושם ספק בעברית) מתועתקת ומורכבת לכתובת gmail.com תקינה"
+    );
+    const emailHebrewDoneXml = await ivrSay(emailHebrewSignupCallSid, "כן");
+    assert(emailHebrewDoneXml.includes("נרשמת בהצלחה"), "אישור הכתובת המתועתקת שומר אותה ומשלים את ההרשמה");
+
+    console.log("\n📧 כשלא מצליחים לפענח כתובת - אפשר לדלג ולהמשיך בלי מייל, בלי להיתקע");
+    const emailFailSignupCallSid = `${callSid}-signup-email-fail`;
+    const emailFailSignupPhone = "+972500000080";
+    await ivrCall(emailFailSignupCallSid, emailFailSignupPhone);
+    await ivrSay(emailFailSignupCallSid, "משה אברהם");
+    await ivrSay(emailFailSignupCallSid, "כן");
+    await ivrSay(emailFailSignupCallSid, "1122");
+    await ivrSay(emailFailSignupCallSid, "1122");
+    await ivrSay(emailFailSignupCallSid, "כן");
+    const emailFailRetryXml = await ivrSay(emailFailSignupCallSid, "אני לא זוכר");
+    assert(emailFailRetryXml.includes("לא הצלחתי להבין כתובת מייל"), "אם לא הצליחו לפענח כתובת תקינה (אין @), מתבקשים לנסות שוב, ולא נבנית כתובת ניחוש");
+    const emailFailSkipXml = await ivrSay(emailFailSignupCallSid, "דלג");
+    assert(emailFailSkipXml.includes("נרשמת בהצלחה") && emailFailSkipXml.includes("נא לציין"), "אמירת 'דלג' אחרי ניסיון כושל משלימה את ההרשמה בלי מייל, בלי להיתקע בלולאה");
 
     console.log("\n☎️ מנוע השיחה הקולית מול ימות המשיח (שלוחת API) — אותה מכונת מצבים, פרוטוקול שונה");
     const ymCallId = `YM-${Date.now()}`;
@@ -800,8 +842,8 @@ async function run() {
     const ymBalance = await yemotCall({ callId: ymBalanceCallId, speech: "חשבונות" });
     assert(ymBalance.includes("היתרה הנוכחית שלך היא"), "קטגוריית 'ניהול חשבונות' (מילה 'חשבונות') עובדת גם דרך ימות");
     assert(
-      ymBalance.includes("רוצים לעשות עוד משהו") && !ymBalance.includes("g-hangup"),
-      "אחרי שמיעת היתרה לא מנתקים מיד - חוזרים לתפריט הראשי ושואלים אם יש עוד משהו"
+      ymBalance.includes("רוצים להוסיף הכנסה או הוצאה") && !ymBalance.includes("g-hangup"),
+      "אחרי שמיעת היתרה לא מנתקים מיד - שואלים במפורש אם להוסיף הכנסה/הוצאה (בדיוק כמו באתר), עם קיצור הקשה ייעודי"
     );
 
     console.log("\n🔁 כמה פעולות באותה שיחה, ואז סיום בנימוס מהתפריט הראשי");
@@ -810,7 +852,7 @@ async function run() {
     const ymMultiCallId = `${ymCallId}-multi-action`;
     await yemotCall({ callId: ymMultiCallId, phone: "0500000001" });
     const ymMultiBalance = await yemotCall({ callId: ymMultiCallId, speech: "חשבונות" });
-    assert(ymMultiBalance.includes("רוצים לעשות עוד משהו"), "אחרי היתרה מוצעת אפשרות להמשיך לפעולה נוספת באותה שיחה");
+    assert(ymMultiBalance.includes("רוצים להוסיף הכנסה או הוצאה"), "אחרי היתרה מוצעת אפשרות להמשיך ישר להוספת הכנסה/הוצאה באותה שיחה");
     await yemotCall({ callId: ymMultiCallId, speech: "הוצאה" });
     await yemotCall({ callId: ymMultiCallId, speech: "33" });
     await yemotCall({ callId: ymMultiCallId, speech: "אחר" });
@@ -934,8 +976,8 @@ async function run() {
       ymSignupEmailPrompt.includes("הוגדר בהצלחה") && ymSignupEmailPrompt.includes("כתובת מייל"),
       "גם בימות, אחרי הקשה כפולה תואמת של קוד ה-PIN שואלים (לא חובה) על כתובת מייל, עם אישור ברור שהקוד הוגדר"
     );
-    const ymSignupDone = await yemotCall({ callId: ymSignupCallId, speech: "דלג" });
-    assert(ymSignupDone.includes("נרשמת בהצלחה") && ymSignupDone.includes("דנה לוי"), "הרשמה טלפונית דרך ימות יוצרת משתמש ועוברת לתפריט הרגיל, גם כשמדלגים על המייל");
+    const ymSignupDone = await yemotCall({ callId: ymSignupCallId, speech: "לא" });
+    assert(ymSignupDone.includes("נרשמת בהצלחה") && ymSignupDone.includes("דנה לוי"), "הרשמה טלפונית דרך ימות יוצרת משתמש ועוברת לתפריט הרגיל, גם כשמוותרים על המייל (בלי כתובת מזויפת)");
 
     const ymSignupPinLogin = await api("POST", "/api/auth/login", { username: `phone_${ymSignupPhone.replace(/\D/g, "").slice(-9)}`, password: "4321" });
     assert(ymSignupPinLogin.status === 200 && ymSignupPinLogin.data.token, "קוד ה-PIN שהוקש בימות עובד גם כסיסמה להתחברות באתר");
@@ -946,25 +988,50 @@ async function run() {
       "שיחת ימות חוזרת מאותו מספר אחרי ההרשמה כבר מזהה את המשתמש שנוצר"
     );
 
-    // הדרך המרכזית שלשמה בכלל בנינו את זה: בימות אפשר ממש להקיש 1/2 בפועל (לא רק לומר בקול) - זה
-    // המסלול הכי אמין, כי הוא לא תלוי בזיהוי דיבור בכלל.
-    console.log("\n📧 הרשמה בימות עם כתובת מייל שנבחרת בהקשת ספרה אמיתית (1=ג'ימייל), בלי מילה אחת בדיבור");
+    // תוקן (משוב אמיתי ממשתמש בבדיקה חיה): כאן בודקים שגם בימות אפשר ממש להקיש 1 (לא רק לומר "כן")
+    // על הצעת המייל, ושהכתובת שנשמרת היא זו שהוכתבה בפועל - לא כתובת שנבנתה אוטומטית מהשם.
+    console.log("\n📧 הרשמה בימות עם כתובת מייל אמיתית שמוכתבת בקול (לא נבנית אוטומטית מהשם)");
     const ymEmailCallId = `${ymCallId}-signup-email-digit`;
-    const ymEmailPhone = "+972500000079";
+    const ymEmailPhone = "+972500000082";
     await yemotCall({ callId: ymEmailCallId, phone: ymEmailPhone });
     await yemotCall({ callId: ymEmailCallId, speech: "עידן ברק" });
     await yemotCall({ callId: ymEmailCallId, speech: "כן" });
     await yemotCall({ callId: ymEmailCallId, speech: "1122" });
     await yemotCall({ callId: ymEmailCallId, speech: "1122" });
-    const ymEmailDigitDone = await yemotCall({ callId: ymEmailCallId, speech: "1" }); // הקשת 1 = ג'ימייל
-    // הטקסט המושמע בקול "מנוקה" מנקודות (ר' sanitizeForYemot ב-services/yemot.js - תווי בקרה בפרוטוקול
-    // ימות) - זה תקין, זו רק ההקראה. בודקים את הכתובת האמיתית שנשמרה במסד הנתונים דרך התחברות.
-    assert(ymEmailDigitDone.includes("נרשמת בהצלחה"), "בימות, הקשת 1 ממש (לא אמירה בקול) בשלב בחירת ספק המייל משלימה את ההרשמה");
+    const ymEmailSpeakPrompt = await yemotCall({ callId: ymEmailCallId, speech: "1" }); // הקשת 1 = כן, רוצה לצרף מייל
+    assert(ymEmailSpeakPrompt.includes("אמרו את כתובת המייל"), "בימות, הקשת 1 ממש (לא רק אמירת 'כן') על הצעת המייל גם עובדת, ומעבירה לבקשת הכתבה בקול");
+    const ymEmailConfirmPrompt = await yemotCall({ callId: ymEmailCallId, speech: "idan.brk@gmail.com" });
+    // הטקסט המוקרא בקול "מנוקה" מנקודות (ר' sanitizeForYemot ב-services/yemot.js - תווי בקרה בפרוטוקול
+    // ימות) - זה תקין, זו רק ההקראה. הכתובת האמיתית (עם נקודות) נשמרת בשלמותה בנתונים - נבדק בהמשך דרך התחברות.
+    assert(
+      ymEmailConfirmPrompt.includes("לאשר") && ymEmailConfirmPrompt.includes("idanbrk@gmailcom"),
+      "הכתובת שהוכתבה מוקראת בחזרה לאישור - לא נבנית אוטומטית מהשם"
+    );
+    const ymEmailDigitDone = await yemotCall({ callId: ymEmailCallId, speech: "1" }); // הקשת 1 = אישור מהיר
+    assert(ymEmailDigitDone.includes("נרשמת בהצלחה"), "הקשת 1 (אישור מהיר) על קריאת הכתובת החוזרת משלימה את ההרשמה עם הכתובת שהוכתבה");
     const ymEmailLogin = await api("POST", "/api/auth/login", { username: `phone_${ymEmailPhone.replace(/\D/g, "").slice(-9)}`, password: "1122" });
     assert(
-      ymEmailLogin.status === 200 && ymEmailLogin.data.user?.email === "aidn.brk@gmail.com",
-      "הקשת 1 בשלב בחירת ספק המייל בונה כתובת ג'ימייל אוטומטית מהשם המלא (עם נקודה תקינה) ושומרת אותה בפועל במסד הנתונים"
+      ymEmailLogin.status === 200 && ymEmailLogin.data.user?.email === "idan.brk@gmail.com",
+      "כתובת המייל שהוכתבה בקול ואושרה נשמרה בפועל במסד הנתונים (הכתובת האמיתית שנאמרה, לא כתובת מזויפת)"
     );
+
+    console.log("\n📧 הכתבת מייל בעברית בימות (עם שטרודל/נקודה מדוברים) - מתועתקת ומורכבת לכתובת תקינה");
+    const ymEmailHebrewCallId = `${ymCallId}-signup-email-hebrew`;
+    const ymEmailHebrewPhone = "+972500000081";
+    await yemotCall({ callId: ymEmailHebrewCallId, phone: ymEmailHebrewPhone });
+    await yemotCall({ callId: ymEmailHebrewCallId, speech: "אורית שמעוני" });
+    await yemotCall({ callId: ymEmailHebrewCallId, speech: "כן" });
+    await yemotCall({ callId: ymEmailHebrewCallId, speech: "3344" });
+    await yemotCall({ callId: ymEmailHebrewCallId, speech: "3344" });
+    await yemotCall({ callId: ymEmailHebrewCallId, speech: "כן" });
+    const ymEmailHebrewConfirm = await yemotCall({ callId: ymEmailHebrewCallId, speech: "אורית שטרודל ג'ימייל נקודה קום" });
+    // שוב, הנקודה נעלמת מהטקסט המוקרא בקול בלבד (ר' הערה למעלה) - "@gmailcom" ולא "@gmail.com".
+    assert(
+      ymEmailHebrewConfirm.includes("לאשר") && ymEmailHebrewConfirm.includes("@gmailcom"),
+      "גם בימות, הכתבה בעברית מלאה מתועתקת ומורכבת לכתובת gmail.com תקינה"
+    );
+    const ymEmailHebrewDone = await yemotCall({ callId: ymEmailHebrewCallId, speech: "כן" });
+    assert(ymEmailHebrewDone.includes("נרשמת בהצלחה"), "אישור הכתובת המתועתקת משלים את ההרשמה גם בימות");
 
     console.log("\n🎙️ זיהוי דיבור משודרג (ימות + Whisper) — במצב MOCK (בלי מפתחות) נשאר שקוף לחלוטין");
     const speechToText = require("../src/services/speechToText");
