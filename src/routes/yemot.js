@@ -48,7 +48,10 @@ const FREE_TEXT_STATES = new Set(["signup_name", "mentor_pick_student", "main_me
 function vocabularyHintFor(state) {
   if (state === "main_menu" || state === "balance_next_action") return "ניהול חשבונות, תנועות, חונכות, מטפלים, הורה, הערת מפקח, הכנסה, הוצאה";
   if (state === "signup_name" || state === "mentor_pick_student") return "שם פרטי ושם משפחה בעברית, לדוגמה: שלום כהן, דוד לוי, רחל אברהם";
-  if (state === "signup_email_speak") return "כתובת אימייל, שטרודל, כרוכית, נקודה, ג'ימייל, אאוטלוק, הוטמייל";
+  // "דלג" נוסף לרמז בכוונה (ר' README/ הערה ב-routes/ivr.js ליד case "signup_email_retry"): בבדיקה
+  // בפועל התברר שרמז מוטה כולו לכיוון מילות כתובת מייל עלול "למשוך" את Whisper להזות משהו אחר גם
+  // כשבפועל נאמרה רק מילת דילוג קצרה - הוספת המילה עצמה לרמז אמורה להקטין את הסיכוי לזה.
+  if (state === "signup_email_speak") return "כתובת אימייל, שטרודל, כרוכית, נקודה, ג'ימייל, אאוטלוק, הוטמייל, או דלג";
   return undefined;
 }
 

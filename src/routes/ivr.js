@@ -470,35 +470,19 @@ async function advanceSignup(state, speech, draft, opts = {}) {
   const s = normalize(speech);
 
   switch (state) {
+    // תוקן (משוב אמיתי ממשתמש): בעבר, אחרי הכתבת השם (שכבר מוקלטת ומתומללת ב-Whisper, ר' README) עוד
+    // ביקשנו אישור נפרד ("לאשר: נרשמים בשם X... אמרו כן") לפני שממשיכים לקוד PIN - צעד כפול ומיותר,
+    // שהמשתמש ציין שהוא רוצה לדלג עליו. עכשיו ממשיכים **ישר** מהשם לקוד PIN, בלי שאלת אישור נפרדת -
+    // עדיין "חוזרים" על השם בתחילת המשפט הבא ("שלום X, עכשיו...") כדי שיהיה ברור מיד מה נקלט, בדיוק
+    // כמו mentorActionPrompt/therapist_student וכו', רק בלי לדרוש אמירת "כן" בנפרד. אם השם נקלט לא
+    // נכון - עדיין אפשר לתקן אותו אחר כך באתר (בדיוק כמו שאר הפרטים בהרשמה טלפונית).
     case "signup_name": {
       const fullName = String(speech || "").trim();
       if (!fullName) return { text: `לא שמעתי שם.${retryHint()} מה השם המלא שלכם?`, nextState: "signup_name" };
       return {
-        text: `לאשר: נרשמים בשם ${fullName}, עם מספר הטלפון שממנו אתם מתקשרים כרגע? אמרו כן לאישור.${confirmSuffix(opts)}`,
-        nextState: "signup_confirm",
+        text: `שלום ${fullName}. עכשיו נגדיר קוד סודי בן 4 ספרות - הוא ישמש גם לכניסה לאתר בעתיד. הקישו עכשיו 4 ספרות במקלדת הטלפון.`,
+        nextState: "signup_pin",
         draft: { ...draft, fullName },
-      };
-    }
-    // תיקון בטיחות (אותו דפוס שהופעל כבר בכל שאר צמתי האישור - ר' expense_confirm וכו' ב-advance()):
-    // בעבר כל קלט לא ברור כאן (למשל זיהוי דיבור שגוי) נחשב אוטומטית "לא", ומחק בשקט את השם שכבר
-    // נאמר וחזר להתחיל את ההרשמה מההתחלה ("מה השם המלא שלכם?") - מתסכל ומיותר אם זו רק אי-הבנה
-    // חד-פעמית. עכשיו: "כן" מפורש -> ממשיכים; "לא" מפורש -> באמת מתחילים מחדש; כל השאר -> חוזרים
-    // על אותה שאלת אישור (עם השם שכבר נאמר עדיין שמור), בלי לאבד כלום.
-    case "signup_confirm": {
-      if (isConfirmYes(s, opts)) {
-        return {
-          text: "עכשיו נגדיר קוד סודי בן 4 ספרות - הוא ישמש גם לכניסה לאתר בעתיד. הקישו עכשיו 4 ספרות במקלדת הטלפון.",
-          nextState: "signup_pin",
-          draft,
-        };
-      }
-      if (isConfirmNo(s, opts)) {
-        return { text: "בסדר, ננסה שוב. מה השם המלא שלכם?", nextState: "signup_name", draft: { phone: draft.phone } };
-      }
-      return {
-        text: `לא הבנתי.${retryHint()} לאשר: נרשמים בשם ${draft.fullName}, עם מספר הטלפון שממנו אתם מתקשרים כרגע? אמרו כן לאישור.${confirmSuffix(opts)}`,
-        nextState: "signup_confirm",
-        draft,
       };
     }
     // קוד PIN בן 4 ספרות - נקבע דרך הקשת מקלדת בלבד (לא דיבור, ר' DIGIT_ENTRY_STATES/sayAndGatherDigits
@@ -523,7 +507,7 @@ async function advanceSignup(state, speech, draft, opts = {}) {
       const digits = onlyDigits(speech);
       if (digits && digits.length === 4 && digits === draft.pendingPin) {
         return {
-          text: "הקוד הוגדר בהצלחה. רוצים לצרף כתובת מייל קיימת לחשבון? זה לא חובה. אמרו כן, או הקישו 1. אם לא, אמרו לא, או הקישו 0.",
+          text: "הקוד הוגדר בהצלחה. רוצים לצרף כתובת מייל קיימת לחשבון? זה לא חובה, ואפשר גם להוסיף אותה מאוחר יותר באתר - זה לרוב קל יותר אם יש בכתובת גם אותיות באנגלית. אמרו כן, או הקישו 1. אם לא, אמרו לא, או הקישו 2.",
           nextState: "signup_email_offer",
           draft: { ...draft, pin: draft.pendingPin, pendingPin: undefined },
         };
@@ -547,7 +531,7 @@ async function advanceSignup(state, speech, draft, opts = {}) {
     case "signup_email_offer": {
       if (isConfirmYes(s, opts)) {
         return {
-          text: "אמרו את כתובת המייל שלכם עכשיו, לאט אם אפשר. לדוגמה: שם המשתמש, שטרודל, ג'ימייל.",
+          text: "אמרו את כתובת המייל שלכם עכשיו, לאט אם אפשר. לדוגמה: שם המשתמש, שטרודל, ג'ימייל. אם התחרטתם - פשוט אל תגידו כלום וחכו בשקט.",
           nextState: "signup_email_speak",
           draft,
         };
@@ -563,15 +547,45 @@ async function advanceSignup(state, speech, draft, opts = {}) {
         };
       }
       return {
-        text: `לא הבנתי.${retryHint()} רוצים לצרף כתובת מייל קיימת לחשבון? זה לא חובה. אמרו כן, או הקישו 1. אם לא, אמרו לא, או הקישו 0.`,
+        text: `לא הבנתי.${retryHint()} רוצים לצרף כתובת מייל קיימת לחשבון? זה לא חובה. אמרו כן, או הקישו 1. אם לא, אמרו לא, או הקישו 2.`,
         nextState: "signup_email_offer",
+        draft,
+      };
+    }
+    // תוקן (משוב אמיתי ממשתמש בבדיקה חיה - מקרה חמור): אמירת "דלג" בשלב הזה לא תמיד נקלטת נכון
+    // ע"י Whisper (יתכן שה"רמז אוצר מילים" המוטה לכיוון מילות כתובת מייל - ר' vocabularyHintFor
+    // ב-routes/yemot.js - "מושך" את התמלול לכיוון לא נכון גם כשבפועל נאמרה רק מילת דילוג קצרה) -
+    // וזה השאיר משתמש **תקוע בלולאה בלי שום דרך החוצה** עד שניתק את השיחה, למרות שהמייל לא חובה בכלל!
+    // זה באג חמור בהרבה מסתם "לא נוח" - חובה שתמיד תהיה דרך החוצה אמינה. התיקון: אחרי ניסיון הכתבה
+    // כושל (לא זוהתה כתובת תקינה ולא זוהתה מילת דילוג), **לא** חוזרים ישר לעוד ניסיון הקלטה (שוב
+    // תלוי בזיהוי דיבור) - עוברים לשלב ביניים "רגיל" (לא טקסט חופשי, לא תלוי בהקלטה בכלל) שבו הקשת
+    // ספרה **תמיד** עובדת: 1=לנסות שוב, 0=לדלג ולסיים את ההרשמה מיד, בלי שום תלות בזיהוי דיבור נוסף.
+    case "signup_email_retry": {
+      const digit = onlyDigits(s);
+      if (digit === "1" || includesAny(s, ["כן", "שוב", "נסה שוב", "לנסות שוב"])) {
+        return { text: "בסדר, אמרו את כתובת המייל שלכם עכשיו, לאט אם אפשר.", nextState: "signup_email_speak", draft };
+      }
+      if (digit === "0" || isConfirmNo(s, opts) || includesAny(s, ["דלג", "לדלג"])) {
+        const newUser = createPhoneUser(draft.fullName, draft.phone, null, draft.pin);
+        return {
+          text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
+          nextState: "main_menu",
+          newUserId: newUser.id,
+          hints: MAIN_MENU_HINTS,
+          outcome: "phone_signup_completed",
+        };
+      }
+      return {
+        text: `לא הבנתי.${retryHint()} לנסות שוב להכתיב את כתובת המייל - הקישו 1. לדלג ולהמשיך בלי מייל - הקישו 0.`,
+        nextState: "signup_email_retry",
         draft,
       };
     }
     case "signup_email_speak": {
       const spokenTrim = String(speech || "").trim();
-      // אם אין כלום, או שנאמרה בפירוש מילת דילוג/ויתור - ממשיכים בלי מייל (לא תוקעים בלולאה).
-      if (!spokenTrim || includesAny(s, ["דלג", "לא רוצה", "בלי מייל", "ללא מייל", "ביטול"])) {
+      // אם אין כלום, או שנאמרה בפירוש מילת דילוג/ויתור - ממשיכים בלי מייל מיד (לא תוקעים בלולאה,
+      // ולא מחכים לשלב הקשה - זה עדיין "בונוס" למי שאמירת הדילוג שלו כן זוהתה נכון).
+      if (!spokenTrim || includesAny(s, ["דלג", "לדלג", "לא רוצה", "בלי מייל", "ללא מייל", "ביטול", "וויתור", "לוותר", "אין לי", "לא צריך", "עזוב", "בלי"])) {
         const newUser = createPhoneUser(draft.fullName, draft.phone, null, draft.pin);
         return {
           text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
@@ -583,9 +597,11 @@ async function advanceSignup(state, speech, draft, opts = {}) {
       }
       const parsed = parseSpokenEmail(speech);
       if (!parsed) {
+        // ר' הערה למעלה ליד case "signup_email_retry" - **לא** חוזרים ישר לעוד ניסיון הקלטה, כדי
+        // שתמיד תהיה דרך החוצה אמינה בהקשה, גם אם זיהוי הדיבור ימשיך להיכשל.
         return {
-          text: `לא הצלחתי להבין כתובת מייל תקינה מתוך "${spokenTrim}".${retryHint()} אפשר לנסות שוב לאט, למשל: השם שלכם, שטרודל, ג'ימייל. או להגיד "דלג" כדי להמשיך בלי מייל.`,
-          nextState: "signup_email_speak",
+          text: `לא הצלחתי להבין כתובת מייל תקינה מתוך "${spokenTrim}". לנסות שוב להכתיב אותה - הקישו 1. לדלג ולהמשיך בלי מייל - הקישו 0.`,
+          nextState: "signup_email_retry",
           draft,
         };
       }

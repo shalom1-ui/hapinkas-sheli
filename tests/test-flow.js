@@ -154,7 +154,6 @@ async function run() {
     const phoneOnlyPhone = "+972500000066";
     await ivrCall(phoneOnlyCallSid, phoneOnlyPhone);
     await ivrSay(phoneOnlyCallSid, "מהטלפון בלבד");
-    await ivrSay(phoneOnlyCallSid, "כן");
     await ivrSay(phoneOnlyCallSid, "2222");
     await ivrSay(phoneOnlyCallSid, "2222");
     await ivrSay(phoneOnlyCallSid, "לא");
@@ -638,22 +637,13 @@ async function run() {
       "מספר לא מזוהה מקבל הצעה להירשם בטלפון (לא ננתק מיד)"
     );
     assert(signupGreeting.includes("שלום וברכה") && signupGreeting.includes("הגעתם לקו הפנקס שלי"), "גם למספר לא מזוהה, הברכה 'שלום וברכה, הגעתם לקו הפנקס שלי' נאמרת מיד בתחילת השיחה");
-    const signupConfirmXml = await ivrSay(signupCallSid, "רותם כהן");
-    assert(signupConfirmXml.includes("רותם כהן") && signupConfirmXml.includes("לאשר"), "שם שנאמר חוזר לאישור לפני יצירת המשתמש");
-
-    // תיקון בטיחות: קלט לא ברור באישור השם לא מוחק בשקט את השם ומתחיל את ההרשמה מחדש - הוא רק
-    // חוזר על אותה שאלת אישור, עם השם שכבר נאמר עדיין שמור (בדיוק כמו התיקון שכבר קיים בכל שאר
-    // צמתי האישור - expense_confirm וכו').
-    const signupUnclearXml = await ivrSay(signupCallSid, "אולי אחר כך");
+    // תוקן (משוב אמיתי ממשתמש): בעבר, אחרי הכתבת השם עוד ביקשנו אישור נפרד ("לאשר: נרשמים בשם X...
+    // אמרו כן") לפני שממשיכים - צעד כפול ומיותר. עכשיו ממשיכים ישר מהשם לקוד PIN, בלי שאלת אישור
+    // נפרדת - עדיין "חוזרים" על השם בתחילת המשפט הבא כדי שיהיה ברור מיד מה נקלט.
+    const signupPinPrompt = await ivrSay(signupCallSid, "רותם כהן");
     assert(
-      signupUnclearXml.includes("רותם כהן") && signupUnclearXml.includes("לאשר") && !signupUnclearXml.includes("מה השם המלא שלכם"),
-      "קלט לא ברור באישור השם בהרשמה חוזר על אותה שאלת אישור (עם השם שכבר נאמר), ולא מתחיל את ההרשמה מחדש בשקט"
-    );
-
-    const signupPinPrompt = await ivrSay(signupCallSid, "כן");
-    assert(
-      signupPinPrompt.includes("קוד סודי") && signupPinPrompt.includes('input="dtmf"') && signupPinPrompt.includes('numDigits="4"'),
-      "אחרי אישור השם, המערכת מבקשת קוד PIN בן 4 ספרות בהקשה (DTMF) - לא בדיבור"
+      signupPinPrompt.includes("רותם כהן") && signupPinPrompt.includes("קוד סודי") && signupPinPrompt.includes('input="dtmf"') && signupPinPrompt.includes('numDigits="4"'),
+      "מיד אחרי הכתבת השם, בלי שאלת אישור נפרדת, המערכת חוזרת על השם ומבקשת קוד PIN בן 4 ספרות בהקשה (DTMF)"
     );
 
     // תיקון בטיחות: קוד PIN שלא תואם באישור החוזר לא נשמר בשקט - חוזרים להתחיל את הגדרת ה-PIN מחדש
@@ -695,7 +685,6 @@ async function run() {
     const emailSignupPhone = "+972500000078";
     await ivrCall(emailSignupCallSid, emailSignupPhone);
     await ivrSay(emailSignupCallSid, "גל שני");
-    await ivrSay(emailSignupCallSid, "כן");
     await ivrSay(emailSignupCallSid, "5678");
     const emailOfferXml = await ivrSay(emailSignupCallSid, "5678");
     assert(
@@ -720,7 +709,6 @@ async function run() {
     const emailHebrewSignupPhone = "+972500000079";
     await ivrCall(emailHebrewSignupCallSid, emailHebrewSignupPhone);
     await ivrSay(emailHebrewSignupCallSid, "רונית לוי");
-    await ivrSay(emailHebrewSignupCallSid, "כן");
     await ivrSay(emailHebrewSignupCallSid, "4321");
     await ivrSay(emailHebrewSignupCallSid, "4321");
     await ivrSay(emailHebrewSignupCallSid, "כן");
@@ -737,14 +725,40 @@ async function run() {
     const emailFailSignupPhone = "+972500000080";
     await ivrCall(emailFailSignupCallSid, emailFailSignupPhone);
     await ivrSay(emailFailSignupCallSid, "משה אברהם");
-    await ivrSay(emailFailSignupCallSid, "כן");
     await ivrSay(emailFailSignupCallSid, "1122");
     await ivrSay(emailFailSignupCallSid, "1122");
     await ivrSay(emailFailSignupCallSid, "כן");
     const emailFailRetryXml = await ivrSay(emailFailSignupCallSid, "אני לא זוכר");
-    assert(emailFailRetryXml.includes("לא הצלחתי להבין כתובת מייל"), "אם לא הצליחו לפענח כתובת תקינה (אין @), מתבקשים לנסות שוב, ולא נבנית כתובת ניחוש");
+    assert(
+      emailFailRetryXml.includes("לא הצלחתי להבין כתובת מייל") && emailFailRetryXml.includes("הקישו 1") && emailFailRetryXml.includes("הקישו 0"),
+      "אם לא הצליחו לפענח כתובת תקינה (אין @), עוברים לשלב הקשה 'רגיל' (לא תלוי בזיהוי דיבור נוסף) - 1 לנסות שוב, 0 לדלג"
+    );
     const emailFailSkipXml = await ivrSay(emailFailSignupCallSid, "דלג");
-    assert(emailFailSkipXml.includes("נרשמת בהצלחה") && emailFailSkipXml.includes("נא לציין"), "אמירת 'דלג' אחרי ניסיון כושל משלימה את ההרשמה בלי מייל, בלי להיתקע בלולאה");
+    assert(emailFailSkipXml.includes("נרשמת בהצלחה") && emailFailSkipXml.includes("נא לציין"), "אמירת 'דלג' בשלב ההקשה גם היא מזוהה ומשלימה את ההרשמה בלי מייל");
+
+    // תוקן (משוב אמיתי ממשתמש - מקרה חמור): לפני התיקון, אם "דלג" לא זוהה נכון ע"י זיהוי הדיבור
+    // (יתכן בגלל רמז אוצר המילים המוטה לכתובות מייל), המשתמש נשאר תקוע בלולאה בלי שום דרך החוצה,
+    // עד שניתק את השיחה - חמור במיוחד כי המייל בכלל לא חובה. עכשיו, אחרי ניסיון הכתבה כושל, יש
+    // תמיד הקשת ספרה אמינה (0) שעובדת גם אם זיהוי הדיבור ימשיך להיכשל לגמרי בכל ניסיון.
+    console.log("\n🔢 אחרי הכתבת מייל כושלת - הקשת 0 (לא רק אמירת 'דלג') תמיד משלימה את ההרשמה, גם אם זיהוי הדיבור נכשל שוב ושוב");
+    const emailDigitEscapeCallSid = `${callSid}-signup-email-digit-escape`;
+    const emailDigitEscapePhone = "+972500000083";
+    await ivrCall(emailDigitEscapeCallSid, emailDigitEscapePhone);
+    await ivrSay(emailDigitEscapeCallSid, "יעל ברקוביץ");
+    await ivrSay(emailDigitEscapeCallSid, "9988");
+    await ivrSay(emailDigitEscapeCallSid, "9988");
+    await ivrSay(emailDigitEscapeCallSid, "כן");
+    const escapeRetryXml = await ivrSay(emailDigitEscapeCallSid, "משהו לגמרי לא קשור");
+    assert(escapeRetryXml.includes("הקישו 1") && escapeRetryXml.includes("הקישו 0"), "גם כאן, ניסיון הכתבה כושל עובר לשלב הקשה עם 0 לדלג");
+    const escapeRetryAgainXml = await ivrSay(emailDigitEscapeCallSid, "1"); // הקשת 1 = לנסות שוב
+    assert(escapeRetryAgainXml.includes("אמרו את כתובת המייל"), "הקשת 1 בשלב ההקשה מחזירה לניסיון הכתבה נוסף");
+    const escapeFailAgainXml = await ivrSay(emailDigitEscapeCallSid, "עדיין לא ברור"); // עוד ניסיון כושל
+    assert(escapeFailAgainXml.includes("הקישו 0"), "ניסיון כושל נוסף מחזיר שוב לשלב ההקשה עם אפשרות דילוג");
+    const escapeDoneXml = await ivrSay(emailDigitEscapeCallSid, "0"); // הקשת 0 = דלג, לא מילה
+    assert(
+      escapeDoneXml.includes("נרשמת בהצלחה") && escapeDoneXml.includes("נא לציין"),
+      "הקשת 0 (לא תלויה בזיהוי דיבור בכלל) תמיד משלימה את ההרשמה בלי מייל - אין יותר לולאה בלי דרך החוצה"
+    );
 
     console.log("\n☎️ מנוע השיחה הקולית מול ימות המשיח (שלוחת API) — אותה מכונת מצבים, פרוטוקול שונה");
     const ymCallId = `YM-${Date.now()}`;
@@ -960,11 +974,10 @@ async function run() {
     const ymSignupPhone = "0500000088";
     const ymSignupGreeting = await yemotCall({ callId: ymSignupCallId, phone: ymSignupPhone });
     assert(ymSignupGreeting.includes("אינו מזוהה") && ymSignupGreeting.includes("השם המלא"), "מספר לא מזוהה בימות מקבל הצעת הרשמה");
-    await yemotCall({ callId: ymSignupCallId, speech: "דנה לוי" });
-    const ymSignupPinPrompt = await yemotCall({ callId: ymSignupCallId, speech: "כן" });
+    const ymSignupPinPrompt = await yemotCall({ callId: ymSignupCallId, speech: "דנה לוי" });
     assert(
-      ymSignupPinPrompt.includes("קוד סודי") && ymSignupPinPrompt.includes(",no,4,4,7,"),
-      "גם בימות, אחרי אישור השם מתבקש קוד PIN בן 4 ספרות בהקשה (מצב tap - max_digits/min_digits=4, sec_wait=7)"
+      ymSignupPinPrompt.includes("דנה לוי") && ymSignupPinPrompt.includes("קוד סודי") && ymSignupPinPrompt.includes(",no,4,4,7,"),
+      "גם בימות, מיד אחרי הכתבת השם (בלי שאלת אישור נפרדת) מתבקש קוד PIN בן 4 ספרות בהקשה (מצב tap - max_digits/min_digits=4, sec_wait=7)"
     );
     const ymSignupPinConfirmPrompt = await yemotCall({ callId: ymSignupCallId, speech: "4321" });
     assert(
@@ -995,7 +1008,6 @@ async function run() {
     const ymEmailPhone = "+972500000082";
     await yemotCall({ callId: ymEmailCallId, phone: ymEmailPhone });
     await yemotCall({ callId: ymEmailCallId, speech: "עידן ברק" });
-    await yemotCall({ callId: ymEmailCallId, speech: "כן" });
     await yemotCall({ callId: ymEmailCallId, speech: "1122" });
     await yemotCall({ callId: ymEmailCallId, speech: "1122" });
     const ymEmailSpeakPrompt = await yemotCall({ callId: ymEmailCallId, speech: "1" }); // הקשת 1 = כן, רוצה לצרף מייל
@@ -1020,7 +1032,6 @@ async function run() {
     const ymEmailHebrewPhone = "+972500000081";
     await yemotCall({ callId: ymEmailHebrewCallId, phone: ymEmailHebrewPhone });
     await yemotCall({ callId: ymEmailHebrewCallId, speech: "אורית שמעוני" });
-    await yemotCall({ callId: ymEmailHebrewCallId, speech: "כן" });
     await yemotCall({ callId: ymEmailHebrewCallId, speech: "3344" });
     await yemotCall({ callId: ymEmailHebrewCallId, speech: "3344" });
     await yemotCall({ callId: ymEmailHebrewCallId, speech: "כן" });
