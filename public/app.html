@@ -446,9 +446,13 @@
           <h3 style="margin-top:0">בעל/ת הקו</h3>
           <div id="admin-status" class="hint">בודק סטטוס...</div>
           <div id="admin-claim-box" style="display:none; margin-top:10px">
-            <div class="hint">"בעל הקו" הוא מי שיכול לאשר בקשות לתפקיד "מפקח" (ר' למטה). כדי לתבוע את התפקיד צריך: להיות רשומים באתר עצמו (לא חשבון שנוצר אוטומטית מהטלפון), ולהזין מספר טלפון בפרופיל למעלה. יישלח קוד בן 4 ספרות בשיחה קולית למספר הזה.</div>
+            <div class="hint">"בעל הקו" הוא מי שיכול לאשר בקשות לתפקיד "מפקח" (ר' למטה). כדי לתבוע את התפקיד צריך: להיות רשומים באתר עצמו (לא חשבון שנוצר אוטומטית מהטלפון), ולהזין מספר טלפון או כתובת מייל בפרופיל למעלה. יישלח קוד בן 4 ספרות לערוץ שתבחרו.</div>
+            <div class="row" style="margin-top:8px; gap:14px">
+              <label style="display:flex; align-items:center; gap:6px; font-size:13.5px"><input type="radio" name="admin_claim_channel" value="phone" checked> שיחה קולית לטלפון</label>
+              <label style="display:flex; align-items:center; gap:6px; font-size:13.5px"><input type="radio" name="admin_claim_channel" value="email"> מייל</label>
+            </div>
             <div class="row" style="margin-top:8px">
-              <button class="btn secondary" onclick="requestAdminClaim()">שליחת קוד אימות לטלפון שלי</button>
+              <button class="btn secondary" onclick="requestAdminClaim()">שליחת קוד אימות</button>
               <div class="field"><label>קוד שהתקבל</label><input id="admin_code" class="plain" placeholder="1234"></div>
               <button class="btn" style="align-self:flex-end" onclick="confirmAdminClaim()">אישור</button>
             </div>
@@ -1068,7 +1072,9 @@ function showDemoCodeBox(boxId, demoCode) {
   box.innerHTML = `⚠️ מצב בדיקה: עדיין לא הוגדר שירות שיחה/מייל אמיתי בשרת, אז שום שיחה/מייל לא נשלחו בפועל. הקוד מוצג כאן ישירות: <b style="font-size:19px; letter-spacing:4px">${demoCode}</b>`;
 }
 async function requestAdminClaim() {
-  const r = await api('POST', '/api/me/request-admin-claim', {});
+  const channelInput = document.querySelector('input[name="admin_claim_channel"]:checked');
+  const channel = channelInput ? channelInput.value : 'phone';
+  const r = await api('POST', '/api/me/request-admin-claim', { channel });
   if (r.ok) { toast(r.data.message, 'success'); showDemoCodeBox('admin-claim-demo-code', r.data.demoCode); }
 }
 async function confirmAdminClaim() {

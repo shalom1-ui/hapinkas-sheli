@@ -199,6 +199,19 @@ async function run() {
     const noPhoneClaimAttempt = await api("POST", "/api/me/request-admin-claim", {}, noPhoneSignup.data.token);
     assert(noPhoneClaimAttempt.status === 400, "משתמש בלי מספר טלפון רשום לא יכול לתבוע את בעל הקו (אין ערוץ לאמת אותו)");
 
+    // ערוץ מייל לתביעת בעל הקו (נוסף בעקבות בקשת פיצ'ר - "למה לא לעשות שליחה גם למייל בינתיים") -
+    // עובד גם למי שאין לו טלפון רשום, כל עוד יש לו כתובת מייל.
+    const emailClaimSignup = await api("POST", "/api/auth/signup", {
+      full_name: "תובע דרך מייל", username: `email_claim_${Date.now()}`, password: "1234", email: "emailclaim@example.com",
+    });
+    const emailClaimNoEmailUser = await api("POST", "/api/me/request-admin-claim", { channel: "email" }, noPhoneSignup.data.token);
+    assert(emailClaimNoEmailUser.status === 400, "משתמש בלי כתובת מייל רשומה לא יכול לתבוע בעל הקו בערוץ מייל");
+    const emailClaimReq = await api("POST", "/api/me/request-admin-claim", { channel: "email" }, emailClaimSignup.data.token);
+    assert(
+      emailClaimReq.status === 200 && emailClaimReq.data.demoCode && emailClaimReq.data.message.includes("מייל"),
+      "תביעת בעל הקו בערוץ מייל עובדת גם למשתמש בלי טלפון רשום, כל עוד יש לו כתובת מייל"
+    );
+
     const wrongClaimCode = await api("POST", "/api/me/request-admin-claim", {}, token);
     assert(wrongClaimCode.status === 200 && wrongClaimCode.data.demoCode, "בקשת תביעת בעל הקו שולחת קוד אישור בשיחה קולית (demoCode במצב MOCK)");
     const wrongClaimConfirm = await api("POST", "/api/me/confirm-admin-claim", { code: "0000" }, token);

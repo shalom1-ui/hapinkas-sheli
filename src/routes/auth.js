@@ -271,20 +271,28 @@ function register(router) {
     if (me.signup_channel !== "web") {
       return json(ctx.res, 403, { error: "רק חשבון שנרשם באתר עצמו (עם סיסמה שנבחרה, לא חשבון שנוצר אוטומטית מהטלפון) יכול לתבוע את תפקיד בעל הקו" });
     }
-    if (!me.phone) return json(ctx.res, 400, { error: "יש להזין מספר טלפון בפרופיל שלכם לפני תביעת בעל הקו - הוא הערוץ לאימות" });
+    // channel: 'phone' (ברירת מחדל, תואם לאחור) | 'email' - נוסף כדי לאפשר אימות אמיתי כשמייל
+    // אמיתי (SendGrid) כבר מוגדר אבל טלפון אמיתי (Twilio) עדיין לא - ר' README.
+    const channel = ctx.body.channel === "email" ? "email" : "phone";
+    if (channel === "phone" && !me.phone) {
+      return json(ctx.res, 400, { error: "יש להזין מספר טלפון בפרופיל שלכם לפני תביעת בעל הקו בערוץ טלפון - הוא הערוץ לאימות" });
+    }
+    if (channel === "email" && !me.email) {
+      return json(ctx.res, 400, { error: "יש להזין כתובת מייל בפרופיל שלכם לפני תביעת בעל הקו בערוץ מייל" });
+    }
 
     const code = generateOtpCode();
     const expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString();
 
-    // כאן זה אימות עצמי (מוודאים שהמבקש באמת מחזיק בטלפון הרשום שלו) - לא כמו אישור מפקח שדורש
+    // כאן זה אימות עצמי (מוודאים שהמבקש באמת מחזיק בטלפון/מייל הרשום שלו) - לא כמו אישור מפקח שדורש
     // סודיות בין שני אנשים - ולכן demoCode במצב MOCK תמיד בטוח להחזיר גם כאן. שולחים לפני שמירת
     // השורה, כדי לדעת אם ימות טיפלו בזה בעצמם (verify_via) - ר' הערה מפורטת ב-forgot-password/request.
-    const deliveryResult = await sendRecoveryCode({ channel: "phone", phone: me.phone, code });
+    const deliveryResult = await sendRecoveryCode({ channel, phone: me.phone, email: me.email, code });
     db.prepare("INSERT INTO admin_claim_requests (user_id, code_hash, expires_at, verify_via) VALUES (?, ?, ?, ?)")
       .run(ctx.user.userId, hashCode(code), expires_at, deliveryResult.verifyVia || null);
 
     return json(ctx.res, 200, {
-      message: "קוד אישור בן 4 ספרות נשלח בשיחת אימות למספר הטלפון הרשום שלכם.",
+      message: channel === "email" ? "קוד אישור בן 4 ספרות נשלח למייל הרשום שלכם." : "קוד אישור בן 4 ספרות נשלח בשיחת אימות למספר הטלפון הרשום שלכם.",
       ...deliveryResult,
     });
   }));
