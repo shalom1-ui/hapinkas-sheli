@@ -441,6 +441,16 @@
           </div>
         </div>
         <div class="card">
+          <h3 style="margin-top:0">מנהל מערכת</h3>
+          <div class="hint">דרך נוספת ומהירה להעניק (או להסיר) הרשאת "מפקח" למשתמש כלשהו - ישירות, בלי תהליך הקוד מול בעל הקו למעלה. דורשת סיסמת מנהל מערכת מיוחדת (מוגדרת בשרת, לא הסיסמה הרגילה שלכם) - אם היא לא הוגדרת, האזור הזה לא יעבוד בכלל.</div>
+          <div class="row" style="margin-top:8px">
+            <div class="field"><label>סיסמת מנהל מערכת</label><input id="sm_password" class="plain" type="password" placeholder="הסיסמה המיוחדת"></div>
+            <div class="field"><label>חיפוש משתמש (שם / שם משתמש / טלפון)</label><input id="sm_search" class="plain" placeholder="לדוגמה: דנה, או 050..."></div>
+            <button class="btn secondary" style="align-self:flex-end" onclick="systemAdminSearch()">חיפוש</button>
+          </div>
+          <div id="sm-results" style="margin-top:10px"></div>
+        </div>
+        <div class="card">
           <h3 style="margin-top:0">שינוי סיסמה</h3>
           <div class="row">
             <div class="field"><label>סיסמה נוכחית</label><input id="st_current_password" class="plain" type="password"></div>
@@ -585,8 +595,21 @@ async function loadTransactionsTrend() {
       </tbody>
     </table>`;
 }
+// "מילון" קטגוריות ההוצאה האישי - מוסיף לרשימת ההצעות הקבועה (category-suggestions) גם קטגוריות
+// מותאמות-אישית שהוזנו בעבר (למשל "תרופות"), בין אם הוזנו כאן באתר ובין אם הוכתבו בטלפון תחת
+// "אחר" (ר' routes/ivr.js case "expense_category_other") - אותו מילון בדיוק, קטגוריה אחת מכל צד
+// מספיקה כדי שהיא תופיע גם בצד השני.
+async function loadCategoryDictionary() {
+  const r = await api('GET', '/api/transactions/dictionary');
+  const dl = document.getElementById('category-suggestions');
+  if (!r.ok || !dl) return;
+  const staticOptions = ['מעשרות', 'צדקה', 'מזון', 'דיור', 'תחבורה', 'בריאות', 'חינוך'];
+  const merged = [...staticOptions, ...(r.data.phrases || []).filter(p => !staticOptions.includes(p))];
+  dl.innerHTML = merged.map(p => `<option value="${p.replace(/"/g, '&quot;')}">`).join('');
+}
 async function loadTransactions() {
   loadTransactionsTrend();
+  loadCategoryDictionary();
   const r = await api('GET', '/api/transactions');
   if (!r.ok) return;
   const s = r.data.summary;
@@ -993,6 +1016,44 @@ async function confirmSupervisor() {
   if (!code) { toast('יש להזין את הקוד שקיבלתם', 'error'); return; }
   const r = await api('POST', '/api/me/confirm-supervisor', { code });
   if (r.ok) { toast(r.data.message, 'success'); document.getElementById('sv_code').value = ''; loadProfile(); }
+}
+// ---------- מנהל מערכת: חיפוש משתמשים + הענקת/הסרת הרשאת מפקח, מוגן בסיסמה מיוחדת (ר' routes/systemAdmin.js) ----------
+function escapeHtml(str) {
+  return String(str || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+async function systemAdminSearch() {
+  const password = document.getElementById('sm_password').value;
+  const query = document.getElementById('sm_search').value.trim();
+  const box = document.getElementById('sm-results');
+  if (!password) { toast('יש להזין את סיסמת מנהל המערכת', 'error'); return; }
+  if (!query) { toast('יש להזין מילת חיפוש', 'error'); return; }
+  const r = await api('POST', '/api/system-admin/search-users', { password, query });
+  if (!r.ok) { box.innerHTML = ''; return; } // api() כבר הציג הודעת שגיאה (toast) בעצמו
+  if (!r.data.users.length) { box.innerHTML = '<div class="empty-state">לא נמצאו משתמשים תואמים</div>'; return; }
+  box.innerHTML = r.data.users.map(u => {
+    const roles = (u.roles || '').split(',').map(x => x.trim()).filter(Boolean);
+    const isSupervisor = roles.includes('supervisor');
+    return `
+      <div class="row" style="align-items:center; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border, #e5e5e5)">
+        <div>
+          <div class="li-main">${escapeHtml(u.full_name)} ${isSupervisor ? '✅ מפקח/ת' : ''}</div>
+          <div class="li-sub">${escapeHtml(u.username)} · ${escapeHtml(u.phone || 'בלי טלפון')}</div>
+        </div>
+        ${isSupervisor
+          ? `<button class="btn secondary" onclick="systemAdminRevoke(${u.id})">הסרת הרשאת מפקח</button>`
+          : `<button class="btn" onclick="systemAdminGrant(${u.id})">הפוך למפקח/ת</button>`}
+      </div>`;
+  }).join('');
+}
+async function systemAdminGrant(userId) {
+  const password = document.getElementById('sm_password').value;
+  const r = await api('POST', '/api/system-admin/grant-supervisor', { password, user_id: userId });
+  if (r.ok) { toast(r.data.message, 'success'); systemAdminSearch(); }
+}
+async function systemAdminRevoke(userId) {
+  const password = document.getElementById('sm_password').value;
+  const r = await api('POST', '/api/system-admin/revoke-supervisor', { password, user_id: userId });
+  if (r.ok) { toast(r.data.message, 'success'); systemAdminSearch(); }
 }
 async function changePassword() {
   const currentPassword = document.getElementById('st_current_password').value;

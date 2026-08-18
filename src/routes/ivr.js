@@ -19,6 +19,7 @@ const db = require("../db");
 const { xml } = require("../router");
 const { sayAndGather, sayAndGatherDigits, sayAndHangup } = require("../services/telephony");
 const { hashPassword, isValidPin } = require("../utils/crypto");
+const { rememberPhrase } = require("../lib/dictionary");
 
 const MAIN_MENU_HINTS = [
   "ניהול חשבונות", "חשבונות", "תנועות", "הכנסה", "הוצאה", "יתרה",
@@ -253,11 +254,36 @@ async function advance(state, speech, draft, user, opts = {}) {
       return { text: `רשמתי ${amount} שקלים. לאיזו קטגוריה? למשל: מזון, תחבורה, דיור, אחר.`, nextState: "expense_category", draft: { amount } };
     }
     case "expense_category": {
+      // תוקן (משוב אמיתי ממשתמש: "כשאני אומר אחר, המערכת צריכה להציע דיבור חופשי ושזה יישמר לפעם
+      // הבאה") - "אחר" שנאמר כמילה בודדת (לא כחלק ממשפט ארוך יותר) לא אמור להפוך להיות שם הקטגוריה
+      // המילולי "אחר" בפועל - זה לא באמת שם קטגוריה שימושי בדוחות/בפילוח. במקום זה מבקשים לתאר בקול
+      // חופשי מה זו בעצם הקטגוריה (ר' case "expense_category_other" למטה), ואז שומרים אותה במפורש
+      // כמו כל קטגוריה אחרת (ר' rememberPhrase ב-expense_confirm).
+      if (s === "אחר" || s === "אחרת") {
+        return {
+          text: "אפשר לתאר במילים חופשיות לאיזו קטגוריה? למשל: תרופות, מתנות, תיקונים.",
+          nextState: "expense_category_other",
+          draft,
+        };
+      }
       const category = s || "אחר";
       return {
         text: `לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${category}? אמרו כן לאישור.${confirmSuffix(opts)}`,
         nextState: "expense_confirm",
         draft: { ...draft, category },
+      };
+    }
+    // קטגוריה מותאמת-אישית שהוכתבה בעקבות אמירת "אחר" (ר' הערה ב-expense_category למעלה) - טקסט
+    // חופשי, עובר דרך אותו מנגנון Whisper כמו שאר שדות התוכן החופשי (ר' FREE_TEXT_STATES ב-routes/yemot.js).
+    case "expense_category_other": {
+      const customCategory = String(speech || "").trim();
+      if (!customCategory) {
+        return { text: `לא שמעתי קטגוריה.${retryHint()} אפשר לתאר במילים חופשיות לאיזו קטגוריה?`, nextState: "expense_category_other", draft };
+      }
+      return {
+        text: `לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${customCategory}? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        nextState: "expense_confirm",
+        draft: { ...draft, category: customCategory },
       };
     }
     case "expense_confirm": {
@@ -267,6 +293,9 @@ async function advance(state, speech, draft, user, opts = {}) {
       if (isConfirmYes(s, opts)) {
         db.prepare("INSERT INTO transactions (user_id, type, amount, category, source) VALUES (?, 'expense', ?, ?, 'phone')")
           .run(user.id, draft.amount, draft.category);
+        // "מילון" הקטגוריות האישי - אותו kind בדיוק כמו הוספת תנועה דרך האתר (ר' routes/transactions.js)
+        // כדי שקטגוריה שהוכתבה בטלפון (למשל "תרופות") תוצע גם באתר בפעם הבאה, ולהפך.
+        if (draft.category) rememberPhrase(user.id, "expense_category", draft.category);
         return askMoreOrFinish(`נשמר. הוצאה של ${draft.amount} שקלים ב${draft.category}.`, "expense_saved");
       }
       if (isConfirmNo(s, opts)) return { text: `בוטל. אפשר להתחיל שוב, מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
@@ -380,6 +409,56 @@ async function advance(state, speech, draft, user, opts = {}) {
       return {
         text: `לא הבנתי.${retryHint()} לאשר: להסיר את ${draft.studentName} מרשימת התלמידים שלך? התלמיד לא יימחק לצמיתות, רק לא יופיע יותר ברשימה הפעילה - כל ההיסטוריה שלו נשארת בתיק. אמרו כן לאישור.${confirmSuffix(opts)}`,
         nextState: "mentor_remove_confirm",
+        draft,
+      };
+    }
+
+    // ---------- חונכות: דיווח מעקב חופשי אופציונלי אחרי checkout/quick-session (ר' offerMentorNote) ----------
+    // mentor_note_offer הוא כן/לא רגיל (לא Whisper) - קיצור הקשה 1/2 אמין תמיד עובד גם אם זיהוי
+    // הדיבור לא יתפוס "כן"/"לא". mentor_note_speak (ההכתבה עצמה) כן עובר דרך Whisper (ר' FREE_TEXT_STATES
+    // ב-routes/yemot.js) - זה בדיוק כמו therapist_note/supervisor_readback, רק אופציונלי ומתחבר
+    // למפגש חונכות שכבר נשמר (sessions.note) במקום ליצור רשומה חדשה.
+    case "mentor_note_offer": {
+      if (isConfirmYes(s, opts)) {
+        return {
+          text: "אפשר לתאר במילים חופשיות מה עשיתם במפגש, ואיך התלמיד התקדם.",
+          nextState: "mentor_note_speak",
+          draft,
+        };
+      }
+      if (isConfirmNo(s, opts)) return askMoreOrFinish(draft.baseMessage, draft.outcome);
+      return {
+        text: `לא הבנתי.${retryHint()} רוצים להוסיף גם דיווח מעקב חופשי על המפגש? זה לא חובה. אמרו כן, או הקישו 1. אם לא, אמרו לא, או הקישו 2.`,
+        nextState: "mentor_note_offer",
+        draft,
+      };
+    }
+    case "mentor_note_speak": {
+      const noteTrim = String(speech || "").trim();
+      // בדיוק כמו signup_email_speak - "דלג" (או שתיקה) תמיד משלים בלי דיווח, בלי תלות בזיהוי דיבור נוסף.
+      if (!noteTrim || includesAny(s, ["דלג", "לדלג", "לא רוצה", "בלי", "ביטול", "וויתור", "לוותר", "אין לי", "לא צריך", "עזוב"])) {
+        return askMoreOrFinish(draft.baseMessage, draft.outcome);
+      }
+      return {
+        text: `לאשר: הדיווח הוא "${noteTrim}"? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        nextState: "mentor_note_confirm",
+        draft: { ...draft, pendingNote: noteTrim },
+      };
+    }
+    case "mentor_note_confirm": {
+      if (isConfirmYes(s, opts)) {
+        db.prepare("UPDATE sessions SET note = ? WHERE id = ?").run(draft.pendingNote, draft.sessionId);
+        // אותו "מילון" ניסוחים אישי שכבר קיים באתר (kind=session_note, ר' routes/students.js) - כדי
+        // שניסוחים נפוצים יוצעו אוטומטית גם שם בפעם הבאה, גם אם הדיווח הוכתב בטלפון ולא הוקלד באתר.
+        rememberPhrase(draft.mentorUserId, "session_note", draft.pendingNote);
+        return askMoreOrFinish(`${draft.baseMessage} הדיווח נשמר.`, draft.outcome);
+      }
+      if (isConfirmNo(s, opts)) {
+        return { text: "בסדר, ננסה שוב. אפשר לתאר שוב במילים חופשיות מה עשיתם במפגש?", nextState: "mentor_note_speak", draft: { ...draft, pendingNote: undefined } };
+      }
+      return {
+        text: `לא הבנתי.${retryHint()} לאשר: הדיווח הוא "${draft.pendingNote}"? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        nextState: "mentor_note_confirm",
         draft,
       };
     }
@@ -776,19 +855,36 @@ function doCheckout(draft, user) {
   if (!student.checkin_at) return askMoreOrFinish("אין מפגש פתוח לתלמיד הזה.");
   const start = new Date(student.checkin_at + "Z");
   const durationMinutes = Math.max(1, Math.round((Date.now() - start.getTime()) / 60000));
-  db.prepare("INSERT INTO sessions (student_id, mentor_user_id, method, duration_minutes) VALUES (?, ?, 'checkin_checkout', ?)")
+  const info = db
+    .prepare("INSERT INTO sessions (student_id, mentor_user_id, method, duration_minutes) VALUES (?, ?, 'checkin_checkout', ?)")
     .run(student.id, user.id, durationMinutes);
   db.prepare("UPDATE students SET checkin_at = NULL WHERE id = ?").run(student.id);
-  return askMoreOrFinish(`נרשמה יציאה עבור ${student.name}. משך המפגש: ${durationMinutes} דקות.`, "checkout_saved");
+  // אחרי שמירת המפגש, מציעים גם דיווח מעקב חופשי (כמו ה-note האופציונלי שכבר קיים באתר, ר'
+  // routes/students.js checkout/quick-session) - ר' offerMentorNote למטה.
+  return offerMentorNote(user.id, info.lastInsertRowid, `נרשמה יציאה עבור ${student.name}. משך המפגש: ${durationMinutes} דקות.`, "checkout_saved");
 }
 
 function doQuickSession(draft, user) {
   const student = db.prepare("SELECT * FROM students WHERE id = ?").get(draft.studentId);
   const u = db.prepare("SELECT default_session_minutes FROM users WHERE id = ?").get(user.id);
   const minutes = u.default_session_minutes || 45;
-  db.prepare("INSERT INTO sessions (student_id, mentor_user_id, method, duration_minutes) VALUES (?, ?, 'quick_preset', ?)")
+  const info = db
+    .prepare("INSERT INTO sessions (student_id, mentor_user_id, method, duration_minutes) VALUES (?, ?, 'quick_preset', ?)")
     .run(student.id, user.id, minutes);
-  return askMoreOrFinish(`נרשם מפגש עבור ${student.name}, ${minutes} דקות.`, "quick_session_saved");
+  return offerMentorNote(user.id, info.lastInsertRowid, `נרשם מפגש עבור ${student.name}, ${minutes} דקות.`, "quick_session_saved");
+}
+
+// מציע לחונך לצרף דיווח מעקב חופשי (note) למפגש שכרגע נשמר - אותו שדה note בדיוק שכבר קיים באתר
+// (sessions.note, ר' routes/students.js). רק אחרי checkout/quick-session (שם כבר יש שורת sessions
+// לעדכן) - לא אחרי checkin עצמו, כי השורה ב-sessions נוצרת רק בסיום המפגש (checkout), לא בתחילתו.
+// שלב זה (mentor_note_offer) הוא כן/לא רגיל עם קיצור הקשה 1/2 אמין - לא Whisper - כדי שתמיד יהיה
+// אפשר לדלג בביטחון גם אם זיהוי הדיבור לא יעבוד.
+function offerMentorNote(mentorUserId, sessionId, baseMessage, outcome) {
+  return {
+    text: `${baseMessage} רוצים להוסיף גם דיווח מעקב חופשי על המפגש - למשל מה עשיתם ואיך התלמיד התקדם? זה לא חובה, ואפשר גם להוסיף אותו מאוחר יותר באתר. אמרו כן, או הקישו 1. אם לא, אמרו לא, או הקישו 2.`,
+    nextState: "mentor_note_offer",
+    draft: { mentorUserId, sessionId, baseMessage, outcome },
+  };
 }
 
 // מוצא את רשימת הילדים ששויכו למתקשר כהורה (טבלת student_guardians), ומחליט אם לקרוא סיכום מיד
@@ -838,9 +934,111 @@ function findStudentByName(ownerUserId, spokenName) {
   return rows.find(r => normalize(r.name).includes(clean) || clean.includes(normalize(r.name))) || null;
 }
 
+// תוקן (משוב אמיתי ממשתמש בבדיקה חיה): "הכנסה אמרתי 100 ש"ח והוא לא זיהה" - הסיבה: expense_amount/
+// income_amount לא היו ב-FREE_TEXT_STATES, אז זיהוי הסכום עבר דרך מנוע הזיהוי המובנה (הלא-משודרג)
+// של ימות, לא Whisper (ר' תיקון ב-routes/yemot.js). בנוסף, גם מנוע זיהוי דיבור טוב עלול "לכתוב"
+// מספר שנאמר בקול כמילה ("מאה") ולא כספרות ("100") - התאמת regex לספרות בלבד הייתה מפספסת את זה
+// לגמרי. התיקון כאן: אם אין ספרות בטקסט, מנסים לפרש מילות מספר בעברית (`parseHebrewNumberWords`)
+// כרשת ביטחון נוספת - בנוסף למעבר ל-Whisper (הרבה יותר אמין למספרים, גם ככה).
 function extractAmount(text) {
-  const match = text.replace(/,/g, "").match(/\d+(\.\d+)?/);
-  return match ? Number(match[0]) : null;
+  const digitMatch = String(text || "").replace(/,/g, "").match(/\d+(\.\d+)?/);
+  if (digitMatch) return Number(digitMatch[0]);
+  const fromWords = parseHebrewNumberWords(text);
+  return fromWords != null && fromWords > 0 ? fromWords : null;
+}
+
+// ---------- פענוח מספר שנאמר במילים בעברית (למשל "מאה עשרים וחמש" -> 125) ----------
+// כיסוי מכוון לסכומי כסף "עגולים" טיפוסיים (לא כל דקדוק המספרים העברי המלא) - יחידות, עשרות,
+// "עשר/עשרה" בתור טין, מאות (כולל "X מאות"), ואלפים (כולל "X אלפים"). מחזיר null אם לא זוהתה אף
+// מילת מספר בטקסט, כדי שהקורא (extractAmount) ידע שזה כישלון אמיתי ולא "אפס".
+const HEB_NUM_UNITS = {
+  "אפס": 0, "אחד": 1, "אחת": 1, "שתיים": 2, "שניים": 2, "שני": 2, "שתי": 2,
+  "שלוש": 3, "שלושה": 3, "ארבע": 4, "ארבעה": 4, "חמש": 5, "חמישה": 5,
+  "שש": 6, "שישה": 6, "שבע": 7, "שבעה": 7, "שמונה": 8, "תשע": 9, "תשעה": 9,
+  // צורת סמיכות (משמשת בעיקר לפני "אלפים"/"מאות", למשל "שלושת אלפים") - ר' פענוח "מאות"/"אלפים" למטה.
+  "שלושת": 3, "ארבעת": 4, "חמשת": 5, "ששת": 6, "שבעת": 7, "שמונת": 8, "תשעת": 9, "עשרת": 10,
+};
+const HEB_NUM_TENS = {
+  "עשרים": 20, "שלושים": 30, "ארבעים": 40, "חמישים": 50,
+  "שישים": 60, "שבעים": 70, "שמונים": 80, "תשעים": 90,
+};
+function parseHebrewNumberWords(rawText) {
+  const norm = normalize(rawText);
+  if (!norm) return null;
+  // "ו" מחוברת כקידומת למילה הבאה בעברית (למשל "עשרים וחמש") - מסירים אותה מכל טוקן שמתחיל בה,
+  // כדי שההתאמה למילון תעבוד (בלי לפגוע במילים שבאמת מתחילות ב-ו, כי אלה ממילא לא במילוני המספרים).
+  const tokens = norm.split(/\s+/).filter(Boolean).map(t => (t.length > 1 && t[0] === "ו" ? t.slice(1) : t));
+  if (!tokens.length) return null;
+
+  let result = 0;
+  let chunk = 0;
+  let matchedAny = false;
+
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    const nextT = tokens[i + 1];
+
+    if (t in HEB_NUM_UNITS) {
+      // בדיקת "טין" (11-19): יחידה ואחריה "עשר"/"עשרה" - למשל "חמש עשרה" = 15.
+      if (nextT === "עשר" || nextT === "עשרה") {
+        chunk += HEB_NUM_UNITS[t] + 10;
+        i++; // דילוג על מילת ה"עשר/עשרה" שכבר נספרה
+      } else {
+        chunk += HEB_NUM_UNITS[t];
+      }
+      matchedAny = true;
+      continue;
+    }
+    if (t === "עשר" || t === "עשרה") {
+      chunk += 10;
+      matchedAny = true;
+      continue;
+    }
+    if (t in HEB_NUM_TENS) {
+      chunk += HEB_NUM_TENS[t];
+      matchedAny = true;
+      continue;
+    }
+    if (t === "מאה") {
+      chunk += 100;
+      matchedAny = true;
+      continue;
+    }
+    if (t === "מאתיים") {
+      chunk += 200;
+      matchedAny = true;
+      continue;
+    }
+    if (t === "מאות") {
+      // "שלוש מאות" - היחידה שנצברה כרגע ב-chunk (3) הופכת למאות (300).
+      chunk = (chunk || 1) * 100;
+      matchedAny = true;
+      continue;
+    }
+    if (t === "אלף") {
+      result += (chunk || 1) * 1000;
+      chunk = 0;
+      matchedAny = true;
+      continue;
+    }
+    if (t === "אלפיים") {
+      result += 2000;
+      chunk = 0;
+      matchedAny = true;
+      continue;
+    }
+    if (t === "אלפים") {
+      // "שלושה אלפים" - היחידה שנצברה כרגע ב-chunk (3) הופכת לאלפים (3000).
+      result += (chunk || 1) * 1000;
+      chunk = 0;
+      matchedAny = true;
+      continue;
+    }
+    // מילה לא מזוהה - מתעלמים (למשל "שקלים"/"שח"/"בערך") וממשיכים לטוקן הבא
+  }
+
+  if (!matchedAny) return null;
+  return result + chunk;
 }
 
 function includesAny(text, words) {
@@ -930,4 +1128,5 @@ module.exports = {
   OPENING_GREETING,
   DIGIT_ENTRY_STATES,
   parseSpokenEmail, // מיוצא כדי לאפשר בדיקה ישירה (ר' tests/test-flow.js) - בלי לעבור זרימת שיחה מלאה
+  extractAmount, // מיוצא כדי לאפשר בדיקה ישירה (ר' tests/test-flow.js) - כולל פענוח מספרים במילים
 };

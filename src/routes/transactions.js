@@ -3,6 +3,7 @@
 const db = require("../db");
 const { json } = require("../router");
 const { requireAuth } = require("../middleware/auth");
+const { rememberPhrase, getDictionary } = require("../lib/dictionary");
 
 function register(router) {
   // רשימת תנועות + סיכומים
@@ -54,8 +55,19 @@ function register(router) {
       .prepare("INSERT INTO transactions (user_id, type, amount, category, note, source) VALUES (?, ?, ?, ?, ?, ?)")
       .run(ctx.user.userId, type, numAmount, category || null, note || null, source === "phone" ? "phone" : "web");
 
+    // קטגוריית הוצאה שהוזנה (מהאתר או מהטלפון - ר' routes/ivr.js case "expense_confirm") נכנסת גם
+    // ל"מילון" הניסוחים האישי (kind=expense_category), בדיוק כמו note/trend/role_type בדוחות טיפוליים -
+    // כדי שקטגוריות מותאמות-אישית (למשל "תרופות") יוצעו אוטומטית בפעם הבאה, גם אם הוכתבו בטלפון.
+    if (type === "expense" && category) rememberPhrase(ctx.user.userId, "expense_category", category);
+
     const row = db.prepare("SELECT * FROM transactions WHERE id = ?").get(info.lastInsertRowid);
     return json(ctx.res, 201, { transaction: row });
+  }));
+
+  // "מילון" קטגוריות ההוצאה האישי של המשתמש המחובר - להצעת השלמה אוטומטית (באתר: datalist, ר'
+  // public/app.html; בטלפון: לא מוצג בקול, אבל אותה רשימה בדיוק נבנית ומוזנת גם משם).
+  router.get("/api/transactions/dictionary", requireAuth(async (ctx) => {
+    return json(ctx.res, 200, { phrases: getDictionary(ctx.user.userId, "expense_category") });
   }));
 
   // מחיקת תנועה (למשל טעות בהזנה)

@@ -89,7 +89,13 @@ async function run() {
   }
 
   const server = spawn(process.execPath, [path.join(__dirname, "..", "src", "server.js")], {
-    env: { ...process.env, PORT: String(TEST_PORT), DB_PATH: TEST_DB, UPLOADS_DIR: TEST_UPLOADS_DIR, RECOVERY_MOCK: "true", CARDCOM_MOCK: "true" },
+    env: {
+      ...process.env,
+      PORT: String(TEST_PORT), DB_PATH: TEST_DB, UPLOADS_DIR: TEST_UPLOADS_DIR, RECOVERY_MOCK: "true", CARDCOM_MOCK: "true",
+      // מוגדר כאן כדי לבדוק את תכונת "מנהל מערכת" (ר' routes/systemAdmin.js) - סיסמת בדיקה קבועה,
+      // לא סיסמה אמיתית מהייצור.
+      SYSTEM_ADMIN_PASSWORD: "test-system-admin-password-9427",
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
 
@@ -244,6 +250,37 @@ async function run() {
       supervisorProfileAfterSave.data.user.roles.includes("supervisor"),
       "שמירת פרופיל רגילה (בלי לגעת בתפקידים) לא 'שוכחת'/מסירה בטעות תפקיד מפקח שכבר אושר"
     );
+
+    console.log("\n🔑 'מנהל מערכת' - כפתור להענקת/הסרת מפקח ישירות, מוגן בסיסמה מיוחדת (בלי תהליך הקוד מול בעל הקו)");
+    const smWrongPassword = await api("POST", "/api/system-admin/search-users", { password: "לא-נכון", query: "בדיקה" });
+    assert(smWrongPassword.status === 403, "סיסמת מנהל מערכת שגויה נדחית (403), לא חושפת אם התכונה בכלל מוגדרת");
+
+    const smNoPassword = await api("POST", "/api/system-admin/grant-supervisor", { user_id: 1 });
+    assert(smNoPassword.status === 403, "בלי סיסמה בכלל - נדחה גם כן (403), לא 200/500");
+
+    const smSearch = await api("POST", "/api/system-admin/search-users", { password: "test-system-admin-password-9427", query: "בדיקה אוטומטית" });
+    assert(
+      smSearch.status === 200 && smSearch.data.users.some(u => u.username && u.full_name === "בדיקה אוטומטית"),
+      "עם הסיסמה הנכונה, חיפוש לפי שם מוצא את המשתמש (החונך הראשי של הבדיקות)"
+    );
+    const smTargetUser = smSearch.data.users.find(u => u.full_name === "בדיקה אוטומטית");
+    assert(!(smTargetUser.roles || "").split(",").includes("supervisor"), "המשתמש שנמצא עדיין לא מפקח, לפני ההענקה");
+
+    const smGrant = await api("POST", "/api/system-admin/grant-supervisor", { password: "test-system-admin-password-9427", user_id: smTargetUser.id });
+    assert(
+      smGrant.status === 200 && smGrant.data.user.roles.split(",").includes("supervisor"),
+      "הענקת מפקח ישירות (בלי קוד, בלי בעל קו) עובדת מיד עם הסיסמה הנכונה"
+    );
+    const smSearchAfterGrant = await api("POST", "/api/system-admin/search-users", { password: "test-system-admin-password-9427", query: "בדיקה אוטומטית" });
+    const smTargetAfterGrant = smSearchAfterGrant.data.users.find(u => u.id === smTargetUser.id);
+    assert((smTargetAfterGrant.roles || "").split(",").includes("supervisor"), "ההענקה נשמרה בפועל במסד הנתונים - נראית גם בחיפוש הבא");
+
+    const smRevoke = await api("POST", "/api/system-admin/revoke-supervisor", { password: "test-system-admin-password-9427", user_id: smTargetUser.id });
+    assert(
+      smRevoke.status === 200 && !smRevoke.data.user.roles.split(",").filter(Boolean).includes("supervisor"),
+      "הסרת מפקח (לתיקון טעות) עובדת גם היא ישירות עם הסיסמה הנכונה"
+    );
+    assert(smRevoke.data.user.roles.includes("private"), "הסרת מפקח לא פוגעת בשאר התפקידים הקיימים של המשתמש (private נשאר)");
 
     console.log("\n👤 עדכון פרופיל חלקי (שדה בודד, בלי שאר השדות)");
     // בדיקה שנוספה בעקבות באג אמיתי שנתגלה: עדכון עם שדה יחיד בלבד (למשל טלפון) קרס בעבר
@@ -573,6 +610,26 @@ async function run() {
     const phoneTx = afterCallTx.data.transactions.find(t => t.source === "phone" && t.amount === 60);
     assert(!!phoneTx, "התנועה שנוצרה בשיחה הקולית אכן נשמרה במסד הנתונים עם source=phone");
 
+    // תוקן (משוב אמיתי ממשתמש בבדיקה חיה): "אמרתי 100 ש"ח והוא לא זיהה" - שני תיקונים: (1) סכומים
+    // עברו ל-FREE_TEXT_STATES בימות (ר' routes/yemot.js) כדי לעבור דרך Whisper במקום מנוע הזיהוי
+    // המובנה החלש יותר; (2) רשת ביטחון נוספת - extractAmount מפענח גם מספר שנאמר במילים ("מאה"),
+    // לא רק ספרות ("100"), למקרה שהתמלול (בכל מנוע) כותב את המספר במילים ולא בספרות.
+    console.log("\n🔢 סכום שנאמר במילים בעברית (למשל 'מאה שקלים', לא רק ספרות) גם מזוהה נכון");
+    const wordAmountCallSid = `${callSid}-word-amount`;
+    await ivrCall(wordAmountCallSid, "+972500000001");
+    await ivrSay(wordAmountCallSid, "הוצאה");
+    const wordAmountEcho = await ivrSay(wordAmountCallSid, "מאה שקלים");
+    assert(wordAmountEcho.includes("רשמתי 100 שקלים"), "סכום שנאמר לגמרי במילים ('מאה שקלים', בלי אף ספרה) מזוהה נכון כ-100");
+    // "אחר" כמילה בודדת כבר לא הופך להיות שם הקטגוריה המילולי - מבקשים לתאר בקול חופשי (ר' הבדיקה
+    // הייעודית למטה, "קטגוריית הוצאה מותאמת-אישית"), אז כאן פשוט אומרים קטגוריה רגילה כדי להמשיך.
+    await ivrSay(wordAmountCallSid, "מזון");
+    await ivrSay(wordAmountCallSid, "כן");
+    const afterWordAmountTx = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterWordAmountTx.data.transactions.some(t => t.source === "phone" && t.amount === 100 && t.category === "מזון"),
+      "התנועה שסכומה זוהה ממילים (לא ספרות) אכן נשמרה במסד הנתונים עם הסכום הנכון"
+    );
+
     const balanceCallSid = `${callSid}-balance`;
     await ivrCall(balanceCallSid, "+972500000001");
     const balanceXml = await ivrSay(balanceCallSid, "ניהול חשבונות");
@@ -791,6 +848,14 @@ async function run() {
     const ymTx = afterYmTx.data.transactions.find(t => t.source === "phone" && t.amount === 45 && t.category === "מזון");
     assert(!!ymTx, "התנועה שנוצרה בשיחת ימות אכן נשמרה במסד הנתונים עם source=phone");
 
+    // תוקן (משוב אמיתי ממשתמש בבדיקה חיה - "אמרתי 100 ש"ח והוא לא זיהה"): גם בימות, סכום עם סימן
+    // ש"ח/מילים נלוות מזוהה נכון (ה-regex לספרות כבר מתעלם מטקסט נוסף סביב הספרות עצמן).
+    const ymAmountWithCurrencyCallId = `${ymCallId}-amount-currency`;
+    await yemotCall({ callId: ymAmountWithCurrencyCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymAmountWithCurrencyCallId, speech: "הכנסה" });
+    const ymAmountEcho = await yemotCall({ callId: ymAmountWithCurrencyCallId, speech: '100 ש"ח' });
+    assert(ymAmountEcho.includes("לאשר: הכנסה של 100 שקלים"), "בימות, סכום עם 'ש\"ח' צמוד לספרות (לא רק ספרה נקייה) עדיין מזוהה נכון כ-100");
+
     console.log("\n❓ קלט לא ברור בשאלת אישור לא מבטל בשקט (רק 'לא' מפורש מבטל) - כדי לא לאבד תנועה שהוזנה");
     // בבדיקה בפועל מול ימות התברר שמילים כמו "אישור"/"לאשר" לפעמים לא מזוהות בדיוק ע"י זיהוי הדיבור.
     // בעבר כל קלט שלא זוהה כ"כן" נחשב אוטומטית "לא" וביטל את כל התנועה בשקט - התנהגות מסוכנת.
@@ -869,7 +934,7 @@ async function run() {
     assert(ymMultiBalance.includes("רוצים להוסיף הכנסה או הוצאה"), "אחרי היתרה מוצעת אפשרות להמשיך ישר להוספת הכנסה/הוצאה באותה שיחה");
     await yemotCall({ callId: ymMultiCallId, speech: "הוצאה" });
     await yemotCall({ callId: ymMultiCallId, speech: "33" });
-    await yemotCall({ callId: ymMultiCallId, speech: "אחר" });
+    await yemotCall({ callId: ymMultiCallId, speech: "ביגוד" });
     const ymMultiExpenseDone = await yemotCall({ callId: ymMultiCallId, speech: "כן" });
     assert(
       ymMultiExpenseDone.includes("נשמר") && ymMultiExpenseDone.includes("רוצים לעשות עוד משהו"),
@@ -882,7 +947,7 @@ async function run() {
     );
     const afterMulti = await api("GET", "/api/transactions", null, token);
     assert(
-      afterMulti.data.transactions.some(t => t.source === "phone" && t.amount === 33 && t.category === "אחר"),
+      afterMulti.data.transactions.some(t => t.source === "phone" && t.amount === 33 && t.category === "ביגוד"),
       "התנועה שנוספה כפעולה שנייה באותה שיחה אכן נשמרה במסד הנתונים"
     );
 
@@ -968,6 +1033,87 @@ async function run() {
     const foreignStudent = await api("POST", "/api/students", { name: "תלמיד של מישהו אחר" }, parentToken);
     const foreignRemoveAttempt = await api("DELETE", `/api/students/${foreignStudent.data.student.id}`, null, token);
     assert(foreignRemoveAttempt.status === 404, "משתמש לא יכול להסיר תלמיד שאינו הבעלים שלו (404, לא חושף מידע)");
+
+    console.log("\n🗣️ חונכות: דיווח מעקב חופשי על מפגש - עכשיו אפשר להכתיב אותו גם בטלפון (לא רק באתר)");
+    // מפגש רגיל (quick-session) לא דורש checkin קודם - הכי קצר לבדיקה. משתמשים ב"תלמיד בדיקה" (sid),
+    // שכבר עבר checkout+quick-session אחד דרך ה-API למעלה, כדי לוודא שההכתבה בטלפון מוסיפה מפגש
+    // *נוסף* משלה (לא מתערבבת עם המפגשים הקודמים).
+    const ymNoteCallId = `${ymCallId}-mentor-note`;
+    await yemotCall({ callId: ymNoteCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymNoteCallId, speech: "חונכות" });
+    await yemotCall({ callId: ymNoteCallId, speech: "תלמיד בדיקה" });
+    const ymNoteOffer = await yemotCall({ callId: ymNoteCallId, speech: "3" }); // 3 = מפגש רגיל
+    assert(
+      ymNoteOffer.includes("נרשם מפגש עבור תלמיד בדיקה") && ymNoteOffer.includes("דיווח מעקב חופשי") && ymNoteOffer.includes("הקישו 1"),
+      "אחרי מפגש רגיל, מוצעת אפשרות להוסיף גם דיווח מעקב חופשי - עם קיצור הקשה 1/2 אמין (לא רק מילה)"
+    );
+    const ymNoteSpeakPrompt = await yemotCall({ callId: ymNoteCallId, speech: "1" }); // 1 = כן, רוצים להכתיב
+    assert(ymNoteSpeakPrompt.includes("לתאר במילים חופשיות"), "הקשת 1 (או אמירת 'כן') על ההצעה עוברת לשלב ההכתבה החופשית");
+    const ymNoteConfirmPrompt = await yemotCall({ callId: ymNoteCallId, speech: "עבדנו על קריאה שוטפת, יש שיפור ניכר" });
+    assert(
+      ymNoteConfirmPrompt.includes("עבדנו על קריאה שוטפת, יש שיפור ניכר") && ymNoteConfirmPrompt.includes("לאשר"),
+      "הדיווח שהוכתב מוקרא בחזרה לאישור, בדיוק כמו דיווח מטפל/הערת מפקח"
+    );
+    const ymNoteDone = await yemotCall({ callId: ymNoteCallId, speech: "כן" });
+    assert(
+      ymNoteDone.includes("הדיווח נשמר") && ymNoteDone.includes("רוצים לעשות עוד משהו"),
+      "אישור הקראת הדיווח משלים את השמירה וחוזר לתפריט הרגיל"
+    );
+    const sessionsAfterPhoneNote = await api("GET", `/api/students/${sid}/file`, null, token);
+    const phoneNoteSession = sessionsAfterPhoneNote.data.timeline.find(
+      t => t.kind === "session" && t.data.note === "עבדנו על קריאה שוטפת, יש שיפור ניכר"
+    );
+    assert(!!phoneNoteSession, "המפגש עם הדיווח שהוכתב בטלפון אכן נשמר במסד הנתונים (sessions.note), בדיוק כמו דיווח שמוזן באתר");
+    const noteDictionaryAfterPhone = await api("GET", "/api/reports/dictionary?kind=session_note", null, token);
+    assert(
+      noteDictionaryAfterPhone.data.phrases.includes("עבדנו על קריאה שוטפת, יש שיפור ניכר"),
+      "דיווח שהוכתב בטלפון נכנס גם הוא ל'מילון' הניסוחים האישי של החונך, בדיוק כמו דיווח שמוזן באתר"
+    );
+
+    console.log("\n🗣️ חונכות: אפשר גם לדלג על דיווח המעקב (הוא לא חובה) - גם באמירה וגם בהקשה");
+    const ymNoteSkipCallId = `${ymCallId}-mentor-note-skip`;
+    await yemotCall({ callId: ymNoteSkipCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymNoteSkipCallId, speech: "חונכות" });
+    await yemotCall({ callId: ymNoteSkipCallId, speech: "תלמיד בדיקה" });
+    await yemotCall({ callId: ymNoteSkipCallId, speech: "3" }); // 3 = מפגש רגיל
+    const ymNoteSkipDone = await yemotCall({ callId: ymNoteSkipCallId, speech: "2" }); // 2 = לא, לא רוצים דיווח
+    assert(
+      ymNoteSkipDone.includes("נרשם מפגש עבור תלמיד בדיקה") && ymNoteSkipDone.includes("רוצים לעשות עוד משהו") && !ymNoteSkipDone.includes("הדיווח נשמר"),
+      "הקשת 2 (לא) על הצעת הדיווח משלימה את המפגש בלי דיווח, בלי להיתקע בשאלה"
+    );
+
+    console.log("\n🏷️ תנועות: קטגוריית הוצאה מותאמת-אישית - אמירת 'אחר' מציעה תיאור חופשי, ונשמר ל'מילון' לפעם הבאה");
+    const customCatCallSid = `${callSid}-custom-category`;
+    await ivrCall(customCatCallSid, "+972500000001");
+    await ivrSay(customCatCallSid, "הוצאה");
+    await ivrSay(customCatCallSid, "80");
+    const customCatPrompt = await ivrSay(customCatCallSid, "אחר");
+    assert(
+      customCatPrompt.includes("לתאר במילים חופשיות"),
+      "אמירת 'אחר' כמילה בודדת לא הופכת מיד לשם הקטגוריה - מוצעת אפשרות לתאר בקול חופשי מה זו הקטגוריה בעצם"
+    );
+    const customCatConfirm = await ivrSay(customCatCallSid, "תרופות");
+    assert(customCatConfirm.includes("בקטגוריית תרופות"), "הקטגוריה שהוכתבה חופשי מוקראת בחזרה לאישור, לא נשארת 'אחר'");
+    await ivrSay(customCatCallSid, "כן");
+    const afterCustomCatTx = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterCustomCatTx.data.transactions.some(t => t.source === "phone" && t.amount === 80 && t.category === "תרופות"),
+      "התנועה נשמרה עם הקטגוריה המותאמת-אישית שהוכתבה ('תרופות'), לא עם 'אחר'"
+    );
+    const categoryDictionaryAfterPhone = await api("GET", "/api/transactions/dictionary", null, token);
+    assert(
+      categoryDictionaryAfterPhone.data.phrases.includes("תרופות"),
+      "הקטגוריה המותאמת-אישית שהוכתבה בטלפון נכנסה ל'מילון' האישי, ותוצע גם באתר בפעם הבאה (datalist)"
+    );
+
+    console.log("\n🏷️ תנועות: אם לא שומעים כלום בשלב הכתבת הקטגוריה החופשית, מבקשים שוב ולא נתקעים/קורסים");
+    const emptyCustomCatCallSid = `${callSid}-custom-category-empty`;
+    await ivrCall(emptyCustomCatCallSid, "+972500000001");
+    await ivrSay(emptyCustomCatCallSid, "הוצאה");
+    await ivrSay(emptyCustomCatCallSid, "40");
+    await ivrSay(emptyCustomCatCallSid, "אחר");
+    const emptyCustomCatRetry = await ivrSay(emptyCustomCatCallSid, "");
+    assert(emptyCustomCatRetry.includes("לא שמעתי קטגוריה"), "קלט ריק בשלב הכתבת הקטגוריה החופשית מבקש שוב, לא קורס ולא נשמר קטגוריה ריקה");
 
     console.log("\n📝 הרשמה ישירות בטלפון (ימות המשיח) — אותה יכולת גם דרך ימות");
     const ymSignupCallId = `${ymCallId}-signup`;
