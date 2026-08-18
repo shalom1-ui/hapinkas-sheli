@@ -14,7 +14,7 @@ const debugLog = require("./debugLog");
 const originalConsoleLog = console.log;
 console.log = (...args) => {
   const line = args.map(String).join(" ");
-  if (/^\[(YEMOT|WHISPER)-DEBUG\]/.test(line)) debugLog.push(line);
+  if (/^\[(YEMOT|WHISPER|YEMOT-AUTH)-DEBUG\]/.test(line)) debugLog.push(line);
   originalConsoleLog(...args);
 };
 

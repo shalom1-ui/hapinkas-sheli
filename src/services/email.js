@@ -18,13 +18,28 @@ async function sendEmail({ to, subject, body }) {
     return { ok: true, mock: true, to, subject };
   }
 
-  // TODO(ייצור): שליחה אמיתית. דוגמת שלד ל-SendGrid (לא פעיל כרגע, יש לבחור ספק ולהתקין את פרטי ה-API):
-  //   await fetch("https://api.sendgrid.com/v3/mail/send", {
-  //     method: "POST",
-  //     headers: { Authorization: `Bearer ${process.env.SENDGRID_API_KEY}`, "Content-Type": "application/json" },
-  //     body: JSON.stringify({ personalizations: [{ to: [{ email: to }] }], from: { email: process.env.EMAIL_FROM }, subject, content: [{ type: "text/plain", value: body }] }),
-  //   });
-  throw new Error("שליחת מייל אמיתית טרם הוגדרה (לא נבחר ספק) - יש לפעול במצב MOCK בינתיים");
+  // שליחה אמיתית דרך SendGrid (נבחר כי יש לו תוכנית חינמית קבועה - עד 100 מיילים ביום - שמספיקה
+  // בענק לנפח שימוש כזה, ולא רק תקופת ניסיון). דורש שני משתני סביבה: SENDGRID_API_KEY (מפתח ה-API,
+  // נוצר בכתובת https://app.sendgrid.com/settings/api_keys) ו-EMAIL_FROM (כתובת השולח - צריכה להיות
+  // מאומתת מול SendGrid מראש, ר' README).
+  if (!process.env.SENDGRID_API_KEY || !process.env.EMAIL_FROM) {
+    throw new Error("EMAIL_MOCK=false אבל חסרים SENDGRID_API_KEY ו/או EMAIL_FROM - יש להגדיר את שניהם כדי לשלוח מייל אמיתי");
+  }
+  const res = await fetch("https://api.sendgrid.com/v3/mail/send", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${process.env.SENDGRID_API_KEY}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      personalizations: [{ to: [{ email: to }] }],
+      from: { email: process.env.EMAIL_FROM },
+      subject,
+      content: [{ type: "text/plain", value: body }],
+    }),
+  });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`שליחת מייל נכשלה (SendGrid החזיר ${res.status}): ${errText}`);
+  }
+  return { ok: true, to, subject };
 }
 
 module.exports = { sendEmail };

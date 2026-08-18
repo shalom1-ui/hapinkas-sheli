@@ -56,6 +56,9 @@ db.exec(`
     code_hash TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     used INTEGER DEFAULT 0,
+    -- 'yemot' אם הקוד נשלח בפועל בשיחת אימות חינמית דרך ימות (ר' services/yemotAuth.js) - במקרה כזה
+    -- האימות בפועל מתבצע מול ימות עצמם (VerifyCode), לא מול code_hash כאן. NULL = כרגיל, מול code_hash.
+    verify_via TEXT,
     created_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -208,6 +211,7 @@ db.exec(`
     code_hash TEXT NOT NULL,
     expires_at TEXT NOT NULL,
     used INTEGER DEFAULT 0,
+    verify_via TEXT,                   -- 'yemot' אם נשלח בשיחת אימות חינמית דרך ימות - ר' הערה ב-password_resets למעלה
     created_at TEXT DEFAULT (datetime('now'))
   );
 `);
@@ -222,6 +226,9 @@ for (const alterSql of [
   // (לא מתועד במפורש - ר' הערה מפורטת ב-routes/yemot.js/reattachRecordingCall).
   "ALTER TABLE call_logs ADD COLUMN phone TEXT",
   "ALTER TABLE call_logs ADD COLUMN updated_at TEXT",
+  // אימות טלפוני חינמי דרך ימות (ר' services/yemotAuth.js) - ר' הערה מפורטת ב-CREATE TABLE למעלה.
+  "ALTER TABLE password_resets ADD COLUMN verify_via TEXT",
+  "ALTER TABLE admin_claim_requests ADD COLUMN verify_via TEXT",
 ]) {
   try {
     db.exec(alterSql);

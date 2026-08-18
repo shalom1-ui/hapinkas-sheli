@@ -4,6 +4,7 @@ const { json } = require("../router");
 const { hashPassword, verifyPassword, signToken, generateOtpCode, hashCode, isValidPin } = require("../utils/crypto");
 const { requireAuth } = require("../middleware/auth");
 const { sendRecoveryCode } = require("../services/recoveryChannel");
+const yemotAuth = require("../services/yemotAuth");
 
 // תפקידים אפשריים - מוצג כמחרוזת מופרדת בפסיקים בעמודת roles (למשל "mentor,therapist").
 // "parent" (הורה) לא נכלל כאן בכוונה: שיוך הורה-ילד נקבע מבנית דרך טבלת student_guardians,
@@ -95,13 +96,15 @@ function register(router) {
 
     const code = generateOtpCode();
     const expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    db.prepare("INSERT INTO password_resets (user_id, channel, code_hash, expires_at) VALUES (?, ?, ?, ?)")
-      .run(user.id, channel === "email" ? "email" : "phone", hashCode(code), expires_at);
 
-    // בייצור: שיחה קולית אוטומטית שמקריאה את הקוד (או מייל) - ר' services/recoveryChannel.js
+    // חשוב: שולחים קודם, ורק אז שומרים את השורה - כי צריך לדעת אם ימות טיפלו בזה בעצמם (verifyVia),
+    // ר' services/recoveryChannel.js. אם כן, code_hash עדיין נשמר (לא מזיק) אבל לא ישמש בפועל לאימות.
     const deliveryResult = await sendRecoveryCode({ channel, phone: user.phone, email: user.email, code });
+    db.prepare("INSERT INTO password_resets (user_id, channel, code_hash, expires_at, verify_via) VALUES (?, ?, ?, ?, ?)")
+      .run(user.id, channel === "email" ? "email" : "phone", hashCode(code), expires_at, deliveryResult.verifyVia || null);
+
     return json(ctx.res, 200, {
-      message: channel === "email" ? "קוד נשלח למייל הרשום" : "מתבצעת שיחה קולית עם הקוד",
+      message: channel === "email" ? "קוד נשלח למייל הרשום" : "מתבצעת שיחת אימות עם הקוד",
       ...deliveryResult, // במצב MOCK כולל demoCode לבדיקה
     });
   });
@@ -115,9 +118,16 @@ function register(router) {
     const reset = db
       .prepare("SELECT * FROM password_resets WHERE user_id = ? AND used = 0 ORDER BY id DESC LIMIT 1")
       .get(user.id);
-    if (!reset || reset.code_hash !== hashCode(code) || new Date(reset.expires_at) < new Date()) {
+    if (!reset || new Date(reset.expires_at) < new Date()) {
       return json(ctx.res, 400, { error: "קוד שגוי או שפג תוקפו" });
     }
+    // verify_via='yemot': הקוד נקבע ע"י ימות עצמם (לא על ידינו), אז גם האימות מתבצע מולם - ר' הערה
+    // מפורטת ב-services/yemotAuth.js ו-services/recoveryChannel.js.
+    const codeOk = reset.verify_via === "yemot"
+      ? await yemotAuth.verifyCallerIdCode(user.phone, code)
+      : reset.code_hash === hashCode(code);
+    if (!codeOk) return json(ctx.res, 400, { error: "קוד שגוי או שפג תוקפו" });
+
     db.prepare("UPDATE password_resets SET used = 1 WHERE id = ?").run(reset.id);
     const resetToken = signToken({ userId: user.id, purpose: "password_reset" }, 60 * 10);
     return json(ctx.res, 200, { resetToken });
@@ -265,14 +275,16 @@ function register(router) {
 
     const code = generateOtpCode();
     const expires_at = new Date(Date.now() + 10 * 60 * 1000).toISOString();
-    db.prepare("INSERT INTO admin_claim_requests (user_id, code_hash, expires_at) VALUES (?, ?, ?)")
-      .run(ctx.user.userId, hashCode(code), expires_at);
 
     // כאן זה אימות עצמי (מוודאים שהמבקש באמת מחזיק בטלפון הרשום שלו) - לא כמו אישור מפקח שדורש
-    // סודיות בין שני אנשים - ולכן demoCode במצב MOCK תמיד בטוח להחזיר גם כאן.
+    // סודיות בין שני אנשים - ולכן demoCode במצב MOCK תמיד בטוח להחזיר גם כאן. שולחים לפני שמירת
+    // השורה, כדי לדעת אם ימות טיפלו בזה בעצמם (verify_via) - ר' הערה מפורטת ב-forgot-password/request.
     const deliveryResult = await sendRecoveryCode({ channel: "phone", phone: me.phone, code });
+    db.prepare("INSERT INTO admin_claim_requests (user_id, code_hash, expires_at, verify_via) VALUES (?, ?, ?, ?)")
+      .run(ctx.user.userId, hashCode(code), expires_at, deliveryResult.verifyVia || null);
+
     return json(ctx.res, 200, {
-      message: "קוד אישור בן 4 ספרות נשלח בשיחה קולית למספר הטלפון הרשום שלכם.",
+      message: "קוד אישור בן 4 ספרות נשלח בשיחת אימות למספר הטלפון הרשום שלכם.",
       ...deliveryResult,
     });
   }));
@@ -287,9 +299,15 @@ function register(router) {
     const pending = db
       .prepare("SELECT * FROM admin_claim_requests WHERE user_id = ? AND used = 0 ORDER BY id DESC LIMIT 1")
       .get(ctx.user.userId);
-    if (!pending || pending.code_hash !== hashCode(code) || new Date(pending.expires_at) < new Date()) {
+    if (!pending || new Date(pending.expires_at) < new Date()) {
       return json(ctx.res, 400, { error: "קוד שגוי או שפג תוקפו - אפשר לבקש קוד חדש" });
     }
+    const me = db.prepare("SELECT phone FROM users WHERE id = ?").get(ctx.user.userId);
+    // verify_via='yemot': ר' הערה מפורטת ב-forgot-password/verify למעלה - האימות מתבצע מול ימות עצמם.
+    const codeOk = pending.verify_via === "yemot"
+      ? await yemotAuth.verifyCallerIdCode(me.phone, code)
+      : pending.code_hash === hashCode(code);
+    if (!codeOk) return json(ctx.res, 400, { error: "קוד שגוי או שפג תוקפו - אפשר לבקש קוד חדש" });
     db.prepare("UPDATE admin_claim_requests SET used = 1 WHERE id = ?").run(pending.id);
 
     const currentUser = db.prepare("SELECT roles FROM users WHERE id = ?").get(ctx.user.userId);

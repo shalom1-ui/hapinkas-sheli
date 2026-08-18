@@ -1198,6 +1198,15 @@ async function run() {
     );
     const whisperMockResult = await speechToText.downloadAndTranscribe("some-call-id");
     assert(whisperMockResult === null, "downloadAndTranscribe() מחזיר null במצב MOCK, בלי לנסות פנייה רשתית כלשהי");
+
+    // אימות טלפוני חינמי דרך ימות (ר' services/yemotAuth.js) - כמו Whisper, נשאר שקוף לחלוטין
+    // (לא מנסה פנייה רשתית) כל עוד YEMOT_API_TOKEN/YEMOT_EXTENSION_NUMBER לא מוגדרים (מצב הבדיקות).
+    const yemotAuth = require("../src/services/yemotAuth");
+    assert(yemotAuth.isConfigured() === false, "yemotAuth.isConfigured() מחזיר false במצב הבדיקות (בלי YEMOT_API_TOKEN/YEMOT_EXTENSION_NUMBER)");
+    const yemotAuthSendResult = await yemotAuth.sendCallerIdCode("+972500000001");
+    assert(yemotAuthSendResult === false, "sendCallerIdCode() מחזיר false במצב לא-מוגדר, בלי לנסות פנייה רשתית כלשהי");
+    const yemotAuthVerifyResult = await yemotAuth.verifyCallerIdCode("+972500000001", "1234");
+    assert(yemotAuthVerifyResult === false, "verifyCallerIdCode() מחזיר false במצב לא-מוגדר, בלי לנסות פנייה רשתית כלשהי");
     assert(
       ymSignupGreeting.includes(",no,voice,") && !ymSignupGreeting.includes(",no,record,"),
       "כשלא מוגדר זיהוי דיבור משודרג, שלב טקסט חופשי בימות (שם בהרשמה) עדיין משתמש במנוע ה-STT הרגיל של ימות ולא במצב הקלטה גולמית"
