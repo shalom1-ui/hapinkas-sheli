@@ -354,10 +354,23 @@ function register(router) {
       }
     }
 
+    // מצב הגדרות התכונות האופציונליות - כדי לדעת מרחוק אם EMAIL_MOCK/SENDGRID_API_KEY/EMAIL_FROM
+    // (ודומיהם) באמת מוגדרים בפועל ב-Render, בלי לחשוף שום ערך סודי (מפתחות/סיסמאות) - רק true/false
+    // אם המשתנה קיים, חוץ מ-EMAIL_FROM שהוא כתובת מייל רגילה ולא סוד. נועד לענות על "גם X לא עובד"
+    // בלי שהמשתמש יצטרך להיכנס ל-Render ולצלם מסך של Environment בכל פעם.
+    const configText = [
+      `EMAIL_MOCK (מייל, ר' README): ${process.env.EMAIL_MOCK === "false" ? "false (מייל אמיתי דרך SendGrid אמור לפעול)" : "לא הוגדר ל-false (עדיין במצב בדיקה - קוד מוצג במסך, שום מייל אמיתי לא נשלח)"}`,
+      `SENDGRID_API_KEY: ${process.env.SENDGRID_API_KEY ? "מוגדר (לא מציגים את הערך)" : "חסר"}`,
+      `EMAIL_FROM: ${process.env.EMAIL_FROM || "חסר"}`,
+      `RECOVERY_MOCK (שיחה קולית): ${process.env.RECOVERY_MOCK === "false" ? "false (Twilio אמיתי אמור לפעול)" : "לא הוגדר ל-false (עדיין במצב בדיקה)"}`,
+      `SYSTEM_ADMIN_PASSWORD: ${process.env.SYSTEM_ADMIN_PASSWORD ? "מוגדר (לא מציגים את הערך)" : "חסר"}`,
+      `YEMOT_API_TOKEN / YEMOT_EXTENSION_NUMBER: ${process.env.YEMOT_API_TOKEN && process.env.YEMOT_EXTENSION_NUMBER ? "מוגדרים" : "חסרים"}`,
+    ].join("\n");
+
     return text(
       ctx.res,
       200,
-      `=== שורות אבחון אחרונות (מהזיכרון, מתאפסות בכל פריסה מחדש) ===\n${logsText}\n\n=== רשימת קבצים נוכחית בשלוחה (GetIVR2Dir) ===\n${filesText}\n`
+      `=== שורות אבחון אחרונות (מהזיכרון, מתאפסות בכל פריסה מחדש) ===\n${logsText}\n\n=== רשימת קבצים נוכחית בשלוחה (GetIVR2Dir) ===\n${filesText}\n\n=== מצב משתני סביבה (בלי ערכים סודיים) ===\n${configText}\n`
     );
   });
 }
