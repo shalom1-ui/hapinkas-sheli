@@ -2,21 +2,19 @@
 // במצב MOCK (ברירת מחדל בפיתוח/בדיקות): הקוד לא נשלח באמת, אלא מוחזר בתגובת ה-API כ-demoCode,
 // בדיוק כמו שהאב-טיפוס ב-HTML מדגים. כך ניתן לבדוק את כל הזרימה בלי חשבונות Twilio/מייל אמיתיים.
 //
-// **חשוב**: כל הערוצים עוברים למצב אמיתי **בנפרד ובאופן עצמאי זה מזה** - בכוונה, כדי שאפשר יהיה
-// להפעיל ערוצים חינמיים (מייל, ושיחת אימות דרך ימות) בלי לשלם על Twilio בכלל:
-//  - channel === "phone": מנסים קודם שיחת אימות **חינמית** דרך ימות המשיח (ר' services/yemotAuth.js -
-//    "שיחה שלא עונים לה", 4 הספרות האחרונות של המספר המתקשר הן הקוד) - עובד אוטומטית ברגע ש-
-//    YEMOT_API_TOKEN/YEMOT_EXTENSION_NUMBER כבר מוגדרים (אותם משתנים שכבר קיימים בשביל Whisper),
-//    בלי צורך בשום דבר נוסף. **אם זה נכשל** (לדוגמה: עדיין לא נבדק מול קו אמיתי, ר' הערה ב-yemotAuth.js) -
-//    נופלים אוטומטית חזרה למצב הקודם: RECOVERY_MOCK (בדיקה, הקוד מוצג במסך) או Twilio אמיתי אם מוגדר.
+// **חשוב**: כל הערוצים עוברים למצב אמיתי **בנפרד ובאופן עצמאי זה מזה**:
 //  - channel === "email": מאציל לגמרי ל-sendEmail (services/email.js), שנשלט ע"י EMAIL_MOCK משלו -
 //    ברגע ש-EMAIL_MOCK=false ומוגדרים SENDGRID_API_KEY+EMAIL_FROM, מיילי שחזור/אישור נשלחים אמיתי,
-//    גם אם RECOVERY_MOCK עדיין true (כלומר גם אם עדיין לא שולם על Twilio בכלל).
+//    גם אם RECOVERY_MOCK עדיין true (כלומר גם אם עדיין לא שולם על Twilio בכלל). זו האפשרות החינמית.
+//  - channel === "phone": MOCK (הקוד מוצג במסך) או שיחה אמיתית דרך Twilio (בתשלום) אם RECOVERY_MOCK=false.
+//    **הערה**: בעבר נוסה כאן ניסיון לשיחת-אימות חינמית דרך ה-API של ימות המשיח (services/yemotAuth.js,
+//    "DoubleAuth") - נבדק מול קו אמיתי ונכשל: מתברר שה-API הזה מיועד לאבטחת ההתחברות של בעל החשבון
+//    ל-API של ימות עצמו, ולא לשליחת שיחת-אימות לכל מספר טלפון שנבחר. אין כרגע דרך חינמית לאמת טלפון -
+//    ר' הערה מפורטת בראש yemotAuth.js. הקוד נשאר שם לתיעוד אך אינו נקרא יותר מכאן.
 "use strict";
 
 const { placeOutboundCallWithCode } = require("./telephony");
 const { sendEmail } = require("./email");
-const yemotAuth = require("./yemotAuth");
 
 const MOCK_MODE = process.env.RECOVERY_MOCK !== "false"; // ברירת מחדל: מצב בדיקה פעיל (רלוונטי רק כשגם ימות וגם Twilio לא זמינים, ר' למעלה)
 
@@ -41,15 +39,6 @@ async function sendRecoveryCode({ channel, phone, email, code }) {
 
   // channel === "phone"
   if (!phone) return { ok: false, error: "לא קיים מספר טלפון רשום למשתמש זה" };
-
-  // ניסיון ראשון: שיחת אימות חינמית דרך ימות (בלי Twilio בכלל) - ר' הערה למעלה. שים לב ש-code
-  // (הקוד שהמערכת שלנו יצרה) לא בשימוש בנתיב הזה כלל - ימות קובעים את הקוד בעצמם (4 הספרות
-  // האחרונות של המספר המתקשר), ולכן גם האימות בהמשך (VerifyCode) מתבצע מול ימות - ר' routes/auth.js.
-  if (yemotAuth.isConfigured()) {
-    const sent = await yemotAuth.sendCallerIdCode(phone);
-    if (sent) return { ok: true, verifyVia: "yemot" };
-    console.log(`[YEMOT-AUTH-DEBUG] SendCode לא הצליח עבור ${phone} - נופלים חזרה למצב הקודם (MOCK/Twilio) כדי לא להשאיר את המשתמש בלי שום קוד`);
-  }
 
   if (MOCK_MODE) {
     console.log(`[MOCK][שיחה קולית] הייתה מתבצעת שיחה אל ${phone} המקריאה את הקוד ${code}`);
