@@ -153,7 +153,35 @@
       <div class="field"><label>שם משתמש או מספר טלפון</label><input id="li_username" placeholder="שם משתמש, או מספר הטלפון שנרשמתם איתו"></div>
       <div class="field"><label>סיסמה</label><input id="li_password" type="password" placeholder="סיסמה (או קוד PIN שהוגדר בטלפון)"></div>
       <button class="btn block" onclick="doLogin()">התחברות</button>
+      <div style="text-align:center; margin-top:8px"><a href="#" onclick="showAuthTab('forgot'); return false;" style="font-size:13px">שכחתי סיסמה</a></div>
       <div class="hint">נרשמתם דרך הטלפון? אפשר להתחבר עם מספר הטלפון שממנו התקשרתם, והקוד הסודי (PIN) שהגדרתם בשיחה.</div>
+    </div>
+
+    <!-- שחזור סיסמה: שלושה שלבים (בקשת קוד -> אימות קוד -> קביעת סיסמה חדשה), ר' /api/auth/forgot-password/*
+         ב-routes/auth.js - כבר קיים ועובד בשרת, רק חסרה הייתה ממשק כאן באתר. -->
+    <div id="tab-forgot" style="display:none">
+      <div class="hint">שוכחתם סיסמה? שולחים קוד אימות בן 4 ספרות - בשיחה קולית למספר הטלפון הרשום, או למייל הרשום (לפי הבחירה למטה) - ואז קובעים סיסמה חדשה.</div>
+      <div class="field"><label>שם משתמש או מספר טלפון</label><input id="fp_username" placeholder="שם משתמש, או מספר הטלפון שנרשמתם איתו"></div>
+      <div class="field">
+        <label>איך לשלוח את הקוד?</label>
+        <div class="row tight" style="gap:16px">
+          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:500"><input type="radio" name="fp_channel" value="phone" checked> שיחה קולית לטלפון</label>
+          <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:500"><input type="radio" name="fp_channel" value="email"> מייל</label>
+        </div>
+      </div>
+      <button class="btn secondary block" onclick="forgotPasswordRequest()">שליחת קוד אימות</button>
+
+      <div id="fp-step2" style="display:none; margin-top:14px">
+        <div class="field"><label>קוד שהתקבל</label><input id="fp_code" placeholder="1234"></div>
+        <button class="btn secondary block" onclick="forgotPasswordVerify()">אימות קוד</button>
+      </div>
+
+      <div id="fp-step3" style="display:none; margin-top:14px">
+        <div class="field"><label>סיסמה חדשה (קוד בן 4 ספרות - ישמש גם כ-PIN בטלפון)</label><input id="fp_new_password" type="password" placeholder="1234"></div>
+        <button class="btn block" onclick="forgotPasswordReset()">קביעת סיסמה חדשה</button>
+      </div>
+
+      <div style="text-align:center; margin-top:10px"><a href="#" onclick="showAuthTab('login'); return false;" style="font-size:13px">חזרה להתחברות</a></div>
     </div>
 
     <div id="tab-signup" style="display:none">
@@ -499,6 +527,13 @@ function showAuthTab(which) {
   document.getElementById('tab-signup-btn').classList.toggle('active', which === 'signup');
   document.getElementById('tab-login').style.display = which === 'login' ? 'block' : 'none';
   document.getElementById('tab-signup').style.display = which === 'signup' ? 'block' : 'none';
+  document.getElementById('tab-forgot').style.display = which === 'forgot' ? 'block' : 'none';
+  // כניסה חדשה למסך השחזור תמיד מתחילה משלב 1 בלבד - לא משאירים שלב 2/3 פתוחים משימוש קודם.
+  if (which === 'forgot') {
+    document.getElementById('fp-step2').style.display = 'none';
+    document.getElementById('fp-step3').style.display = 'none';
+    fpResetToken = null;
+  }
 }
 async function doLogin() {
   const r = await api('POST', '/api/auth/login', {
@@ -535,6 +570,47 @@ function doLogout() {
   token = null; currentUser = null;
   document.getElementById('app-shell').classList.remove('visible');
   document.getElementById('auth-screen').style.display = 'flex';
+}
+
+// ---------- שחזור סיסמה (שכחתי סיסמה) - שלושה שלבים, ר' /api/auth/forgot-password/* ב-routes/auth.js ----------
+let fpResetToken = null;
+async function forgotPasswordRequest() {
+  const username = document.getElementById('fp_username').value.trim();
+  const channel = document.querySelector('input[name="fp_channel"]:checked').value;
+  if (!username) { toast('יש להזין שם משתמש או מספר טלפון', 'error'); return; }
+  const r = await api('POST', '/api/auth/forgot-password/request', { username, channel });
+  if (r.ok) {
+    // demoCode מוחזר רק במצב MOCK (בדיקה) - כדי שאפשר יהיה לבדוק את הזרימה בלי שיחה/מייל אמיתיים.
+    // בייצור אמיתי (RECOVERY_MOCK=false) הוא לא יוחזר, והקוד יגיע רק בפועל לטלפון/למייל.
+    toast(r.data.demoCode ? `${r.data.message} (מצב בדיקה - הקוד: ${r.data.demoCode})` : r.data.message, 'success');
+    document.getElementById('fp-step2').style.display = 'block';
+  }
+}
+async function forgotPasswordVerify() {
+  const username = document.getElementById('fp_username').value.trim();
+  const code = document.getElementById('fp_code').value.trim();
+  if (!code) { toast('יש להזין את הקוד שהתקבל', 'error'); return; }
+  const r = await api('POST', '/api/auth/forgot-password/verify', { username, code });
+  if (r.ok) {
+    fpResetToken = r.data.resetToken;
+    toast('הקוד אומת בהצלחה - אפשר לקבוע סיסמה חדשה', 'success');
+    document.getElementById('fp-step3').style.display = 'block';
+  }
+}
+async function forgotPasswordReset() {
+  const newPassword = document.getElementById('fp_new_password').value.trim();
+  if (!newPassword) { toast('יש להזין סיסמה חדשה', 'error'); return; }
+  if (!fpResetToken) { toast('יש לאמת קודם את הקוד שהתקבל', 'error'); return; }
+  const r = await api('POST', '/api/auth/forgot-password/reset', { resetToken: fpResetToken, newPassword });
+  if (r.ok) {
+    toast('הסיסמה עודכנה בהצלחה - אפשר להתחבר עכשיו', 'success');
+    document.getElementById('li_username').value = document.getElementById('fp_username').value;
+    document.getElementById('fp_username').value = '';
+    document.getElementById('fp_code').value = '';
+    document.getElementById('fp_new_password').value = '';
+    fpResetToken = null;
+    showAuthTab('login');
+  }
 }
 
 // ---------- NAV ----------
