@@ -170,6 +170,7 @@
         </div>
       </div>
       <button class="btn secondary block" onclick="forgotPasswordRequest()">שליחת קוד אימות</button>
+      <div id="fp-demo-code" style="display:none; margin-top:8px; padding:10px; border-radius:8px; background:#fff8db; border:1px solid #e8d675; font-size:14px"></div>
 
       <div id="fp-step2" style="display:none; margin-top:14px">
         <div class="field"><label>קוד שהתקבל</label><input id="fp_code" placeholder="1234"></div>
@@ -451,6 +452,7 @@
               <div class="field"><label>קוד שהתקבל</label><input id="admin_code" class="plain" placeholder="1234"></div>
               <button class="btn" style="align-self:flex-end" onclick="confirmAdminClaim()">אישור</button>
             </div>
+            <div id="admin-claim-demo-code" style="display:none; margin-top:8px; padding:10px; border-radius:8px; background:#fff8db; border:1px solid #e8d675; font-size:14px"></div>
           </div>
         </div>
         <div class="card">
@@ -466,6 +468,7 @@
               <div class="field"><label>קוד מבעל הקו</label><input id="sv_code" class="plain" placeholder="1234"></div>
               <button class="btn" style="align-self:flex-end" onclick="confirmSupervisor()">אישור</button>
             </div>
+            <div id="supervisor-demo-code" style="display:none; margin-top:8px; padding:10px; border-radius:8px; background:#fff8db; border:1px solid #e8d675; font-size:14px"></div>
           </div>
         </div>
         <div class="card">
@@ -532,6 +535,7 @@ function showAuthTab(which) {
   if (which === 'forgot') {
     document.getElementById('fp-step2').style.display = 'none';
     document.getElementById('fp-step3').style.display = 'none';
+    document.getElementById('fp-demo-code').style.display = 'none';
     fpResetToken = null;
   }
 }
@@ -581,8 +585,10 @@ async function forgotPasswordRequest() {
   const r = await api('POST', '/api/auth/forgot-password/request', { username, channel });
   if (r.ok) {
     // demoCode מוחזר רק במצב MOCK (בדיקה) - כדי שאפשר יהיה לבדוק את הזרימה בלי שיחה/מייל אמיתיים.
-    // בייצור אמיתי (RECOVERY_MOCK=false) הוא לא יוחזר, והקוד יגיע רק בפועל לטלפון/למייל.
-    toast(r.data.demoCode ? `${r.data.message} (מצב בדיקה - הקוד: ${r.data.demoCode})` : r.data.message, 'success');
+    // בייצור אמיתי (RECOVERY_MOCK=false) הוא לא יוחזר, והקוד יגיע רק בפועל לטלפון/למייל. מוצג בתיבה
+    // קבועה (לא רק ב-toast חולף) - ר' showDemoCodeBox, תוקן בעקבות משוב אמיתי מהמשתמש.
+    toast(r.data.message, 'success');
+    showDemoCodeBox('fp-demo-code', r.data.demoCode);
     document.getElementById('fp-step2').style.display = 'block';
   }
 }
@@ -1050,15 +1056,31 @@ async function loadAdminClaimStatus() {
   else statusEl.textContent = 'אין עדיין בעל קו, אבל אינכם כשירים לתבוע את התפקיד (צריך להיות רשומים באתר עצמו, עם טלפון בפרופיל).';
   document.getElementById('admin-claim-box').style.display = (!isAdmin && !adminExists && eligible) ? '' : 'none';
 }
+// תוקן (משוב אמיתי ממשתמש: "אני לא מקבל אימות טלפוני וזה גם לא נשלח למייל") - הבעיה לא הייתה
+// שהקוד לא נשלח, אלא שבמצב MOCK (בדיקה - כל עוד לא הוגדרו שירותי שיחה/מייל אמיתיים ב-Render, ר'
+// README) אין באמת שיחה/מייל בכלל - הקוד מוצג ישירות במסך, אבל רק בתוך toast חולף שנעלם אחרי כ-4
+// שניות. הוספנו תיבה קבועה (לא נעלמת לבד) שמציגה את הקוד בבירור, בנוסף ל-toast.
+function showDemoCodeBox(boxId, demoCode) {
+  const box = document.getElementById(boxId);
+  if (!box) return;
+  if (!demoCode) { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  box.innerHTML = `⚠️ מצב בדיקה: עדיין לא הוגדר שירות שיחה/מייל אמיתי בשרת, אז שום שיחה/מייל לא נשלחו בפועל. הקוד מוצג כאן ישירות: <b style="font-size:19px; letter-spacing:4px">${demoCode}</b>`;
+}
 async function requestAdminClaim() {
   const r = await api('POST', '/api/me/request-admin-claim', {});
-  if (r.ok) toast(r.data.demoCode ? `${r.data.message} (מצב בדיקה - הקוד: ${r.data.demoCode})` : r.data.message, 'success');
+  if (r.ok) { toast(r.data.message, 'success'); showDemoCodeBox('admin-claim-demo-code', r.data.demoCode); }
 }
 async function confirmAdminClaim() {
   const code = document.getElementById('admin_code').value.trim();
   if (!code) { toast('יש להזין את הקוד שקיבלתם', 'error'); return; }
   const r = await api('POST', '/api/me/confirm-admin-claim', { code });
-  if (r.ok) { toast(r.data.message, 'success'); document.getElementById('admin_code').value = ''; loadProfile(); }
+  if (r.ok) {
+    toast(r.data.message, 'success');
+    document.getElementById('admin_code').value = '';
+    document.getElementById('admin-claim-demo-code').style.display = 'none';
+    loadProfile();
+  }
 }
 async function saveProfile() {
   const roles = ['private'];
@@ -1085,13 +1107,18 @@ async function requestSupervisor() {
   const admin_phone = document.getElementById('sv_admin_phone').value.trim();
   if (!admin_phone) { toast('יש להזין מספר טלפון', 'error'); return; }
   const r = await api('POST', '/api/me/request-supervisor', { admin_phone });
-  if (r.ok) toast(r.data.demoCode ? `${r.data.message} (מצב בדיקה - הקוד: ${r.data.demoCode})` : r.data.message, 'success');
+  if (r.ok) { toast(r.data.message, 'success'); showDemoCodeBox('supervisor-demo-code', r.data.demoCode); }
 }
 async function confirmSupervisor() {
   const code = document.getElementById('sv_code').value.trim();
   if (!code) { toast('יש להזין את הקוד שקיבלתם', 'error'); return; }
   const r = await api('POST', '/api/me/confirm-supervisor', { code });
-  if (r.ok) { toast(r.data.message, 'success'); document.getElementById('sv_code').value = ''; loadProfile(); }
+  if (r.ok) {
+    toast(r.data.message, 'success');
+    document.getElementById('sv_code').value = '';
+    document.getElementById('supervisor-demo-code').style.display = 'none';
+    loadProfile();
+  }
 }
 // ---------- מנהל מערכת: חיפוש משתמשים + הענקת/הסרת הרשאת מפקח, מוגן בסיסמה מיוחדת (ר' routes/systemAdmin.js) ----------
 function escapeHtml(str) {
