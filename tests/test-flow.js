@@ -989,6 +989,34 @@ async function run() {
     const ymDigitMentorAction = await yemotCall({ callId: ymDigitMentorCallId, speech: "תלמיד בדיקה" });
     assert(ymDigitMentorAction.includes("1 לכניסה") && ymDigitMentorAction.includes("2 ליציאה"), "אחרי זיהוי תלמיד, מוזכרים גם קיצורי הקשה לכניסה/יציאה/מפגש רגיל");
 
+    console.log("\n⭐ כוכבית (*) - חזרה לתפריט הראשי מכל מקום בשיחה (ימות), ומזכירים גם 2 לביטול בשאלות אישור");
+    // משוב אמיתי ממשתמש: שאלת האישור הזכירה בעבר רק "1 לאישור מהיר" בלי לציין שיש גם קיצור-ביטול
+    // תואם (2) - ושלא הייתה דרך מהירה "לצאת" מתת-תפריט/שאלת אישור בלי להשלים אותה או להגיד "לא".
+    const ymStarMidMenuCallId = `${ymCallId}-star-mid-menu`;
+    await yemotCall({ callId: ymStarMidMenuCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymStarMidMenuCallId, speech: "תנועות" });
+    const ymStarMidMenuBack = await yemotCall({ callId: ymStarMidMenuCallId, speech: "*" });
+    assert(
+      ymStarMidMenuBack.includes("תפריט הראשי") && ymStarMidMenuBack.includes("ניהול חשבונות"),
+      "הקשת כוכבית באמצע תת-תפריט (בחירת סוג תנועה) חוזרת ישר לתפריט הראשי"
+    );
+
+    const ymStarMidConfirmCallId = `${ymCallId}-star-mid-confirm`;
+    await yemotCall({ callId: ymStarMidConfirmCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymStarMidConfirmCallId, speech: "הכנסה" });
+    const ymStarConfirmPrompt = await yemotCall({ callId: ymStarMidConfirmCallId, speech: "999" });
+    assert(ymStarConfirmPrompt.includes("2 לביטול"), "שאלת האישור בימות מזכירה גם אפשרות הקשת 2 לביטול, לא רק 1 לאישור");
+    const ymStarMidConfirmBack = await yemotCall({ callId: ymStarMidConfirmCallId, speech: "*" });
+    assert(
+      ymStarMidConfirmBack.includes("תפריט הראשי") && !ymStarMidConfirmBack.includes("נשמר"),
+      "הקשת כוכבית גם באמצע שאלת אישור חוזרת לתפריט הראשי, בלי לשמור את התנועה"
+    );
+    const afterStarConfirm = await api("GET", "/api/transactions", null, token);
+    assert(
+      !afterStarConfirm.data.transactions.some(t => t.source === "phone" && t.amount === 999),
+      "התנועה שבוטלה בכוכבית מתוך שאלת האישור אכן לא נשמרה במסד הנתונים"
+    );
+
     console.log("\n➕ חונכות: הוספת תלמיד חדש ישירות מהטלפון (בלי לגשת לאתר), אם השם לא נמצא ברשימת החונך");
     const ymAddStudentCallId = `${ymCallId}-add-student`;
     await yemotCall({ callId: ymAddStudentCallId, phone: "0500000001" });
