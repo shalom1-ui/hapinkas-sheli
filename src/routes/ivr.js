@@ -37,6 +37,17 @@ const OPENING_GREETING = "שלום וברכה, הגעתם לקו הפנקס של
 // services/yemot.js) - שניהם עוברים למצב הקשה-בלבד (DTMF/tap) בשלבים האלה, בלי לנסות לזהות דיבור.
 const DIGIT_ENTRY_STATES = new Set(["signup_pin", "signup_pin_confirm"]);
 
+// צמתי "אישור/שינוי/ביטול" משולשים (ר' wantsMenuChange/wantsMenuCancel/confirmMenuText למטה) -
+// בערוצים שתומכים בהקשה (ימות, ר' routes/yemot.js) עוברים למצב הקשה טהור (tap, בדיוק כמו קוד
+// PIN - ר' DIGIT_ENTRY_STATES) כדי לחסוך את זמן ההמתנה לזיהוי דיבור/עיבוד קול לגמרי - משוב אמיתי
+// ממשתמש על שקט מיותר בין שלב לשלב, ובקשה מפורשת ש"האישורים יהיו על המקשים לא בזיהוי דיבור".
+// לא כולל mentor_note_offer/mentor_confirm_add_student/signup_email_offer/signup_email_retry -
+// אלה כן/לא (או תפריט קצר) "רגילים" עם קיצור הקשה קיים כבר, לא חלק מהמודל המשולש הזה.
+const CONFIRM_MENU_STATES = new Set([
+  "expense_confirm", "income_confirm", "mentor_remove_confirm", "mentor_note_confirm",
+  "therapist_confirm", "supervisor_confirm", "signup_email_confirm",
+]);
+
 function register(router) {
   // כניסה לשיחה
   router.post("/api/ivr/voice", async (ctx) => {
@@ -278,7 +289,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       }
       const category = s || "אחר";
       return {
-        text: `לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${category}? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${category}? ${confirmMenuText(opts)}`,
         nextState: "expense_confirm",
         draft: { ...draft, category },
       };
@@ -291,7 +302,7 @@ async function advance(state, speech, draft, user, opts = {}) {
         return { text: `לא שמעתי קטגוריה.${retryHint()} אפשר לתאר במילים חופשיות לאיזו קטגוריה?`, nextState: "expense_category_other", draft };
       }
       return {
-        text: `לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${customCategory}? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${customCategory}? ${confirmMenuText(opts)}`,
         nextState: "expense_confirm",
         draft: { ...draft, category: customCategory },
       };
@@ -308,9 +319,14 @@ async function advance(state, speech, draft, user, opts = {}) {
         if (draft.category) rememberPhrase(user.id, "expense_category", draft.category);
         return askMoreOrFinish(`נשמר. הוצאה של ${draft.amount} שקלים ב${draft.category}.`, "expense_saved");
       }
-      if (isConfirmNo(s, opts)) return { text: `בוטל. אפשר להתחיל שוב, מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      // "שינוי" (2, ר' wantsMenuChange) - חוזרים להתחלת הפריט (סכום) כדי להזין הכל מחדש, במקום
+      // ביטול מוחלט - משוב אמיתי ממשתמש שרצה דרך לתקן טעות בלי לחזור לתפריט הראשי ולהתחיל מאפס.
+      if (wantsMenuChange(s, opts)) return { text: "בסדר, נתחיל מחדש. כמה עלה, בשקלים?", nextState: "expense_amount" };
+      if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
+        return { text: `בוטל. אפשר להתחיל שוב, מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      }
       return {
-        text: `לא הבנתי.${retryHint()} לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${draft.category}? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לא הבנתי.${retryHint()} לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${draft.category}? ${confirmMenuText(opts)}`,
         nextState: "expense_confirm",
         draft,
       };
@@ -320,7 +336,7 @@ async function advance(state, speech, draft, user, opts = {}) {
     case "income_amount": {
       const amount = extractAmount(s);
       if (!amount) return { text: `לא זיהיתי סכום.${retryHint()} מה סכום ההכנסה?`, nextState: "income_amount" };
-      return { text: `לאשר: הכנסה של ${amount} שקלים? אמרו כן לאישור.${confirmSuffix(opts)}`, nextState: "income_confirm", draft: { amount } };
+      return { text: `לאשר: הכנסה של ${amount} שקלים? ${confirmMenuText(opts)}`, nextState: "income_confirm", draft: { amount } };
     }
     case "income_confirm": {
       // ר' הערה ב-expense_confirm - אותו עיקרון: מבטלים רק ב"לא" מפורש, לא בכל קלט לא ברור.
@@ -328,9 +344,12 @@ async function advance(state, speech, draft, user, opts = {}) {
         db.prepare("INSERT INTO transactions (user_id, type, amount, source) VALUES (?, 'income', ?, 'phone')").run(user.id, draft.amount);
         return askMoreOrFinish(`נשמר. הכנסה של ${draft.amount} שקלים.`, "income_saved");
       }
-      if (isConfirmNo(s, opts)) return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      if (wantsMenuChange(s, opts)) return { text: "בסדר, נתחיל מחדש. מה סכום ההכנסה?", nextState: "income_amount" };
+      if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
+        return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      }
       return {
-        text: `לא הבנתי.${retryHint()} לאשר: הכנסה של ${draft.amount} שקלים? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לא הבנתי.${retryHint()} לאשר: הכנסה של ${draft.amount} שקלים? ${confirmMenuText(opts)}`,
         nextState: "income_confirm",
         draft,
       };
@@ -401,7 +420,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       if (digit === "3" || includesAny(s, ["רגיל", "מהיר", "קבוע", "מפגש"])) return doQuickSession(draft, user);
       if (digit === "4" || includesAny(s, ["הסר", "הסרה", "להסיר", "מחיקה", "מחק", "לא לומד", "הפסיק"])) {
         return {
-          text: `לאשר: להסיר את ${draft.studentName} מרשימת התלמידים שלך? התלמיד לא יימחק לצמיתות, רק לא יופיע יותר ברשימה הפעילה - כל ההיסטוריה שלו נשארת בתיק. אמרו כן לאישור.${confirmSuffix(opts)}`,
+          text: `לאשר: להסיר את ${draft.studentName} מרשימת התלמידים שלך? התלמיד לא יימחק לצמיתות, רק לא יופיע יותר ברשימה הפעילה - כל ההיסטוריה שלו נשארת בתיק. ${confirmMenuText(opts)}`,
           nextState: "mentor_remove_confirm",
           draft,
         };
@@ -415,9 +434,13 @@ async function advance(state, speech, draft, user, opts = {}) {
         db.prepare("UPDATE students SET active = 0 WHERE id = ? AND owner_user_id = ?").run(draft.studentId, user.id);
         return askMoreOrFinish(`${draft.studentName} הוסר/ה מרשימת התלמידים הפעילים שלך.`, "student_removed");
       }
-      if (isConfirmNo(s, opts)) return { text: `בסדר, לא הסרנו. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      // "שינוי" כאן = אולי התכוונתם לתלמיד אחר - חוזרים לבחירת תלמיד מחדש, לא רק מבטלים לגמרי.
+      if (wantsMenuChange(s, opts)) return { text: "בסדר, מה שם התלמיד?", nextState: "mentor_pick_student" };
+      if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
+        return { text: `בסדר, לא הסרנו. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      }
       return {
-        text: `לא הבנתי.${retryHint()} לאשר: להסיר את ${draft.studentName} מרשימת התלמידים שלך? התלמיד לא יימחק לצמיתות, רק לא יופיע יותר ברשימה הפעילה - כל ההיסטוריה שלו נשארת בתיק. אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לא הבנתי.${retryHint()} לאשר: להסיר את ${draft.studentName} מרשימת התלמידים שלך? התלמיד לא יימחק לצמיתות, רק לא יופיע יותר ברשימה הפעילה - כל ההיסטוריה שלו נשארת בתיק. ${confirmMenuText(opts)}`,
         nextState: "mentor_remove_confirm",
         draft,
       };
@@ -450,7 +473,7 @@ async function advance(state, speech, draft, user, opts = {}) {
         return askMoreOrFinish(draft.baseMessage, draft.outcome);
       }
       return {
-        text: `לאשר: הדיווח הוא "${noteTrim}"? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לאשר: הדיווח הוא "${noteTrim}"? ${confirmMenuText(opts)}`,
         nextState: "mentor_note_confirm",
         draft: { ...draft, pendingNote: noteTrim },
       };
@@ -463,11 +486,16 @@ async function advance(state, speech, draft, user, opts = {}) {
         rememberPhrase(draft.mentorUserId, "session_note", draft.pendingNote);
         return askMoreOrFinish(`${draft.baseMessage} הדיווח נשמר.`, draft.outcome);
       }
-      if (isConfirmNo(s, opts)) {
+      // "שינוי" (2) - זה בדיוק מה ש"לא" עשתה כאן בעבר (נסיון הכתבה חוזר) - עכשיו יש גם "ביטול" (3)
+      // אמיתי בנוסף, כדי לוותר על הדיווח לגמרי בלי להיכנס ללולאת הכתבה-מחדש אינסופית.
+      if (wantsMenuChange(s, opts)) {
         return { text: "בסדר, ננסה שוב. אפשר לתאר שוב במילים חופשיות מה עשיתם במפגש?", nextState: "mentor_note_speak", draft: { ...draft, pendingNote: undefined } };
       }
+      if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
+        return askMoreOrFinish(draft.baseMessage, draft.outcome);
+      }
       return {
-        text: `לא הבנתי.${retryHint()} לאשר: הדיווח הוא "${draft.pendingNote}"? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לא הבנתי.${retryHint()} לאשר: הדיווח הוא "${draft.pendingNote}"? ${confirmMenuText(opts)}`,
         nextState: "mentor_note_confirm",
         draft,
       };
@@ -489,7 +517,7 @@ async function advance(state, speech, draft, user, opts = {}) {
     }
     case "therapist_note": {
       return {
-        text: `לאשר דיווח על ${draft.studentName}: ${speech}. אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לאשר דיווח על ${draft.studentName}: ${speech}. ${confirmMenuText(opts)}`,
         nextState: "therapist_confirm",
         draft: { ...draft, note: speech },
       };
@@ -503,9 +531,12 @@ async function advance(state, speech, draft, user, opts = {}) {
         ).run(draft.studentId, user.id, draft.role, draft.note, draft.note);
         return askMoreOrFinish(`הדיווח נשמר עבור ${draft.studentName}.`, "report_saved");
       }
-      if (isConfirmNo(s, opts)) return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      if (wantsMenuChange(s, opts)) return { text: "בסדר, אפשר לתאר שוב את תוכן הדיווח?", nextState: "therapist_note", draft };
+      if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
+        return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      }
       return {
-        text: `לא הבנתי.${retryHint()} לאשר דיווח על ${draft.studentName}: ${draft.note}. אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לא הבנתי.${retryHint()} לאשר דיווח על ${draft.studentName}: ${draft.note}. ${confirmMenuText(opts)}`,
         nextState: "therapist_confirm",
         draft,
       };
@@ -528,7 +559,7 @@ async function advance(state, speech, draft, user, opts = {}) {
     }
     case "supervisor_readback": {
       return {
-        text: `לאשר הערה על ${draft.studentName}: ${speech}. אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לאשר הערה על ${draft.studentName}: ${speech}. ${confirmMenuText(opts)}`,
         nextState: "supervisor_confirm",
         draft: { ...draft, text: speech },
       };
@@ -540,9 +571,12 @@ async function advance(state, speech, draft, user, opts = {}) {
           .run(draft.studentId, user.id, `${user.full_name} (דרך השיחה הקולית)`, draft.text);
         return askMoreOrFinish(`ההערה נשמרה בתיק ${draft.studentName}.`, "comment_saved");
       }
-      if (isConfirmNo(s, opts)) return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      if (wantsMenuChange(s, opts)) return { text: "בסדר, אפשר לתאר שוב את תוכן ההערה?", nextState: "supervisor_readback", draft };
+      if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
+        return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      }
       return {
-        text: `לא הבנתי.${retryHint()} לאשר הערה על ${draft.studentName}: ${draft.text}. אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לא הבנתי.${retryHint()} לאשר הערה על ${draft.studentName}: ${draft.text}. ${confirmMenuText(opts)}`,
         nextState: "supervisor_confirm",
         draft,
       };
@@ -695,7 +729,7 @@ async function advanceSignup(state, speech, draft, opts = {}) {
         };
       }
       return {
-        text: `לאשר: כתובת המייל שלכם היא ${parsed}? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לאשר: כתובת המייל שלכם היא ${parsed}? ${confirmMenuText(opts)}`,
         nextState: "signup_email_confirm",
         draft: { ...draft, pendingEmail: parsed },
       };
@@ -711,15 +745,27 @@ async function advanceSignup(state, speech, draft, opts = {}) {
           outcome: "phone_signup_completed",
         };
       }
-      if (isConfirmNo(s, opts)) {
+      // "שינוי" (2) - זה בדיוק מה ש"לא" עשתה כאן בעבר (הכתבה חוזרת) - "ביטול" (3) חדש: מדלגים על
+      // המייל לגמרי ומסיימים את ההרשמה בלעדיו (בדיוק כמו דילוג ב-signup_email_retry/signup_email_speak).
+      if (wantsMenuChange(s, opts)) {
         return {
           text: "בסדר, ננסה שוב. אמרו את כתובת המייל שלכם עכשיו, לאט אם אפשר.",
           nextState: "signup_email_speak",
           draft: { ...draft, pendingEmail: undefined },
         };
       }
+      if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
+        const newUser = createPhoneUser(draft.fullName, draft.phone, null, draft.pin);
+        return {
+          text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
+          nextState: "main_menu",
+          newUserId: newUser.id,
+          hints: MAIN_MENU_HINTS,
+          outcome: "phone_signup_completed",
+        };
+      }
       return {
-        text: `לא הבנתי.${retryHint()} לאשר: כתובת המייל שלכם היא ${draft.pendingEmail}? אמרו כן לאישור.${confirmSuffix(opts)}`,
+        text: `לא הבנתי.${retryHint()} לאשר: כתובת המייל שלכם היא ${draft.pendingEmail}? ${confirmMenuText(opts)}`,
         nextState: "signup_email_confirm",
         draft,
       };
@@ -1072,18 +1118,44 @@ function isConfirmYes(s, opts) {
 
 // בודק אם תשובה נחשבת במפורש "לא" בצומת אישור - מילה מדוברת, או הקשת 2 (עקבי עם שאר התפריטים בהם
 // 2 הוא תמיד "לא"/ביטול). חשוב: זה **לא** סתם "לא isConfirmYes" - ר' ההערה בכל צומת אישור למה.
+// עדיין בשימוש בצמתי כן/לא "רגילים" (למשל mentor_note_offer) - לא בששת צמתי "אישור/שינוי/ביטול"
+// המשולשים (ר' wantsMenuChange/wantsMenuCancel למטה) - שם 2 הוא "שינוי", לא "לא".
 function isConfirmNo(s, opts) {
   if (includesAny(s, ["לא", "ביטול", "בטל"])) return true;
   if (opts && opts.digitConfirm) return onlyDigits(String(s || "").trim()) === "2";
   return false;
 }
 
+// משוב אמיתי ממשתמש: בערוצים עם הקשה (ימות), שאלות אישור על ערך שקל "לשנות" (סכום/הערה/דיווח)
+// עוברות ממודל בינארי (1=אישור, 2=ביטול) למודל משולש: 1=אישור, 2=שינוי (חוזרים לשלב הקודם כדי
+// להזין מחדש), 3=ביטול (חוזרים לתפריט הראשי). זה **נפרד** מ-isConfirmYes/isConfirmNo (שנשארות ללא
+// שינוי, עדיין בשימוש בצמתים בינאריים "רגילים" כמו mentor_note_offer/mentor_confirm_add_student,
+// ששם אין "שינוי" הגיוני) - בשימוש רק בששת הצמתים המשולשים: expense_confirm/income_confirm/
+// mentor_remove_confirm/mentor_note_confirm/therapist_confirm/supervisor_confirm.
+// לא בזיהוי דיבור בכלל (ר' routes/yemot.js, CONFIRM_MENU_STATES) - הצמתים האלה עוברים למצב הקשה
+// טהור (tap, בדיוק כמו קוד ה-PIN) כשמגיעים אליהם, כדי לחסוך את זמן ההמתנה לזיהוי דיבור/עיבוד קול
+// שהיה גורם לשקט מיותר בין שלב לשלב (משוב אמיתי) - ולכן בדיקת המילים המדוברות ("כן"/"לא") ב-
+// isConfirmYes/isConfirmNo נשארת כרשת ביטחון בלבד (רלוונטית בעיקר לערוץ Twilio, שאין בו הקשות).
+function wantsMenuChange(s, opts) {
+  return !!(opts && opts.digitConfirm && onlyDigits(String(s || "").trim()) === "2");
+}
+function wantsMenuCancel(s, opts) {
+  return !!(opts && opts.digitConfirm && onlyDigits(String(s || "").trim()) === "3");
+}
+
 // טקסט נוסף שמצטרף לשאלות אישור בערוצים שתומכים בהקשה (ר' isConfirmYes/isConfirmNo) - מציע גם
 // הקשת 1 לאישור מהיר וגם הקשת 2 לביטול מפורש, לא רק סולמית (סולמית בודדת התבררה כלא אמינה במצב
 // זיהוי דיבור של ימות - ר' isConfirmYes). מוזכרות שתי הספרות יחד כדי שהמתקשר ידע משתי האפשרויות
 // מראש, ולא רק שיש קיצור-אישור בלי לדעת שיש גם קיצור-ביטול תואם (משוב אמיתי ממשתמש).
-function confirmSuffix(opts) {
-  return opts && opts.digitConfirm ? " אפשר גם להקיש 1 לאישור, או 2 לביטול." : "";
+// טקסט שאלת האישור המלאה (כולל הפועל עצמו, לא רק תוספת) - שונה בין הערוצים:
+// - ימות (opts.digitConfirm): בלי "אמרו כן" בכלל - משוב אמיתי ("לא צריך לומר לאשר") - רק הקשה:
+//   1=אישור, 2=שינוי (חוזרים לשלב הקודם להזין מחדש), 3=ביטול. הצמתים האלה גם עוברים בפועל למצב
+//   הקשה טהור (tap, בלי המתנה לזיהוי דיבור כלל) - ר' CONFIRM_MENU_STATES ב-routes/yemot.js.
+// - Twilio (אין הקשות מוגדרות שם): נשאר הניסוח המקורי, בלי שינוי.
+function confirmMenuText(opts) {
+  return opts && opts.digitConfirm
+    ? "לאישור הקישו 1, לשינוי הקישו 2, לביטול הקישו 3."
+    : "אמרו כן לאישור.";
 }
 
 // טקסט שמצטרף לכל הודעת "לא הבנתי"/"לא שמעתי" - בבדיקה בפועל מול ימות מתברר שלפעמים אותה מילה
@@ -1139,6 +1211,7 @@ module.exports = {
   mainMenuPrompt,
   OPENING_GREETING,
   DIGIT_ENTRY_STATES,
+  CONFIRM_MENU_STATES,
   parseSpokenEmail, // מיוצא כדי לאפשר בדיקה ישירה (ר' tests/test-flow.js) - בלי לעבור זרימת שיחה מלאה
   extractAmount, // מיוצא כדי לאפשר בדיקה ישירה (ר' tests/test-flow.js) - כולל פענוח מספרים במילים
 };

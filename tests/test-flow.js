@@ -907,7 +907,7 @@ async function run() {
     await yemotCall({ callId: ymDigitCallId, phone: "0500000001" });
     await yemotCall({ callId: ymDigitCallId, speech: "הכנסה" });
     const ymDigitConfirmPrompt = await yemotCall({ callId: ymDigitCallId, speech: "77" });
-    assert(ymDigitConfirmPrompt.includes("1 לאישור"), "שאלת האישור בימות מזכירה אפשרות הקשת 1 לאישור מהיר");
+    assert(ymDigitConfirmPrompt.includes("הקישו 1"), "שאלת האישור בימות מזכירה אפשרות הקשת 1 לאישור מהיר");
     const ymDigitConfirmDone = await yemotCall({ callId: ymDigitCallId, speech: "1" });
     assert(
       ymDigitConfirmDone.includes("נשמר") && ymDigitConfirmDone.includes("רוצים לעשות עוד משהו"),
@@ -989,9 +989,8 @@ async function run() {
     const ymDigitMentorAction = await yemotCall({ callId: ymDigitMentorCallId, speech: "תלמיד בדיקה" });
     assert(ymDigitMentorAction.includes("1 לכניסה") && ymDigitMentorAction.includes("2 ליציאה"), "אחרי זיהוי תלמיד, מוזכרים גם קיצורי הקשה לכניסה/יציאה/מפגש רגיל");
 
-    console.log("\n⭐ כוכבית (*) - חזרה לתפריט הראשי מכל מקום בשיחה (ימות), ומזכירים גם 2 לביטול בשאלות אישור");
-    // משוב אמיתי ממשתמש: שאלת האישור הזכירה בעבר רק "1 לאישור מהיר" בלי לציין שיש גם קיצור-ביטול
-    // תואם (2) - ושלא הייתה דרך מהירה "לצאת" מתת-תפריט/שאלת אישור בלי להשלים אותה או להגיד "לא".
+    console.log("\n⭐ כוכבית (*) - חזרה לתפריט הראשי מכל מקום בשיחה (ימות)");
+    // משוב אמיתי ממשתמש: לא הייתה דרך מהירה "לצאת" מתת-תפריט/שאלת אישור בלי להשלים אותה או להגיד "לא".
     const ymStarMidMenuCallId = `${ymCallId}-star-mid-menu`;
     await yemotCall({ callId: ymStarMidMenuCallId, phone: "0500000001" });
     await yemotCall({ callId: ymStarMidMenuCallId, speech: "תנועות" });
@@ -1005,7 +1004,11 @@ async function run() {
     await yemotCall({ callId: ymStarMidConfirmCallId, phone: "0500000001" });
     await yemotCall({ callId: ymStarMidConfirmCallId, speech: "הכנסה" });
     const ymStarConfirmPrompt = await yemotCall({ callId: ymStarMidConfirmCallId, speech: "999" });
-    assert(ymStarConfirmPrompt.includes("2 לביטול"), "שאלת האישור בימות מזכירה גם אפשרות הקשת 2 לביטול, לא רק 1 לאישור");
+    assert(
+      ymStarConfirmPrompt.includes("הקישו 1") && ymStarConfirmPrompt.includes("הקישו 2") && ymStarConfirmPrompt.includes("הקישו 3"),
+      "שאלת האישור בימות מזכירה את שלושת האפשרויות: 1 לאישור, 2 לשינוי, 3 לביטול - בלי 'אמרו כן'"
+    );
+    assert(!ymStarConfirmPrompt.includes("אמרו כן"), "שאלת האישור בימות כבר לא מבקשת לומר 'כן' בקול - רק הקשה");
     const ymStarMidConfirmBack = await yemotCall({ callId: ymStarMidConfirmCallId, speech: "*" });
     assert(
       ymStarMidConfirmBack.includes("תפריט הראשי") && !ymStarMidConfirmBack.includes("נשמר"),
@@ -1016,6 +1019,47 @@ async function run() {
       !afterStarConfirm.data.transactions.some(t => t.source === "phone" && t.amount === 999),
       "התנועה שבוטלה בכוכבית מתוך שאלת האישור אכן לא נשמרה במסד הנתונים"
     );
+
+    console.log("\n1️⃣2️⃣3️⃣ שאלת אישור משולשת בהקשה בלבד (ימות): 1=אישור, 2=שינוי, 3=ביטול - בלי זיהוי דיבור");
+    // משוב אמיתי ממשתמש: לא צריך לדבר בכלל בשאלת אישור - מספיק להקיש. גם בודקים שהתגובה עצמה
+    // (לא רק הטקסט) היא במצב הקשה טהור (tap, כמו קוד PIN) - לא read=...voice... הרגיל.
+    const ymMenuConfirmCallId = `${ymCallId}-menu-confirm`;
+    await yemotCall({ callId: ymMenuConfirmCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymMenuConfirmCallId, speech: "הוצאה" });
+    await yemotCall({ callId: ymMenuConfirmCallId, speech: "40" }); // סכום -> שואל קטגוריה
+    const ymMenuConfirmPrompt = await yemotCall({ callId: ymMenuConfirmCallId, speech: "מזון" }); // קטגוריה -> מגיע לשאלת האישור
+    assert(
+      /,1,1,7,No,/.test(ymMenuConfirmPrompt),
+      "שאלת האישור נשלחת בפרוטוקול ימות במצב הקשה טהור (1 ספרה בדיוק, sec_wait=7, בלי הקראה חוזרת), לא במצב זיהוי דיבור"
+    );
+    // 2 = "שינוי" - חוזרים להתחלת הפריט (סכום), לא מבטלים ולא חוזרים לתפריט הראשי
+    const ymMenuChange = await yemotCall({ callId: ymMenuConfirmCallId, speech: "2" });
+    assert(
+      ymMenuChange.includes("כמה עלה") && !ymMenuChange.includes("תפריט הראשי") && !ymMenuChange.includes("נשמר"),
+      "הקשת 2 (שינוי) בשאלת האישור חוזרת ישר לשאלת הסכום מחדש, לא לתפריט הראשי ולא מבטלת סתם"
+    );
+    await yemotCall({ callId: ymMenuConfirmCallId, speech: "55" });
+    await yemotCall({ callId: ymMenuConfirmCallId, speech: "מזון" });
+    const ymMenuChangeConfirm = await yemotCall({ callId: ymMenuConfirmCallId, speech: "1" });
+    assert(
+      ymMenuChangeConfirm.includes("נשמר") && ymMenuChangeConfirm.includes("55"),
+      "אחרי 'שינוי' אפשר להזין את הפריט מחדש (סכום שונה) ולשמור אותו בהצלחה כרגיל"
+    );
+    const afterMenuChange = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterMenuChange.data.transactions.some(t => t.source === "phone" && t.amount === 55 && t.category === "מזון") &&
+      !afterMenuChange.data.transactions.some(t => t.amount === 40),
+      "רק התנועה שאושרה אחרי ה'שינוי' (55) נשמרה - לא הסכום המקורי שוותר עליו (40)"
+    );
+    // 3 = "ביטול" - חוזרים לתפריט הראשי, בלי לשמור כלום
+    const ymMenuCancelCallId = `${ymCallId}-menu-cancel`;
+    await yemotCall({ callId: ymMenuCancelCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymMenuCancelCallId, speech: "הכנסה" });
+    await yemotCall({ callId: ymMenuCancelCallId, speech: "70" });
+    const ymMenuCancel = await yemotCall({ callId: ymMenuCancelCallId, speech: "3" });
+    assert(ymMenuCancel.includes("בוטל") && ymMenuCancel.includes("ניהול חשבונות"), "הקשת 3 (ביטול) בשאלת האישור חוזרת לתפריט הראשי");
+    const afterMenuCancel = await api("GET", "/api/transactions", null, token);
+    assert(!afterMenuCancel.data.transactions.some(t => t.amount === 70), "התנועה שבוטלה בהקשת 3 אכן לא נשמרה במסד הנתונים");
 
     console.log("\n➕ חונכות: הוספת תלמיד חדש ישירות מהטלפון (בלי לגשת לאתר), אם השם לא נמצא ברשימת החונך");
     const ymAddStudentCallId = `${ymCallId}-add-student`;

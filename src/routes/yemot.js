@@ -14,7 +14,7 @@
 
 const db = require("../db");
 const { text, json } = require("../router");
-const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt, OPENING_GREETING, DIGIT_ENTRY_STATES } = require("./ivr");
+const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt, OPENING_GREETING, DIGIT_ENTRY_STATES, CONFIRM_MENU_STATES } = require("./ivr");
 const { sayAndReadStt, sayAndGoToRecordExtension, sayAndReadDigits, sayAndHangup, VAL_NAME } = require("../services/yemot");
 const speechToText = require("../services/speechToText");
 const debugLog = require("../debugLog");
@@ -286,6 +286,13 @@ function register(router) {
     }
     if (DIGIT_ENTRY_STATES.has(result.nextState)) {
       return text(ctx.res, 200, sayAndReadDigits(result.text, 4));
+    }
+    // צמתי "אישור/שינוי/ביטול" משולשים (ר' CONFIRM_MENU_STATES/wantsMenuChange/wantsMenuCancel
+    // ב-routes/ivr.js) - מצב הקשה טהור (תגובה אחת בלבד, בדיוק כמו קוד PIN) במקום זיהוי דיבור/voice,
+    // כדי שהתגובה תגיע מיד עם ההקשה, בלי להמתין לעיבוד קול בכלל - זה בדיוק מה שביקש המשתמש
+    // ("האישורים יהיו על המקשים לא בזיהוי דיבור") וגם פותר את השקט המיותר שדווח בין שלב לשלב.
+    if (CONFIRM_MENU_STATES.has(result.nextState)) {
+      return text(ctx.res, 200, sayAndReadDigits(result.text, 1));
     }
     if (FREE_TEXT_STATES.has(result.nextState)) {
       return text(ctx.res, 200, freeTextPrompt(callId, result.text));
