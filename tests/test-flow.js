@@ -1096,10 +1096,45 @@ async function run() {
     const afterMenuCancel = await api("GET", "/api/transactions", null, token);
     assert(!afterMenuCancel.data.transactions.some(t => t.amount === 70), "התנועה שבוטלה בהקשת 3 אכן לא נשמרה במסד הנתונים");
 
+    console.log("\n📋 חונכות: תפריט-הקשה של התלמידים הרשומים ('על איזה תלמיד רוצים לדווח?')");
+    // משוב אמיתי ממשתמש: "אחרי שרשמתי כמה תלמידים... שיהיה לפי הרשימה, אם הראשון הוא X לחצו 1".
+    // "תלמיד בדיקה" (sid) כבר קיים בשלב הזה (נוצר דרך ה-API למעלה) - קובעים את המיקום שלו ברשימה
+    // בפועל (לפי מיון א-ב), כדי לא להניח מיקום קבוע.
+    const studentsBeforeList = await api("GET", "/api/students", null, token);
+    const sortedNames = studentsBeforeList.data.students.map(s => s.name).sort((a, b) => a.localeCompare(b, "he"));
+    const testStudentIndex = sortedNames.indexOf("תלמיד בדיקה");
+    assert(testStudentIndex >= 0, "'תלמיד בדיקה' קיים ברשימת התלמידים של החונך לפני תחילת בדיקות התפריט הממוספר");
+
+    const ymStudentListCallId = `${ymCallId}-student-list`;
+    await yemotCall({ callId: ymStudentListCallId, phone: "0500000001" });
+    const ymStudentListPrompt = await yemotCall({ callId: ymStudentListCallId, speech: "חונכות" });
+    assert(
+      ymStudentListPrompt.includes("תלמיד בדיקה") && ymStudentListPrompt.includes("הקישו 0") && !ymStudentListPrompt.includes("מה שם התלמיד"),
+      "כניסה ל'חונכות' עם תלמידים רשומים מציגה תפריט ממוספר (לא שאלת 'מה שם התלמיד' ישירות), עם שסתום הקשת 0"
+    );
+    const ymStudentListPick = await yemotCall({ callId: ymStudentListCallId, speech: String(testStudentIndex + 1) });
+    assert(ymStudentListPick.includes("תלמיד בדיקה") && ymStudentListPick.includes("1 לכניסה"), "בחירת המספר המתאים ל'תלמיד בדיקה' ברשימה עוברת ישר לבחירת סוג הפעולה עבורו, בלי לומר את השם בקול");
+
+    // הקשת 0 - שסתום-בטיחות לתלמיד שלא ברשימה (או פשוט מעדיפים לומר את השם) - חוזר לשלב ההכתבה הרגיל
+    const ymStudentListEscapeCallId = `${ymCallId}-student-list-escape`;
+    await yemotCall({ callId: ymStudentListEscapeCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymStudentListEscapeCallId, speech: "חונכות" });
+    const ymStudentListEscape = await yemotCall({ callId: ymStudentListEscapeCallId, speech: "0" });
+    assert(ymStudentListEscape.includes("מה שם התלמיד"), "הקשת 0 בתפריט הממוספר חוזרת לשלב ההכתבה החופשית הרגילה (לתלמיד שלא ברשימה)");
+
+    // גיבוי: גם אמירת השם ישירות (בלי להקיש מספר) בשלב התפריט הממוספר עדיין מוצאת את התלמיד -
+    // חשוב בעיקר לערוץ Twilio (אין שם הקשות אמינות), אבל עובד גם בימות כרשת ביטחון נוספת.
+    const ymStudentListSpokenCallId = `${ymCallId}-student-list-spoken`;
+    await yemotCall({ callId: ymStudentListSpokenCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymStudentListSpokenCallId, speech: "חונכות" });
+    const ymStudentListSpoken = await yemotCall({ callId: ymStudentListSpokenCallId, speech: "תלמיד בדיקה" });
+    assert(ymStudentListSpoken.includes("1 לכניסה"), "אמירת שם התלמיד בקול (בלי להקיש מספר) בשלב התפריט הממוספר עדיין מוצאת אותו כגיבוי");
+
     console.log("\n➕ חונכות: הוספת תלמיד חדש ישירות מהטלפון (בלי לגשת לאתר), אם השם לא נמצא ברשימת החונך");
     const ymAddStudentCallId = `${ymCallId}-add-student`;
     await yemotCall({ callId: ymAddStudentCallId, phone: "0500000001" });
     await yemotCall({ callId: ymAddStudentCallId, speech: "חונכות" });
+    await yemotCall({ callId: ymAddStudentCallId, speech: "0" }); // 0 = תלמיד שלא ברשימה (יש כבר תלמידים רשומים מבדיקות קודמות)
     const ymAddStudentOffer = await yemotCall({ callId: ymAddStudentCallId, speech: "משה ישראלי" });
     assert(
       ymAddStudentOffer.includes("לא מצאתי תלמיד בשם משה ישראלי") && ymAddStudentOffer.includes("להוסיף אותו כתלמיד חדש"),
@@ -1120,6 +1155,7 @@ async function run() {
     const ymAddStudentSpokenCallId = `${ymCallId}-add-student-spoken`;
     await yemotCall({ callId: ymAddStudentSpokenCallId, phone: "0500000001" });
     await yemotCall({ callId: ymAddStudentSpokenCallId, speech: "חונכות" });
+    await yemotCall({ callId: ymAddStudentSpokenCallId, speech: "0" }); // 0 = תלמיד שלא ברשימה
     await yemotCall({ callId: ymAddStudentSpokenCallId, speech: "יוסי כהן" });
     const ymAddStudentSpokenDone = await yemotCall({ callId: ymAddStudentSpokenCallId, speech: "להוסיף" });
     assert(
@@ -1138,6 +1174,7 @@ async function run() {
     const ymDoubleDigitCallId = `${ymCallId}-double-digit`;
     await yemotCall({ callId: ymDoubleDigitCallId, phone: "0500000001" });
     await yemotCall({ callId: ymDoubleDigitCallId, speech: "חונכות" });
+    await yemotCall({ callId: ymDoubleDigitCallId, speech: "0" }); // 0 = תלמיד שלא ברשימה
     await yemotCall({ callId: ymDoubleDigitCallId, speech: "דני אבידר" }); // שם שלא קיים -> מוצעת הוספה
     const ymDoubleDigitConfirm = await yemotCall({ callId: ymDoubleDigitCallId, speech: "Digits-11" });
     assert(
@@ -1150,6 +1187,7 @@ async function run() {
     const ymAmbiguousDigitCallId = `${ymCallId}-ambiguous-digit`;
     await yemotCall({ callId: ymAmbiguousDigitCallId, phone: "0500000001" });
     await yemotCall({ callId: ymAmbiguousDigitCallId, speech: "חונכות" });
+    await yemotCall({ callId: ymAmbiguousDigitCallId, speech: "0" }); // 0 = תלמיד שלא ברשימה
     await yemotCall({ callId: ymAmbiguousDigitCallId, speech: "רונית שדה" }); // שם שלא קיים -> מוצעת הוספה
     const ymAmbiguousDigitResp = await yemotCall({ callId: ymAmbiguousDigitCallId, speech: "Digits-12" });
     assert(

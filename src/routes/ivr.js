@@ -347,7 +347,7 @@ function matchMainMenuCategory(es, opts, user) {
   if (includesAny(es, ["הוצאה", "הוצאות"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
   if (includesAny(es, ["הכנסה", "הכנסות"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
   if (includesAny(es, ["תנועות", "תנועה"])) return { text: transactionsTypePrompt(opts), nextState: "transactions_pick_type" };
-  if (includesAny(es, ["חונכות", "תלמיד"])) return { text: "מה שם התלמיד?", nextState: "mentor_pick_student" };
+  if (includesAny(es, ["חונכות", "תלמיד"])) return startMentorFlow(user);
   if (includesAny(es, ["מטפלים", "מטפל", "דיווח", "ריפוי", "רגשי"])) return { text: "מה סוג הדיווח: ריפוי בעיסוק, טיפול רגשי, או אחר?", nextState: "therapist_role" };
   if (includesAny(es, ["הורה", "הורים"])) return startGuardianFlow(user);
   if (includesAny(es, ["מפקח", "הערת מפקח", "הערה"])) return { text: "על איזה תלמיד ההערה?", nextState: "supervisor_pick_student" };
@@ -514,6 +514,41 @@ async function advance(state, speech, draft, user, opts = {}) {
     }
 
     // ---------- חונכות ----------
+    // תפריט-הקשה של עד 9 התלמידים הרשומים (ר' startMentorFlow למעלה) - מצב הקשה טהור-ברובו: הקשת
+    // מספר בוחרת תלמיד ישר, בלי לעבור כלל דרך זיהוי דיבור. הקשה/אמירה "0"/"אחר" היא שסתום לתלמיד
+    // שלא ברשימה - עובר לשלב ההכתבה החופשית הרגילה (mentor_pick_student). אם בכל זאת הגיע קלט מדובר
+    // (בעיקר בטוויליו, שאין בו הקשות אמינות) - עדיין מנסים להתאים אותו לשם תלמיד קיים כגיבוי, לפני
+    // שמוותרים לגמרי ושואלים שוב.
+    case "mentor_pick_student_list": {
+      const options = draft.studentListOptions || [];
+      const digit = singleDigitPress(s);
+      if (digit === "0" || includesAny(s, ["אחר", "שם אחר", "לא ברשימה", "תלמיד אחר"])) {
+        return { text: "מה שם התלמיד?", nextState: "mentor_pick_student" };
+      }
+      const idx = digit ? Number(digit) - 1 : -1;
+      if (idx >= 0 && idx < options.length) {
+        return {
+          text: mentorActionPrompt(options[idx].name, opts),
+          nextState: "mentor_action",
+          draft: { studentId: options[idx].id, studentName: options[idx].name },
+        };
+      }
+      if (!looksLikeRawDigitsArtifact(s)) {
+        const student = findStudentByName(user.id, s);
+        if (student) {
+          return {
+            text: mentorActionPrompt(student.name, opts),
+            nextState: "mentor_action",
+            draft: { studentId: student.id, studentName: student.name },
+          };
+        }
+      }
+      return {
+        text: `לא הבנתי.${retryHint()} ${mentorStudentListText(options)}`,
+        nextState: "mentor_pick_student_list",
+        draft,
+      };
+    }
     // חונך הוא ה"רושם" של תלמידיו (owner_user_id) - לכן אם הוא אומר שם תלמיד שעדיין לא רשום אצלו,
     // מציעים להוסיף אותו כתלמיד חדש מיד בטלפון (בלי לחייב מעבר לאתר) - ר' mentor_confirm_add_student.
     case "mentor_pick_student": {
@@ -1215,6 +1250,30 @@ function guardianSummaryResult(student) {
   let text = `הסיכום עבור ${student.name}: היו ${sessions.length} מפגשים, בסך הכל ${totalMinutes} דקות.`;
   text += latestReport ? ` הדיווח המקצועי האחרון מציין מגמה: ${latestReport.trend}.` : " אין עדיין דיווח מקצועי בתיק.";
   return askMoreOrFinish(text, "guardian_summary_read");
+}
+
+// משוב אמיתי ממשתמש ("אחרי שרשמתי כמה תלמידים... שיהיה לפי הרשימה, אם הראשון הוא X לחצו 1") - במקום
+// לבקש תמיד לומר את שם התלמיד בקול (תלוי בזיהוי דיבור, אותה בעיה שכל השיחה הזו מנסה לצמצם), מציגים
+// לחונך שכבר יש לו תלמידים רשומים תפריט ממוספר של עד 9 (הקשה בודדת, ר' MENTOR_STUDENT_LIST_LIMIT) -
+// א-ב, כדי שהסדר יהיה צפוי משיחה לשיחה. הקשה **0** (או אמירת "אחר"/"שם אחר") היא שסתום-בטיחות
+// למי שהתלמיד המבוקש לא ברשימה (לא רשום עדיין, או שיש יותר מ-9 ואינו בין הראשונים) - עובר לשלב
+// ההכתבה החופשית הרגילה (mentor_pick_student, כמו קודם). אם אין בכלל תלמידים רשומים - מדלגים ישר
+// לשלב ההכתבה (אין טעם בתפריט ריק).
+const MENTOR_STUDENT_LIST_LIMIT = 9;
+function startMentorFlow(user) {
+  const students = db
+    .prepare("SELECT id, name FROM students WHERE owner_user_id = ? AND active = 1 ORDER BY name LIMIT ?")
+    .all(user.id, MENTOR_STUDENT_LIST_LIMIT);
+  if (!students.length) return { text: "מה שם התלמיד?", nextState: "mentor_pick_student" };
+  return {
+    text: mentorStudentListText(students),
+    nextState: "mentor_pick_student_list",
+    draft: { studentListOptions: students },
+  };
+}
+function mentorStudentListText(students) {
+  const listText = students.map((st, idx) => `${idx + 1}) ${st.name}`).join(", ");
+  return `על איזה תלמיד רוצים לדווח היום? ${listText}. הקישו את המספר, או הקישו 0 אם התלמיד לא ברשימה.`;
 }
 
 function findStudentByName(ownerUserId, spokenName) {
