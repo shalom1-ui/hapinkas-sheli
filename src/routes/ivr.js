@@ -48,6 +48,12 @@ const CONFIRM_MENU_STATES = new Set([
   "therapist_confirm", "supervisor_confirm", "signup_email_confirm",
 ]);
 
+// תפריטי-הקשה קבועים נוספים (לא "אישור/שינוי/ביטול" - תפריט בחירה עם כמה אפשרויות ממוספרות) -
+// אותו מנגנון פרוטוקול בדיוק כמו CONFIRM_MENU_STATES (מצב tap, ספרה אחת, ר' routes/yemot.js),
+// רק סמנטיקת הספרות שונה לכל צומת (ר' EXPENSE_CATEGORY_DIGITS למטה). כרגע רק expense_category -
+// משוב אמיתי ממשתמש ("לסדר בקטגוריות... רק עם הקשות").
+const DIGIT_MENU_STATES = new Set(["expense_category"]);
+
 function register(router) {
   // כניסה לשיחה
   router.post("/api/ivr/voice", async (ctx) => {
@@ -189,6 +195,20 @@ function addStudentDigitsNote(opts) {
   return opts && opts.digitConfirm ? " אפשר גם להקיש: 1 להוספה, 2 לביטול." : "";
 }
 
+// תפריט קטגוריות הוצאה קבוע - משוב אמיתי ממשתמש ("לסדר בקטגוריות מזון/תחבורה... שיהיה רק עם
+// הקשות, לא זיהוי דיבור"). בימות (opts.digitConfirm): עובר לגמרי למצב הקשה טהור (ר' DIGIT_MENU_STATES
+// ב-routes/yemot.js, בדיוק כמו CONFIRM_MENU_STATES) - אין יותר המתנה לזיהוי דיבור בכלל בשלב הזה.
+// ב-Twilio (אין הקשות מוגדרות שם) - עדיין אפשר לומר את שם הקטגוריה בקול (ר' case "expense_category"
+// למטה, גיבוי שקיים במפורש). 7 = "אחר" (תיאור חופשי, ר' case "expense_category_other") - זו עדיין
+// כן שלב טקסט חופשי, כי אין דרך "לנחש" קטגוריה מותאמת-אישית בהקשה.
+const EXPENSE_CATEGORY_DIGITS = { "1": "מזון", "2": "תחבורה", "3": "דיור", "4": "בריאות", "5": "חינוך", "6": "ביגוד" };
+function expenseCategoryMenuText(opts) {
+  if (opts && opts.digitConfirm) {
+    return "לאיזו קטגוריה? הקישו: 1 מזון, 2 תחבורה, 3 דיור, 4 בריאות, 5 חינוך, 6 ביגוד, 7 אחר.";
+  }
+  return "לאיזו קטגוריה? למשל: מזון, תחבורה, דיור, אחר.";
+}
+
 // מנסה להתאים קטגוריה בתפריט הראשי (כולל מילות סיום שיחה) - מחזיר null אם לא זוהתה אף קטגוריה,
 // כדי שהקורא יחליט מה לעשות עם קלט לא מזוהה (הודעת "לא הבנתי" משלו). משותף גם לתפריט הראשי עצמו
 // (case "main_menu") וגם לכל שלב אחר שרוצה "ליפול חזרה" לאותה התאמה - כרגע: balance_next_action,
@@ -272,27 +292,42 @@ async function advance(state, speech, draft, user, opts = {}) {
       if (!amount) return { text: `לא זיהיתי סכום.${retryHint()} כמה עלה, בשקלים?`, nextState: "expense_amount" };
       // חוזרים מיד על הסכום שזוהה (לפני שממשיכים לשאלה הבאה) - כדי לתפוס מיד טעות זיהוי בסכום
       // (מספרים מועדים לטעויות זיהוי דיבור), במקום לחכות לאישור הסופי כמה שאלות אחר כך.
-      return { text: `רשמתי ${amount} שקלים. לאיזו קטגוריה? למשל: מזון, תחבורה, דיור, אחר.`, nextState: "expense_category", draft: { amount } };
+      return { text: `רשמתי ${amount} שקלים. ${expenseCategoryMenuText(opts)}`, nextState: "expense_category", draft: { amount } };
     }
     case "expense_category": {
-      // תוקן (משוב אמיתי ממשתמש: "כשאני אומר אחר, המערכת צריכה להציע דיבור חופשי ושזה יישמר לפעם
-      // הבאה") - "אחר" שנאמר כמילה בודדת (לא כחלק ממשפט ארוך יותר) לא אמור להפוך להיות שם הקטגוריה
-      // המילולי "אחר" בפועל - זה לא באמת שם קטגוריה שימושי בדוחות/בפילוח. במקום זה מבקשים לתאר בקול
-      // חופשי מה זו בעצם הקטגוריה (ר' case "expense_category_other" למטה), ואז שומרים אותה במפורש
-      // כמו כל קטגוריה אחרת (ר' rememberPhrase ב-expense_confirm).
-      if (s === "אחר" || s === "אחרת") {
+      // תוקן (משוב אמיתי ממשתמש: "לסדר בקטגוריות מזון/תחבורה... רק עם הקשות") - זה כבר לא שלב
+      // טקסט חופשי (הוסר מ-FREE_TEXT_STATES ב-routes/yemot.js): תפריט קבוע של 7 אפשרויות בהקשה
+      // (ר' EXPENSE_CATEGORY_DIGITS למעלה). "אחר" (7) עדיין מוביל לתיאור חופשי בקול - ר' הערה קודמת
+      // ב-git history למה "אחר" לא הופך להיות שם הקטגוריה המילולי בעצמו.
+      const digit = onlyDigits(s);
+      if (digit && EXPENSE_CATEGORY_DIGITS[digit]) {
+        const category = EXPENSE_CATEGORY_DIGITS[digit];
+        return {
+          text: `לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${category}? ${confirmMenuText(opts)}`,
+          nextState: "expense_confirm",
+          draft: { ...draft, category },
+        };
+      }
+      if (digit === "7" || s === "אחר" || s === "אחרת") {
         return {
           text: "אפשר לתאר במילים חופשיות לאיזו קטגוריה? למשל: תרופות, מתנות, תיקונים.",
           nextState: "expense_category_other",
           draft,
         };
       }
-      const category = s || "אחר";
-      return {
-        text: `לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${category}? ${confirmMenuText(opts)}`,
-        nextState: "expense_confirm",
-        draft: { ...draft, category },
-      };
+      // גיבוי ל-Twilio בלבד (אין שם הקשות מוגדרות) - עדיין אפשר לומר את שם הקטגוריה בקול ישירות,
+      // בלי לעבור דרך התפריט הממוספר. בימות (digitConfirm) זה לא מגיע לכאן כי הערוץ במצב הקשה טהור.
+      if (!(opts && opts.digitConfirm)) {
+        const spoken = String(speech || "").trim();
+        if (spoken) {
+          return {
+            text: `לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${spoken}? ${confirmMenuText(opts)}`,
+            nextState: "expense_confirm",
+            draft: { ...draft, category: spoken },
+          };
+        }
+      }
+      return { text: `לא הבנתי.${retryHint()} ${expenseCategoryMenuText(opts)}`, nextState: "expense_category", draft };
     }
     // קטגוריה מותאמת-אישית שהוכתבה בעקבות אמירת "אחר" (ר' הערה ב-expense_category למעלה) - טקסט
     // חופשי, עובר דרך אותו מנגנון Whisper כמו שאר שדות התוכן החופשי (ר' FREE_TEXT_STATES ב-routes/yemot.js).
@@ -1212,6 +1247,7 @@ module.exports = {
   OPENING_GREETING,
   DIGIT_ENTRY_STATES,
   CONFIRM_MENU_STATES,
+  DIGIT_MENU_STATES,
   parseSpokenEmail, // מיוצא כדי לאפשר בדיקה ישירה (ר' tests/test-flow.js) - בלי לעבור זרימת שיחה מלאה
   extractAmount, // מיוצא כדי לאפשר בדיקה ישירה (ר' tests/test-flow.js) - כולל פענוח מספרים במילים
 };

@@ -14,7 +14,7 @@
 
 const db = require("../db");
 const { text, json } = require("../router");
-const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt, OPENING_GREETING, DIGIT_ENTRY_STATES, CONFIRM_MENU_STATES } = require("./ivr");
+const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt, OPENING_GREETING, DIGIT_ENTRY_STATES, CONFIRM_MENU_STATES, DIGIT_MENU_STATES } = require("./ivr");
 const { sayAndReadStt, sayAndGoToRecordExtension, sayAndReadDigits, sayAndHangup, VAL_NAME } = require("../services/yemot");
 const speechToText = require("../services/speechToText");
 const debugLog = require("../debugLog");
@@ -43,7 +43,6 @@ const debugLog = require("../debugLog");
 // ב-routes/ivr.js גם לרשת ביטחון נוספת: פענוח מספר שנאמר במילים, "מאה" ולא רק "100").
 // תוקן (משוב אמיתי ממשתמש: "אותו הדבר תעשה בכל הקטגוריות") - אותה בעיה (מנוע זיהוי מובנה חלש) קיימת
 // עקרונית בכל שלב שמצפה לתשובה חופשית/שם ולא רק להקשת ספרה, אז מרחיבים לכל השלבים כאלה:
-// - "expense_category": קטגוריית הוצאה חופשית (מזון/תחבורה/דיור/אחר) - בלי קיצור הקשה קיים בכלל.
 // - "therapist_role": בחירת סוג דיווח (ריפוי בעיסוק/רגשי/אחר) - בלי קיצור הקשה, ובניגוד ל-main_menu
 //   אין כאן אפילו "לא הבנתי, נסו שוב" בקלט לא מזוהה (נופל בשקט ל"אחר") - כך שדיוק התמלול קריטי יותר.
 // - "therapist_student"/"supervisor_pick_student": התאמת שם תלמיד חופשי - אותו דפוס בדיוק כמו
@@ -66,11 +65,13 @@ const debugLog = require("../debugLog");
 // כאן בכוונה - אלה שלבי כן/לא רגילים עם קיצור הקשה 1/2 אמין, בדיוק כמו signup_email_offer/confirm.
 // "expense_category_other" נוסף בעקבות משוב אמיתי נוסף ("כשאני אומר אחר, המערכת צריכה להציע דיבור
 // חופשי ושזה יישמר לפעם הבאה") - תיאור חופשי של קטגוריה מותאמת-אישית (ר' case "expense_category"/
-// "expense_category_other" ב-routes/ivr.js) - אותו סוג תוכן בדיוק כמו expense_category, רק שלב נוסף.
+// "expense_category_other" ב-routes/ivr.js) - עדיין טקסט חופשי, גם אחרי ש-"expense_category" עצמו
+// (הבחירה בין הקטגוריות הקבועות) הוסר מכאן והפך לתפריט הקשה (ר' DIGIT_MENU_STATES/EXPENSE_CATEGORY_DIGITS
+// ב-routes/ivr.js - משוב אמיתי: "לסדר בקטגוריות... רק עם הקשות, לא זיהוי דיבור").
 const FREE_TEXT_STATES = new Set([
   "signup_name", "mentor_pick_student", "main_menu", "balance_next_action",
   "signup_email_speak", "expense_amount", "income_amount",
-  "expense_category", "therapist_role", "therapist_student", "supervisor_pick_student",
+  "therapist_role", "therapist_student", "supervisor_pick_student",
   "guardian_pick_child", "therapist_note", "supervisor_readback", "mentor_note_speak",
   "expense_category_other",
 ]);
@@ -87,7 +88,6 @@ function vocabularyHintFor(state) {
   // כשבפועל נאמרה רק מילת דילוג קצרה - הוספת המילה עצמה לרמז אמורה להקטין את הסיכוי לזה.
   if (state === "signup_email_speak") return "כתובת אימייל, שטרודל, כרוכית, נקודה, ג'ימייל, אאוטלוק, הוטמייל, או דלג";
   if (state === "expense_amount" || state === "income_amount") return "סכום כסף בשקלים, מספרים, לדוגמה: מאה שקלים, מאתיים וחמישים, חמישים שקל";
-  if (state === "expense_category") return "קטגוריית הוצאה, לדוגמה: מזון, תחבורה, דיור, בריאות, חינוך, ביגוד, אחר";
   if (state === "expense_category_other") return "שם קטגוריית הוצאה מותאמת אישית, לדוגמה: תרופות, מתנות, תיקונים";
   if (state === "therapist_role") return "סוג דיווח מקצועי: ריפוי בעיסוק, טיפול רגשי, או אחר";
   if (state === "therapist_student" || state === "supervisor_pick_student" || state === "guardian_pick_child") {
@@ -103,12 +103,16 @@ function vocabularyHintFor(state) {
 // (1) אם מוגדר זיהוי דיבור משודרג (Whisper) - מעבירים את השיחה זמנית לשלוחת ההקלטה הנפרדת
 //     (sayAndGoToRecordExtension, ר' services/yemot.js) שתשמור את ההקלטה ותחזיר את השיחה אלינו;
 //     (2) אחרת - מנוע ה"הקלטה-לזיהוי" הרגיל של ימות (freeText), כמו קודם.
-// תוקן (שינוי ארכיטקטורה נוסף - "הקלטה נפרדת", ר' README/CHANGELOG): הניסיון הקודם - להקליט "בתוך"
-// שלוחת ה-API עצמה (read=...,record,...) - מעולם לא הצליח בפועל. הפתרון הנוכחי מעביר בפועל את
-// השיחה לשלוחה אחרת (type=record) שמוגדרת בממשק הניהול של ימות - ר' README - ולכן אין יותר צורך
-// בהנחיה "הקישו X לאישור" כאן: האישור/הקישה קורים כבר **בתוך** שלוחת ההקלטה עצמה (לפי הגדרת
-// record_ok שם), לפני שהשיחה חוזרת אלינו בכלל.
-const RECORD_CONFIRM_HINT = "";
+// תוקן (משוב אמיתי ממשתמש בבדיקה חיה): בעבר ההנחיה כאן הייתה ריקה, בהנחה שאין צורך להסביר את
+// שלב האישור בתוך שלוחת ההקלטה (record_ok=# וכו', ר' README, "הגדרת שלוחת ההקלטה") - כי הוא
+// "כבר קורה שם" מבלי שאנחנו צריכים להזכיר אותו. בפועל זה יצר שקט/עיכוב מורגש: המתקשר לא ידע
+// מראש שאחרי # יש עוד שלב הקשה (התפריט הפנימי של ימות, "לאישור ההקלטה הקישו 1") - וגילה את זה
+// רק אחרי שהשמיע ההודעה שלו. המשתמש דיווח שהקשת # ומיד אחריה 1 (בלי לחכות שהתפריט הפנימי יסיים
+// להישמע) עובדת ומדלגת קדימה - אז אומרים את זה מראש, לפני ההקלטה עצמה, כדי שאפשר יהיה לעשות את
+// זה מיד בלי להמתין לגלות זאת ניסיונית. **חשוב**: זו הנחיה על תפריט שקורה **בתוך** שלוחת ההקלטה
+// (מוגדר בממשק הניהול של ימות, לא בקוד שלנו) - לא אימות מלא של הפרוטוקול הפנימי שם, רק תיעוד
+// של מה שנצפה בפועל בבדיקה חיה.
+const RECORD_CONFIRM_HINT = " כשתסיימו לדבר, הקישו סולמית, ומיד אחריה גם 1, כדי להמשיך בלי להמתין.";
 
 // דגל בקרה למצב ה"הקלטה נפרדת + Whisper" (ר' README, סעיף "זיהוי דיבור משודרג"). מופעל רק אם גם
 // המפתחות מוגדרים (ר' speechToText.isConfigured, כולל YEMOT_RECORD_EXTENSION) וגם הדגל כאן מופעל -
@@ -292,6 +296,11 @@ function register(router) {
     // כדי שהתגובה תגיע מיד עם ההקשה, בלי להמתין לעיבוד קול בכלל - זה בדיוק מה שביקש המשתמש
     // ("האישורים יהיו על המקשים לא בזיהוי דיבור") וגם פותר את השקט המיותר שדווח בין שלב לשלב.
     if (CONFIRM_MENU_STATES.has(result.nextState)) {
+      return text(ctx.res, 200, sayAndReadDigits(result.text, 1));
+    }
+    // תפריטי-הקשה קבועים נוספים (ר' DIGIT_MENU_STATES/EXPENSE_CATEGORY_DIGITS ב-routes/ivr.js) -
+    // אותו מצב הקשה טהור כמו CONFIRM_MENU_STATES, רק שהספרה בוחרת אפשרות מתוך תפריט (לא אישור/ביטול).
+    if (DIGIT_MENU_STATES.has(result.nextState)) {
       return text(ctx.res, 200, sayAndReadDigits(result.text, 1));
     }
     if (FREE_TEXT_STATES.has(result.nextState)) {

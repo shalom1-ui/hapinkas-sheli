@@ -850,7 +850,7 @@ async function run() {
 
     await yemotCall({ callId: ymCallId, speech: "הוצאה" });
     await yemotCall({ callId: ymCallId, speech: "45" });
-    await yemotCall({ callId: ymCallId, speech: "מזון" });
+    await yemotCall({ callId: ymCallId, speech: "1" }); // 1 = מזון (תפריט קטגוריות בהקשה, ר' EXPENSE_CATEGORY_DIGITS)
     const ymConfirm = await yemotCall({ callId: ymCallId, speech: "כן" });
     assert(
       ymConfirm.includes("נשמר") && ymConfirm.includes("רוצים לעשות עוד משהו") && !ymConfirm.includes("g-hangup"),
@@ -876,7 +876,7 @@ async function run() {
     await yemotCall({ callId: ymUnclearCallId, phone: "0500000001" });
     await yemotCall({ callId: ymUnclearCallId, speech: "הוצאה" });
     await yemotCall({ callId: ymUnclearCallId, speech: "63" });
-    await yemotCall({ callId: ymUnclearCallId, speech: "מזון" });
+    await yemotCall({ callId: ymUnclearCallId, speech: "1" }); // 1 = מזון
     const ymUnclearRetry = await yemotCall({ callId: ymUnclearCallId, speech: "משהו אחר לגמרי" });
     assert(
       ymUnclearRetry.includes("לא הבנתי") && ymUnclearRetry.includes("63") && ymUnclearRetry.startsWith("read=t-"),
@@ -947,7 +947,7 @@ async function run() {
     assert(ymMultiBalance.includes("רוצים להוסיף הכנסה או הוצאה"), "אחרי היתרה מוצעת אפשרות להמשיך ישר להוספת הכנסה/הוצאה באותה שיחה");
     await yemotCall({ callId: ymMultiCallId, speech: "הוצאה" });
     await yemotCall({ callId: ymMultiCallId, speech: "33" });
-    await yemotCall({ callId: ymMultiCallId, speech: "ביגוד" });
+    await yemotCall({ callId: ymMultiCallId, speech: "6" }); // 6 = ביגוד
     const ymMultiExpenseDone = await yemotCall({ callId: ymMultiCallId, speech: "כן" });
     assert(
       ymMultiExpenseDone.includes("נשמר") && ymMultiExpenseDone.includes("רוצים לעשות עוד משהו"),
@@ -1020,6 +1020,34 @@ async function run() {
       "התנועה שבוטלה בכוכבית מתוך שאלת האישור אכן לא נשמרה במסד הנתונים"
     );
 
+    console.log("\n🍔 תפריט קטגוריות הוצאה קבוע בהקשה בלבד (ימות): 1=מזון...6=ביגוד, 7=אחר");
+    // משוב אמיתי ממשתמש: "לסדר בקטגוריות מזון/תחבורה... שיהיה רק עם הקשות, לא זיהוי דיבור".
+    const ymCategoryMenuCallId = `${ymCallId}-category-menu`;
+    await yemotCall({ callId: ymCategoryMenuCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymCategoryMenuCallId, speech: "הוצאה" });
+    const ymCategoryMenuPrompt = await yemotCall({ callId: ymCategoryMenuCallId, speech: "48" });
+    assert(
+      /,1,1,7,No,/.test(ymCategoryMenuPrompt) && ymCategoryMenuPrompt.includes("1 מזון") && ymCategoryMenuPrompt.includes("7 אחר"),
+      "אחרי הסכום, שאלת הקטגוריה נשלחת בפרוטוקול ימות במצב הקשה טהור (לא זיהוי דיבור), עם רשימת הקטגוריות הממוספרת"
+    );
+    const ymCategoryMenuDigit3 = await yemotCall({ callId: ymCategoryMenuCallId, speech: "3" }); // 3 = דיור
+    assert(ymCategoryMenuDigit3.includes("דיור"), "הקשת 3 בתפריט הקטגוריות שקולה לבחירת 'דיור', בלי לומר את המילה בקול");
+    await yemotCall({ callId: ymCategoryMenuCallId, speech: "1" }); // מאשר (1=אישור בשאלת האישור המשולשת)
+    const afterCategoryDigit3Saved = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterCategoryDigit3Saved.data.transactions.some(t => t.source === "phone" && t.amount === 48 && t.category === "דיור"),
+      "התנועה נשמרה עם הקטגוריה שנבחרה בהקשה (דיור), לא עם קטגוריית ברירת מחדל כלשהי"
+    );
+
+    const ymCategoryOtherCallId = `${ymCallId}-category-other`;
+    await yemotCall({ callId: ymCategoryOtherCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymCategoryOtherCallId, speech: "הוצאה" });
+    await yemotCall({ callId: ymCategoryOtherCallId, speech: "22" });
+    const ymCategoryOtherOffer = await yemotCall({ callId: ymCategoryOtherCallId, speech: "7" }); // 7 = אחר
+    assert(ymCategoryOtherOffer.includes("לתאר במילים חופשיות"), "הקשת 7 (אחר) בתפריט הקטגוריות עדיין מציעה לתאר את הקטגוריה בקול חופשי");
+    const ymCategoryOtherConfirm = await yemotCall({ callId: ymCategoryOtherCallId, speech: "תרופות" });
+    assert(ymCategoryOtherConfirm.includes("תרופות"), "קטגוריה מותאמת-אישית שהוכתבה אחרי 'אחר' עדיין נקלטת כטקסט חופשי כרגיל");
+
     console.log("\n1️⃣2️⃣3️⃣ שאלת אישור משולשת בהקשה בלבד (ימות): 1=אישור, 2=שינוי, 3=ביטול - בלי זיהוי דיבור");
     // משוב אמיתי ממשתמש: לא צריך לדבר בכלל בשאלת אישור - מספיק להקיש. גם בודקים שהתגובה עצמה
     // (לא רק הטקסט) היא במצב הקשה טהור (tap, כמו קוד PIN) - לא read=...voice... הרגיל.
@@ -1027,7 +1055,7 @@ async function run() {
     await yemotCall({ callId: ymMenuConfirmCallId, phone: "0500000001" });
     await yemotCall({ callId: ymMenuConfirmCallId, speech: "הוצאה" });
     await yemotCall({ callId: ymMenuConfirmCallId, speech: "40" }); // סכום -> שואל קטגוריה
-    const ymMenuConfirmPrompt = await yemotCall({ callId: ymMenuConfirmCallId, speech: "מזון" }); // קטגוריה -> מגיע לשאלת האישור
+    const ymMenuConfirmPrompt = await yemotCall({ callId: ymMenuConfirmCallId, speech: "1" }); // 1=מזון -> מגיע לשאלת האישור
     assert(
       /,1,1,7,No,/.test(ymMenuConfirmPrompt),
       "שאלת האישור נשלחת בפרוטוקול ימות במצב הקשה טהור (1 ספרה בדיוק, sec_wait=7, בלי הקראה חוזרת), לא במצב זיהוי דיבור"
@@ -1039,7 +1067,7 @@ async function run() {
       "הקשת 2 (שינוי) בשאלת האישור חוזרת ישר לשאלת הסכום מחדש, לא לתפריט הראשי ולא מבטלת סתם"
     );
     await yemotCall({ callId: ymMenuConfirmCallId, speech: "55" });
-    await yemotCall({ callId: ymMenuConfirmCallId, speech: "מזון" });
+    await yemotCall({ callId: ymMenuConfirmCallId, speech: "1" }); // 1 = מזון
     const ymMenuChangeConfirm = await yemotCall({ callId: ymMenuConfirmCallId, speech: "1" });
     assert(
       ymMenuChangeConfirm.includes("נשמר") && ymMenuChangeConfirm.includes("55"),
