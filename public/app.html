@@ -189,7 +189,7 @@
       <div class="field"><label>שם מלא</label><input id="su_name" placeholder="לדוגמה: דנה כהן"></div>
       <div class="field"><label>שם משתמש</label><input id="su_username" placeholder="בחרו שם משתמש"></div>
       <div class="field"><label>סיסמה</label><input id="su_password" type="password" placeholder="סיסמה"></div>
-      <div class="field"><label>טלפון (אופציונלי)</label><input id="su_phone" placeholder="+972501234567"></div>
+      <div class="field"><label>טלפון (חובה - כדי שזיהוי בשיחה נכנסת וכניסה בטלפון עם הסיסמה יעבדו)</label><input id="su_phone" placeholder="+972501234567" required></div>
       <div class="field"><label>מייל (אופציונלי)</label><input id="su_email" placeholder="name@example.com"></div>
       <div class="field">
         <label>אני גם... (אופציונלי - סמנו את מה שרלוונטי)</label>
@@ -554,6 +554,12 @@ async function doSignup() {
   const roles = ['private'];
   if (document.getElementById('su_role_mentor').checked) roles.push('mentor');
   if (document.getElementById('su_role_therapist').checked) roles.push('therapist');
+  // תוקן (משוב אמיתי: "הטלפון צריך שיהיה חובה להרשמה") - בדיקה מהירה בצד הלקוח, לפני הקריאה
+  // לשרת (שגם הוא אוכף את זה, ר' routes/auth.js) - כדי שההודעה תופיע מיד בלי סבב רשת מיותר.
+  if (!document.getElementById('su_phone').value.trim()) {
+    toast('יש להזין מספר טלפון - הוא נדרש כדי שזיהוי בשיחה נכנסת וכניסה בטלפון עם הסיסמה יעבדו', 'error');
+    return;
+  }
   const r = await api('POST', '/api/auth/signup', {
     full_name: document.getElementById('su_name').value,
     username: document.getElementById('su_username').value,

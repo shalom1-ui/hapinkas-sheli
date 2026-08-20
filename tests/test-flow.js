@@ -127,13 +127,19 @@ async function run() {
     // תעבוד גם כקוד PIN בטלפון (ר' routes/ivr.js, signup_pin) ולהפך. נבדק כאן בכל שלושת המקומות
     // שקובעים סיסמה: הרשמה באתר, שחזור סיסמה, ושינוי סיסמה למשתמש מחובר.
     const badFormatSignup = await api("POST", "/api/auth/signup", {
-      full_name: "סיסמה לא תקינה", username: `badpw_${Date.now()}`, password: "abc123",
+      full_name: "סיסמה לא תקינה", username: `badpw_${Date.now()}`, password: "abc123", phone: "+972500000090",
     });
     assert(badFormatSignup.status === 400, "הרשמה באתר עם סיסמה שאינה בדיוק 4 ספרות נדחית");
     const shortFormatSignup = await api("POST", "/api/auth/signup", {
-      full_name: "סיסמה קצרה מדי", username: `shortpw_${Date.now()}`, password: "123",
+      full_name: "סיסמה קצרה מדי", username: `shortpw_${Date.now()}`, password: "123", phone: "+972500000091",
     });
     assert(shortFormatSignup.status === 400, "הרשמה באתר עם סיסמה קצרה מ-4 ספרות נדחית");
+
+    console.log("\n📱 טלפון חובה בהרשמה באתר (משוב אמיתי: בלי זה אין ערוץ זיהוי בשיחה נכנסת/כניסה בטלפון)");
+    const noPhoneAtAllSignup = await api("POST", "/api/auth/signup", {
+      full_name: "בלי טלפון בכלל", username: `no_phone_at_all_${Date.now()}`, password: "1234",
+    });
+    assert(noPhoneAtAllSignup.status === 400, "הרשמה באתר בלי מספר טלפון בכלל נדחית");
 
     console.log("\n🔑 שחזור סיסמה בשיחה קולית (ללא SMS)");
     const fpReq = await api("POST", "/api/auth/forgot-password/request", { username, channel: "phone" });
@@ -193,23 +199,24 @@ async function run() {
       "לפני שיש בעל קו כלשהו: משתמש שנרשם באתר עצמו ויש לו טלפון רשום כשיר לתבוע את התפקיד"
     );
 
-    const noPhoneSignup = await api("POST", "/api/auth/signup", {
-      full_name: "בלי טלפון", username: `no_phone_${Date.now()}`, password: "1234",
+    // תוקן (טלפון חובה בהרשמה, ר' למעלה): "משתמש בלי טלפון" כבר לא בר-השגה דרך הרשמה רגילה באתר -
+    // המשתמש הזה עדיין שימושי לבדיקת "בלי כתובת מייל רשומה" (יש לו טלפון, אין לו מייל).
+    const noEmailSignup = await api("POST", "/api/auth/signup", {
+      full_name: "בלי מייל", username: `no_email_${Date.now()}`, password: "1234", phone: "+972500000092",
     });
-    const noPhoneClaimAttempt = await api("POST", "/api/me/request-admin-claim", {}, noPhoneSignup.data.token);
-    assert(noPhoneClaimAttempt.status === 400, "משתמש בלי מספר טלפון רשום לא יכול לתבוע את בעל הקו (אין ערוץ לאמת אותו)");
+    const noPhoneClaimAttempt = await api("POST", "/api/me/request-admin-claim", { channel: "email" }, noEmailSignup.data.token);
+    assert(noPhoneClaimAttempt.status === 400, "משתמש בלי כתובת מייל רשומה לא יכול לתבוע בעל הקו בערוץ מייל (אין ערוץ לאמת אותו)");
 
-    // ערוץ מייל לתביעת בעל הקו (נוסף בעקבות בקשת פיצ'ר - "למה לא לעשות שליחה גם למייל בינתיים") -
-    // עובד גם למי שאין לו טלפון רשום, כל עוד יש לו כתובת מייל.
+    // ערוץ מייל לתביעת בעל הקו (נוסף בעקבות בקשת פיצ'ר - "למה לא לעשות שליחה גם למייל בינתיים").
     const emailClaimSignup = await api("POST", "/api/auth/signup", {
-      full_name: "תובע דרך מייל", username: `email_claim_${Date.now()}`, password: "1234", email: "emailclaim@example.com",
+      full_name: "תובע דרך מייל", username: `email_claim_${Date.now()}`, password: "1234", email: "emailclaim@example.com", phone: "+972500000093",
     });
-    const emailClaimNoEmailUser = await api("POST", "/api/me/request-admin-claim", { channel: "email" }, noPhoneSignup.data.token);
+    const emailClaimNoEmailUser = await api("POST", "/api/me/request-admin-claim", { channel: "email" }, noEmailSignup.data.token);
     assert(emailClaimNoEmailUser.status === 400, "משתמש בלי כתובת מייל רשומה לא יכול לתבוע בעל הקו בערוץ מייל");
     const emailClaimReq = await api("POST", "/api/me/request-admin-claim", { channel: "email" }, emailClaimSignup.data.token);
     assert(
       emailClaimReq.status === 200 && emailClaimReq.data.demoCode && emailClaimReq.data.message.includes("מייל"),
-      "תביעת בעל הקו בערוץ מייל עובדת גם למשתמש בלי טלפון רשום, כל עוד יש לו כתובת מייל"
+      "תביעת בעל הקו בערוץ מייל עובדת (יש למשתמש הזה גם טלפון וגם מייל רשומים)"
     );
 
     const wrongClaimCode = await api("POST", "/api/me/request-admin-claim", {}, token);
@@ -222,12 +229,12 @@ async function run() {
       "קוד נכון מאשר את התביעה בפועל - המשתמש (שנרשם באתר עם טלפון משלו) הופך ל'בעל הקו'"
     );
 
-    const secondClaimAttempt = await api("POST", "/api/me/request-admin-claim", {}, noPhoneSignup.data.token);
+    const secondClaimAttempt = await api("POST", "/api/me/request-admin-claim", {}, noEmailSignup.data.token);
     assert(secondClaimAttempt.status === 409, "אחרי שכבר יש בעל קו, אף אחד אחר לא יכול לתבוע את התפקיד (409)");
 
     console.log("\n👑 תפקיד 'מפקח' - לא ניתן להצהרה עצמית, רק דרך אישור בעל הקו");
     const supervisorViaSignup = await api("POST", "/api/auth/signup", {
-      full_name: "מנסה להיות מפקח בהרשמה", username: `sneaky_signup_${Date.now()}`, password: "1234", roles: "mentor,supervisor",
+      full_name: "מנסה להיות מפקח בהרשמה", username: `sneaky_signup_${Date.now()}`, password: "1234", roles: "mentor,supervisor", phone: "+972500000094",
     });
     assert(
       supervisorViaSignup.data.user.roles.includes("mentor") && !supervisorViaSignup.data.user.roles.includes("supervisor"),
@@ -358,7 +365,7 @@ async function run() {
     assert(comment.status === 201, "הוספת הערה (צ'אט פנימי) הצליחה");
 
     const strangerSignup0 = await api("POST", "/api/auth/signup", {
-      full_name: "משתמש זר מוקדם", username: `stranger0_${Date.now()}`, password: "1234",
+      full_name: "משתמש זר מוקדם", username: `stranger0_${Date.now()}`, password: "1234", phone: "+972500000095",
     });
     const strangerToken0 = strangerSignup0.data.token;
 
@@ -440,13 +447,13 @@ async function run() {
 
     console.log("\n👪 הורים - גישה לסיכום בלבד, לא לצ'אט הפנימי");
     const parentSignup = await api("POST", "/api/auth/signup", {
-      full_name: "הורה לדוגמה", username: `parent_${Date.now()}`, password: "1234", email: "parent@example.com",
+      full_name: "הורה לדוגמה", username: `parent_${Date.now()}`, password: "1234", email: "parent@example.com", phone: "+972500000096",
     });
     const parentToken = parentSignup.data.token;
     const parentUsername = parentSignup.data.user.username;
 
     const strangerSignup = await api("POST", "/api/auth/signup", {
-      full_name: "משתמש זר", username: `stranger_${Date.now()}`, password: "1234",
+      full_name: "משתמש זר", username: `stranger_${Date.now()}`, password: "1234", phone: "+972500000097",
     });
     const strangerToken = strangerSignup.data.token;
 
@@ -454,7 +461,7 @@ async function run() {
     assert(addGuardianByStranger.status === 403, "משתמש זר בלי תפקיד מקצועי (roles='private' בלבד) לא יכול לשייך הורה לתלמיד - כולל הורה שמנסה לשייך את עצמו");
 
     const otherProfessionalSignup = await api("POST", "/api/auth/signup", {
-      full_name: "מטפל אחר בצוות", username: `other_pro_${Date.now()}`, password: "1234", roles: "therapist",
+      full_name: "מטפל אחר בצוות", username: `other_pro_${Date.now()}`, password: "1234", roles: "therapist", phone: "+972500000098",
     });
     const addGuardianByOtherProfessional = await api(
       "POST", `/api/students/${sid}/guardians`, { username: parentUsername }, otherProfessionalSignup.data.token
