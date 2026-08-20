@@ -68,12 +68,19 @@ const debugLog = require("../debugLog");
 // "expense_category_other" ב-routes/ivr.js) - עדיין טקסט חופשי, גם אחרי ש-"expense_category" עצמו
 // (הבחירה בין הקטגוריות הקבועות) הוסר מכאן והפך לתפריט הקשה (ר' DIGIT_MENU_STATES/EXPENSE_CATEGORY_DIGITS
 // ב-routes/ivr.js - משוב אמיתי: "לסדר בקטגוריות... רק עם הקשות, לא זיהוי דיבור").
+// "lesson_prep_*_speak" (4 שדות: קטע נלמד/מטרה/יישום בפועל/שיתוף פעולה, ר' LESSON_PREP_FIELDS
+// ב-routes/ivr.js) - תוכן חופשי וארוך יותר, כמו therapist_note/supervisor_readback - כפוף לאותה
+// דרישת עדכון option_record ל-3-1-60. "lesson_prep_*_retry"/"lesson_prep_*_pick" **לא** כאן בכוונה -
+// retry הוא כן/לא רגיל עם קיצור הקשה 1 (בדיוק כמו mentor_note_offer), ו-pick הוא תפריט הקשה טהור
+// (ר' DIGIT_MENU_STATES).
 const FREE_TEXT_STATES = new Set([
   "signup_name", "mentor_pick_student", "main_menu", "balance_next_action",
   "signup_email_speak", "expense_amount", "income_amount",
   "therapist_role", "therapist_student", "supervisor_pick_student",
   "guardian_pick_child", "therapist_note", "supervisor_readback", "mentor_note_speak",
   "expense_category_other",
+  "lesson_prep_topic_studied_speak", "lesson_prep_goal_speak",
+  "lesson_prep_practical_application_speak", "lesson_prep_connection_cooperation_speak",
 ]);
 
 // תוקן (באג אמיתי שהתגלה בבדיקה חיה - ר' הערה מפורטת ב-speechToText.transcribeAudio): "רמז אוצר

@@ -19,7 +19,7 @@ const db = require("../db");
 const { xml } = require("../router");
 const { sayAndGather, sayAndGatherDigits, sayAndHangup } = require("../services/telephony");
 const { hashPassword, isValidPin } = require("../utils/crypto");
-const { rememberPhrase } = require("../lib/dictionary");
+const { rememberPhrase, getDictionary } = require("../lib/dictionary");
 
 const MAIN_MENU_HINTS = [
   "ניהול חשבונות", "חשבונות", "תנועות", "הכנסה", "הוצאה", "יתרה",
@@ -45,14 +45,116 @@ const DIGIT_ENTRY_STATES = new Set(["signup_pin", "signup_pin_confirm"]);
 // אלה כן/לא (או תפריט קצר) "רגילים" עם קיצור הקשה קיים כבר, לא חלק מהמודל המשולש הזה.
 const CONFIRM_MENU_STATES = new Set([
   "expense_confirm", "income_confirm", "mentor_remove_confirm", "mentor_note_confirm",
-  "therapist_confirm", "supervisor_confirm", "signup_email_confirm",
+  "therapist_confirm", "supervisor_confirm", "signup_email_confirm", "lesson_prep_confirm",
 ]);
 
 // תפריטי-הקשה קבועים נוספים (לא "אישור/שינוי/ביטול" - תפריט בחירה עם כמה אפשרויות ממוספרות) -
 // אותו מנגנון פרוטוקול בדיוק כמו CONFIRM_MENU_STATES (מצב tap, ספרה אחת, ר' routes/yemot.js),
-// רק סמנטיקת הספרות שונה לכל צומת (ר' EXPENSE_CATEGORY_DIGITS למטה). כרגע רק expense_category -
-// משוב אמיתי ממשתמש ("לסדר בקטגוריות... רק עם הקשות").
-const DIGIT_MENU_STATES = new Set(["expense_category"]);
+// רק סמנטיקת הספרות שונה לכל צומת (ר' EXPENSE_CATEGORY_DIGITS למטה). expense_category - משוב אמיתי
+// ("לסדר בקטגוריות... רק עם הקשות"). ה-lesson_prep_*_pick נוספו בעקבות אותו עקרון - בחירת ניסוח
+// קודם מה"מילון" (ר' LESSON_PREP_FIELDS/handleLessonFieldPick למטה) היא גם היא תפריט הקשה טהור.
+const DIGIT_MENU_STATES = new Set([
+  "expense_category", "lesson_prep_topic_studied_pick", "lesson_prep_goal_pick",
+  "lesson_prep_practical_application_pick", "lesson_prep_connection_cooperation_pick",
+]);
+
+// שדות טופס "הכנה לשיעור" הנתמכים בטלפון. במקור רק עד לחלק שנקרא באתר "פרטים נוספים"
+// (LESSON_FIELDS_BASIC ב-public/app.html) - אחר כך נוסף גם "שיתוף פעולה" (connection_cooperation,
+// שדה קיים בטופס המלא תחת "פרטים נוספים" שם - "התחברות ושיתוף פעולה" - כאן נשאלת רק על שיתוף הפעולה,
+// אבל נשמרת לאותה עמודה בדיוק) - משוב אמיתי מפורש שביקש להוסיף אותו בחזרה. dictKind תואם בדיוק
+// לפורמט kind ב-phrase_dictionary (ר' routes/lessonReports.js, "lesson_" + שם השדה) - כך שניסוח
+// שהוכתב בטלפון מוצע גם באתר בפעם הבאה, ולהפך (אותו "מילון" בדיוק, משותף בין שני הערוצים).
+const LESSON_PREP_FIELDS = [
+  { id: "topic_studied", label: "הקטע שנלמד", question: "מה הקטע שנלמד בשיעור?", dictKind: "lesson_topic_studied" },
+  { id: "goal", label: "המטרה", question: "מה הייתה מטרת השיעור?", dictKind: "lesson_goal" },
+  { id: "practical_application", label: "היישום בפועל", question: "איך זה יושם בפועל בשיעור?", dictKind: "lesson_practical_application" },
+  { id: "connection_cooperation", label: "שיתוף הפעולה", question: "איך היה שיתוף הפעולה של התלמיד בשיעור?", dictKind: "lesson_connection_cooperation" },
+];
+function lessonSpeakState(i) { return `lesson_prep_${LESSON_PREP_FIELDS[i].id}_speak`; }
+function lessonRetryState(i) { return `lesson_prep_${LESSON_PREP_FIELDS[i].id}_retry`; }
+function lessonPickState(i) { return `lesson_prep_${LESSON_PREP_FIELDS[i].id}_pick`; }
+function lessonFieldIndexFromState(state) {
+  return LESSON_PREP_FIELDS.findIndex((f) => state.startsWith(`lesson_prep_${f.id}_`));
+}
+
+// שלב הכתבה חופשית לשדה (Whisper/מנוע ההקלטה הרגיל, ר' FREE_TEXT_STATES ב-routes/yemot.js) - אם
+// נשמע משהו, ממשיכים לשדה הבא (או לאישור הסופי אם זה האחרון); אם לא נשמע כלום, לא חוזרים ישר לעוד
+// ניסיון הקלטה (ר' lessonRetryState) - מציעים גם לבחור מתוך ניסוחים קודמים בהקשה, במקום לנסות שוב
+// ושוב בקול בלי הצלחה (משוב אמיתי: "אם הוא מנסה ולא הולך").
+function handleLessonFieldSpeak(fieldIndex, speech, draft, opts) {
+  const field = LESSON_PREP_FIELDS[fieldIndex];
+  const trimmed = String(speech || "").trim();
+  if (!trimmed) {
+    return {
+      text: `לא שמעתי. אפשר לנסות שוב לתאר בקול, או להקיש 1 לבחור מתוך ניסוחים קודמים שלכם בהקשה. ${field.question}`,
+      nextState: lessonRetryState(fieldIndex),
+      draft,
+    };
+  }
+  const lessonPrep = { ...(draft.lessonPrep || {}), [field.id]: trimmed };
+  const nextIndex = fieldIndex + 1;
+  if (nextIndex < LESSON_PREP_FIELDS.length) {
+    return { text: LESSON_PREP_FIELDS[nextIndex].question, nextState: lessonSpeakState(nextIndex), draft: { ...draft, lessonPrep } };
+  }
+  return { text: lessonPrepConfirmText({ ...draft, lessonPrep }, opts), nextState: "lesson_prep_confirm", draft: { ...draft, lessonPrep } };
+}
+
+// שלב "לא שמעתי כלום" - כן/לא רגיל (לא Whisper) עם קיצור הקשה 1 אמין: 1 = לבחור מתוך ה"מילון" בהקשה,
+// כל קלט אחר = לנסות שוב לתאר בקול. לא digitConfirm-tap טהור בכוונה (בניגוד ל-lesson_prep_*_pick) -
+// כדי שאפשר יהיה גם פשוט להתחיל לדבר ישירות מכאן בלי להקיש כלום קודם, אם המתקשר מעדיף.
+function handleLessonFieldRetry(fieldIndex, s, draft) {
+  const digit = onlyDigits(s);
+  const field = LESSON_PREP_FIELDS[fieldIndex];
+  if (digit === "1" || includesAny(s, ["בחירה", "לבחור", "רשימה", "ניסוחים"])) {
+    const phrases = getDictionary(draft.mentorUserId, field.dictKind).slice(0, 5);
+    if (!phrases.length) {
+      return { text: `אין עדיין ניסוחים שמורים לשדה הזה, ננסה בקול. ${field.question}`, nextState: lessonSpeakState(fieldIndex), draft };
+    }
+    // "1) ..." ולא "1. ..." בכוונה - נקודה נמחקת ע"י sanitizeForYemot (ר' services/yemot.js), אז
+    // "1. חיבור" היה נשמע/מוצג בפועל כ"1 חיבור" בלי שום הפרדה ברורה בין המספר לתחילת הניסוח.
+    const listText = phrases.map((p, idx) => `${idx + 1}) ${p}`).join(", ");
+    return {
+      text: `הניסוחים הקודמים שלכם: ${listText}. הקישו את המספר המתאים.`,
+      nextState: lessonPickState(fieldIndex),
+      draft: { ...draft, lessonPickOptions: phrases },
+    };
+  }
+  return { text: field.question, nextState: lessonSpeakState(fieldIndex), draft };
+}
+
+// בחירה מתוך ה"מילון" בהקשה טהור (ר' DIGIT_MENU_STATES) - הספרה היא אינדקס ברשימה שהוקראה
+// (lessonPickOptions בדראפט, לא לפי dictKind מחדש - כדי שהבחירה תהיה בדיוק מה שהוקרא, גם אם המילון
+// השתנה בינתיים תיאורטית).
+function handleLessonFieldPick(fieldIndex, s, draft, opts) {
+  const digit = onlyDigits(s);
+  const options = draft.lessonPickOptions || [];
+  const idx = digit ? parseInt(digit, 10) - 1 : -1;
+  const field = LESSON_PREP_FIELDS[fieldIndex];
+  if (idx >= 0 && idx < options.length) {
+    const lessonPrep = { ...(draft.lessonPrep || {}), [field.id]: options[idx] };
+    const nextIndex = fieldIndex + 1;
+    if (nextIndex < LESSON_PREP_FIELDS.length) {
+      return {
+        text: LESSON_PREP_FIELDS[nextIndex].question,
+        nextState: lessonSpeakState(nextIndex),
+        draft: { ...draft, lessonPrep, lessonPickOptions: undefined },
+      };
+    }
+    return {
+      text: lessonPrepConfirmText({ ...draft, lessonPrep }, opts),
+      nextState: "lesson_prep_confirm",
+      draft: { ...draft, lessonPrep, lessonPickOptions: undefined },
+    };
+  }
+  return { text: `לא הבנתי את הבחירה. ${field.question}`, nextState: lessonSpeakState(fieldIndex), draft: { ...draft, lessonPickOptions: undefined } };
+}
+
+// טקסט האישור הסופי - מרכז את שלושת השדות שנאספו (או "לא צוין" לשדה שדולג עליו, אם היה כזה).
+function lessonPrepConfirmText(draft, opts) {
+  const lp = draft.lessonPrep || {};
+  const parts = LESSON_PREP_FIELDS.map((f) => `${f.label}: ${lp[f.id] || "לא צוין"}`).join(", ");
+  return `לאשר את טופס ההכנה לשיעור - ${parts}? ${confirmMenuText(opts)}`;
+}
 
 function register(router) {
   // כניסה לשיחה
@@ -479,6 +581,56 @@ async function advance(state, speech, draft, user, opts = {}) {
         nextState: "mentor_remove_confirm",
         draft,
       };
+    }
+
+    // ---------- חונכות: טופס "הכנה לשיעור" בקצרה, אופציונלי, אחרי מפגש רגיל (ר' offerLessonPrep) ----------
+    // משוב אמיתי ממשתמש: רק 3 השדות הראשונים מהטופס המלא באתר (LESSON_FIELDS_BASIC ב-public/app.html,
+    // עד לחלק שנקרא שם "פרטים נוספים") - לא כל 14 השדות. לכל שדה: מנסים קודם הכתבה חופשית (Whisper,
+    // ר' FREE_TEXT_STATES ב-routes/yemot.js) - ורק אם לא נשמע כלום, מציעים כחלופה לבחור מתוך "המילון"
+    // האישי (ר' getDictionary) בהקשה בלבד (lessonPickState) - במקום להמשיך לנסות בקול שוב ושוב.
+    // "שינוי"/"ביטול" בסוף (lesson_prep_confirm, ר' CONFIRM_MENU_STATES) מתנהגים כמו כל שאר צמתי
+    // האישור המשולשים: 2 מתחיל את כל 3 השדות מחדש, 3 מבטל את הטופס (בלי לוותר על המפגש עצמו).
+    case "lesson_prep_offer": {
+      if (isConfirmYes(s, opts)) {
+        return { text: LESSON_PREP_FIELDS[0].question, nextState: lessonSpeakState(0), draft: { ...draft, lessonPrep: {} } };
+      }
+      if (isConfirmNo(s, opts)) return offerMentorNote(draft.mentorUserId, draft.sessionId, draft.baseMessage, draft.outcome);
+      return {
+        text: `לא הבנתי.${retryHint()} רוצים גם למלא טופס הכנה לשיעור בקצרה - קטע נלמד, מטרה, יישום בפועל, ושיתוף פעולה? זה לא חובה. אמרו כן, או הקישו 1. אם לא, אמרו לא, או הקישו 2.`,
+        nextState: "lesson_prep_offer",
+        draft,
+      };
+    }
+    case "lesson_prep_topic_studied_speak": case "lesson_prep_goal_speak":
+    case "lesson_prep_practical_application_speak": case "lesson_prep_connection_cooperation_speak": {
+      return handleLessonFieldSpeak(lessonFieldIndexFromState(state), speech, draft, opts);
+    }
+    case "lesson_prep_topic_studied_retry": case "lesson_prep_goal_retry":
+    case "lesson_prep_practical_application_retry": case "lesson_prep_connection_cooperation_retry": {
+      return handleLessonFieldRetry(lessonFieldIndexFromState(state), s, draft);
+    }
+    case "lesson_prep_topic_studied_pick": case "lesson_prep_goal_pick":
+    case "lesson_prep_practical_application_pick": case "lesson_prep_connection_cooperation_pick": {
+      return handleLessonFieldPick(lessonFieldIndexFromState(state), s, draft, opts);
+    }
+    case "lesson_prep_confirm": {
+      if (isConfirmYes(s, opts)) {
+        const lp = draft.lessonPrep || {};
+        db.prepare(
+          "INSERT INTO lesson_reports (student_id, mentor_user_id, topic_studied, goal, practical_application, connection_cooperation) VALUES (?, ?, ?, ?, ?, ?)"
+        ).run(draft.studentId, draft.mentorUserId, lp.topic_studied || null, lp.goal || null, lp.practical_application || null, lp.connection_cooperation || null);
+        for (const f of LESSON_PREP_FIELDS) {
+          if (lp[f.id]) rememberPhrase(draft.mentorUserId, f.dictKind, lp[f.id]);
+        }
+        return offerMentorNote(draft.mentorUserId, draft.sessionId, `${draft.baseMessage} טופס ההכנה לשיעור נשמר.`, draft.outcome);
+      }
+      if (wantsMenuChange(s, opts)) {
+        return { text: LESSON_PREP_FIELDS[0].question, nextState: lessonSpeakState(0), draft: { ...draft, lessonPrep: {} } };
+      }
+      if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
+        return offerMentorNote(draft.mentorUserId, draft.sessionId, draft.baseMessage, draft.outcome);
+      }
+      return { text: `לא הבנתי.${retryHint()} ${lessonPrepConfirmText(draft, opts)}`, nextState: "lesson_prep_confirm", draft };
     }
 
     // ---------- חונכות: דיווח מעקב חופשי אופציונלי אחרי checkout/quick-session (ר' offerMentorNote) ----------
@@ -962,7 +1114,21 @@ function doQuickSession(draft, user) {
   const info = db
     .prepare("INSERT INTO sessions (student_id, mentor_user_id, method, duration_minutes) VALUES (?, ?, 'quick_preset', ?)")
     .run(student.id, user.id, minutes);
-  return offerMentorNote(user.id, info.lastInsertRowid, `נרשם מפגש עבור ${student.name}, ${minutes} דקות.`, "quick_session_saved");
+  // תוקן (בקשת פיצ'ר: "אחרי שאומר מפגש") - רק אחרי מפגש רגיל (לא checkin/checkout) מציעים גם למלא
+  // טופס "הכנה לשיעור" בקצרה (ר' offerLessonPrep למטה), לפני ההצעה הרגילה של דיווח מעקב חופשי.
+  return offerLessonPrep(user.id, draft.studentId, info.lastInsertRowid, `נרשם מפגש עבור ${student.name}, ${minutes} דקות.`, "quick_session_saved");
+}
+
+// מציע למלא בקצרה טופס "הכנה לשיעור" (ר' LESSON_PREP_FIELDS למעלה) - רק אחרי מפגש רגיל (doQuickSession),
+// לא אחרי checkin/checkout. כן/לא רגיל עם קיצור הקשה 1/2 אמין (לא Whisper) - כמו mentor_note_offer.
+// בסיום (בכל מסלול - נשמר/שונה/בוטל/דולג) ממשיכים תמיד להצעת דיווח המעקב הרגילה (offerMentorNote),
+// כדי לא לשנות את הזרימה הקיימת אחרי checkout.
+function offerLessonPrep(mentorUserId, studentId, sessionId, baseMessage, outcome) {
+  return {
+    text: `${baseMessage} רוצים גם למלא טופס הכנה לשיעור בקצרה - קטע נלמד, מטרה, יישום בפועל, ושיתוף פעולה? זה לא חובה. אמרו כן, או הקישו 1. אם לא, אמרו לא, או הקישו 2.`,
+    nextState: "lesson_prep_offer",
+    draft: { mentorUserId, studentId, sessionId, baseMessage, outcome },
+  };
 }
 
 // מציע לחונך לצרף דיווח מעקב חופשי (note) למפגש שכרגע נשמר - אותו שדה note בדיוק שכבר קיים באתר

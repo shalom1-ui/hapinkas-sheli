@@ -1162,10 +1162,15 @@ async function run() {
     await yemotCall({ callId: ymNoteCallId, phone: "0500000001" });
     await yemotCall({ callId: ymNoteCallId, speech: "חונכות" });
     await yemotCall({ callId: ymNoteCallId, speech: "תלמיד בדיקה" });
-    const ymNoteOffer = await yemotCall({ callId: ymNoteCallId, speech: "3" }); // 3 = מפגש רגיל
+    const ymLessonPrepOffer = await yemotCall({ callId: ymNoteCallId, speech: "3" }); // 3 = מפגש רגיל
     assert(
-      ymNoteOffer.includes("נרשם מפגש עבור תלמיד בדיקה") && ymNoteOffer.includes("דיווח מעקב חופשי") && ymNoteOffer.includes("הקישו 1"),
-      "אחרי מפגש רגיל, מוצעת אפשרות להוסיף גם דיווח מעקב חופשי - עם קיצור הקשה 1/2 אמין (לא רק מילה)"
+      ymLessonPrepOffer.includes("נרשם מפגש עבור תלמיד בדיקה") && ymLessonPrepOffer.includes("הכנה לשיעור") && ymLessonPrepOffer.includes("שיתוף פעולה"),
+      "אחרי מפגש רגיל, מוצעת קודם גם אפשרות למלא טופס הכנה לשיעור בקצרה (כולל שיתוף פעולה)"
+    );
+    const ymNoteOffer = await yemotCall({ callId: ymNoteCallId, speech: "2" }); // 2 = לא, בלי טופס הכנה לשיעור הפעם
+    assert(
+      ymNoteOffer.includes("דיווח מעקב חופשי") && ymNoteOffer.includes("הקישו 1"),
+      "אחרי דחיית טופס ההכנה לשיעור, מוצעת אפשרות להוסיף גם דיווח מעקב חופשי - עם קיצור הקשה 1/2 אמין (לא רק מילה)"
     );
     const ymNoteSpeakPrompt = await yemotCall({ callId: ymNoteCallId, speech: "1" }); // 1 = כן, רוצים להכתיב
     assert(ymNoteSpeakPrompt.includes("לתאר במילים חופשיות"), "הקשת 1 (או אמירת 'כן') על ההצעה עוברת לשלב ההכתבה החופשית");
@@ -1195,11 +1200,96 @@ async function run() {
     await yemotCall({ callId: ymNoteSkipCallId, phone: "0500000001" });
     await yemotCall({ callId: ymNoteSkipCallId, speech: "חונכות" });
     await yemotCall({ callId: ymNoteSkipCallId, speech: "תלמיד בדיקה" });
-    await yemotCall({ callId: ymNoteSkipCallId, speech: "3" }); // 3 = מפגש רגיל
+    await yemotCall({ callId: ymNoteSkipCallId, speech: "3" }); // 3 = מפגש רגיל -> מוצע קודם טופס הכנה לשיעור
+    await yemotCall({ callId: ymNoteSkipCallId, speech: "2" }); // 2 = לא, בלי טופס הכנה לשיעור
     const ymNoteSkipDone = await yemotCall({ callId: ymNoteSkipCallId, speech: "2" }); // 2 = לא, לא רוצים דיווח
     assert(
       ymNoteSkipDone.includes("נרשם מפגש עבור תלמיד בדיקה") && ymNoteSkipDone.includes("רוצים לעשות עוד משהו") && !ymNoteSkipDone.includes("הדיווח נשמר"),
       "הקשת 2 (לא) על הצעת הדיווח משלימה את המפגש בלי דיווח, בלי להיתקע בשאלה"
+    );
+
+    console.log("\n📋 חונכות: טופס \"הכנה לשיעור\" בקצרה בטלפון (4 שדות), אחרי מפגש רגיל");
+    // זרימה מלאה: 4 שדות מוכתבים בקול, אישור (1), נשמר ל-lesson_reports + נכנס ל'מילון' האישי -
+    // כולל connection_cooperation ("שיתוף פעולה", נוסף בעקבות בקשה מפורשת אחרי הצמצום הראשוני לטופס).
+    const ymLessonCallId = `${ymCallId}-lesson-prep`;
+    await yemotCall({ callId: ymLessonCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymLessonCallId, speech: "חונכות" });
+    await yemotCall({ callId: ymLessonCallId, speech: "תלמיד בדיקה" });
+    await yemotCall({ callId: ymLessonCallId, speech: "3" }); // 3 = מפגש רגיל -> מוצע טופס הכנה לשיעור
+    const ymLessonField1 = await yemotCall({ callId: ymLessonCallId, speech: "1" }); // 1 = כן, רוצים למלא
+    assert(ymLessonField1.includes("הקטע שנלמד"), "אישור ההצעה עובר ישר לשאלת השדה הראשון (הקטע הנלמד)");
+    const ymLessonField2 = await yemotCall({ callId: ymLessonCallId, speech: "חיבור וחיסור" });
+    assert(ymLessonField2.includes("מטרת השיעור"), "אחרי השדה הראשון עוברים ישר לשדה השני (המטרה), בלי שאלת אישור באמצע");
+    const ymLessonField3 = await yemotCall({ callId: ymLessonCallId, speech: "להבין חיבור עם נשיאה" });
+    assert(ymLessonField3.includes("יושם בפועל"), "עוברים לשדה השלישי (יישום בפועל)");
+    const ymLessonField4 = await yemotCall({ callId: ymLessonCallId, speech: "תרגלנו דוגמאות מהחיים" });
+    assert(ymLessonField4.includes("שיתוף הפעולה"), "עוברים לשדה הרביעי (שיתוף פעולה)");
+    const ymLessonConfirm = await yemotCall({ callId: ymLessonCallId, speech: "התלמיד השתתף באופן פעיל" });
+    assert(
+      ymLessonConfirm.includes("חיבור וחיסור") && ymLessonConfirm.includes("להבין חיבור עם נשיאה") &&
+      ymLessonConfirm.includes("תרגלנו דוגמאות מהחיים") && ymLessonConfirm.includes("התלמיד השתתף באופן פעיל") &&
+      ymLessonConfirm.includes("הקישו 1"),
+      "אחרי 4 השדות, שאלת אישור אחת מרכזת את כל התוכן שנאסף (לא זיהוי דיבור - מצב הקשה טהור)"
+    );
+    const ymLessonSaved = await yemotCall({ callId: ymLessonCallId, speech: "1" }); // 1 = אישור
+    assert(
+      ymLessonSaved.includes("טופס ההכנה לשיעור נשמר") && ymLessonSaved.includes("דיווח מעקב חופשי"),
+      "אישור שומר את הטופס, וממשיך אחר כך להצעת דיווח המעקב הרגילה (הזרימה הקיימת לא נשברה)"
+    );
+    await yemotCall({ callId: ymLessonCallId, speech: "2" }); // מדלגים על דיווח המעקב, לא רלוונטי כאן
+
+    const lessonFileAfterPhone = await api("GET", `/api/students/${sid}/file`, null, token);
+    const phoneLessonReport = lessonFileAfterPhone.data.timeline.find(
+      t => t.kind === "lesson_report" && t.data.topic_studied === "חיבור וחיסור"
+    );
+    assert(
+      !!phoneLessonReport && phoneLessonReport.data.goal === "להבין חיבור עם נשיאה" &&
+      phoneLessonReport.data.practical_application === "תרגלנו דוגמאות מהחיים" &&
+      phoneLessonReport.data.connection_cooperation === "התלמיד השתתף באופן פעיל",
+      "כל 4 השדות שהוכתבו בטלפון נשמרו נכון ב-lesson_reports (כולל שיתוף פעולה)"
+    );
+    const topicDictAfterPhone = await api("GET", "/api/lesson-reports/dictionary?kind=lesson_topic_studied", null, token);
+    const cooperationDictAfterPhone = await api("GET", "/api/lesson-reports/dictionary?kind=lesson_connection_cooperation", null, token);
+    assert(
+      topicDictAfterPhone.data.phrases.includes("חיבור וחיסור") && cooperationDictAfterPhone.data.phrases.includes("התלמיד השתתף באופן פעיל"),
+      "השדות שהוכתבו בטלפון נכנסו ל'מילון' האישי (אותו kind בדיוק כמו באתר) - יוצעו גם באתר בפעם הבאה"
+    );
+
+    console.log("\n📋 חונכות: 'לא שמעתי' בשדה הכנה לשיעור מציע לבחור מתוך ה'מילון' בהקשה (לא להמשיך לנסות בקול)");
+    const ymLessonRetryCallId = `${ymCallId}-lesson-prep-retry`;
+    await yemotCall({ callId: ymLessonRetryCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymLessonRetryCallId, speech: "חונכות" });
+    await yemotCall({ callId: ymLessonRetryCallId, speech: "תלמיד בדיקה" });
+    await yemotCall({ callId: ymLessonRetryCallId, speech: "3" });
+    await yemotCall({ callId: ymLessonRetryCallId, speech: "1" }); // רוצים למלא טופס
+    const ymLessonEmptyRetry = await yemotCall({ callId: ymLessonRetryCallId, speech: "" }); // לא נשמע כלום
+    assert(ymLessonEmptyRetry.includes("לא שמעתי") && ymLessonEmptyRetry.includes("להקיש 1"), "קלט ריק בשדה חופשי מציע גם לבחור מתוך ניסוחים קודמים בהקשה, לא רק לנסות שוב בקול");
+    const ymLessonPickList = await yemotCall({ callId: ymLessonRetryCallId, speech: "1" }); // 1 = לבחור מתוך המילון
+    assert(
+      ymLessonPickList.includes("חיבור וחיסור") && ymLessonPickList.includes("1)"),
+      "הקשת 1 מקריאה את הניסוחים הקודמים מה'מילון' האישי (כולל הניסוח שהוכתב בשיחה הקודמת), ממוספרים"
+    );
+    const ymLessonPickChosen = await yemotCall({ callId: ymLessonRetryCallId, speech: "1" }); // בוחרים ניסוח מספר 1
+    assert(ymLessonPickChosen.includes("מטרת השיעור"), "בחירת ניסוח מהמילון (בהקשה, לא בקול) ממלאת את השדה ועוברת לשדה הבא");
+
+    console.log("\n📋 חונכות: 'שינוי'/'ביטול' בשאלת האישור המרוכזת של טופס ההכנה לשיעור");
+    // ממשיכים על אותה שיחה: ב'שינוי' (2) חוזרים להתחלת 4 השדות; אחרי מילוי מהיר, 'ביטול' (3) לא שומר כלום.
+    await yemotCall({ callId: ymLessonRetryCallId, speech: "יעד לדוגמה" });
+    await yemotCall({ callId: ymLessonRetryCallId, speech: "יישום לדוגמה" });
+    const ymLessonBeforeChange = await yemotCall({ callId: ymLessonRetryCallId, speech: "שיתוף לדוגמה" });
+    assert(ymLessonBeforeChange.includes("הקישו 2"), "שאלת האישור המרוכזת מזכירה גם אפשרות שינוי (2)");
+    const ymLessonChange = await yemotCall({ callId: ymLessonRetryCallId, speech: "2" }); // 2 = שינוי
+    assert(ymLessonChange.includes("הקטע שנלמד") && !ymLessonChange.includes("נשמר"), "הקשת 2 (שינוי) בשאלת האישור המרוכזת חוזרת ישר לשדה הראשון, לא שומרת כלום");
+    await yemotCall({ callId: ymLessonRetryCallId, speech: "קטע חדש" });
+    await yemotCall({ callId: ymLessonRetryCallId, speech: "מטרה חדשה" });
+    await yemotCall({ callId: ymLessonRetryCallId, speech: "יישום חדש" });
+    await yemotCall({ callId: ymLessonRetryCallId, speech: "שיתוף חדש" });
+    const ymLessonCancel = await yemotCall({ callId: ymLessonRetryCallId, speech: "3" }); // 3 = ביטול
+    assert(ymLessonCancel.includes("דיווח מעקב חופשי"), "הקשת 3 (ביטול) בשאלת האישור המרוכזת לא שומרת, וממשיכה ישר להצעת דיווח המעקב הרגילה");
+    const lessonFileAfterCancel = await api("GET", `/api/students/${sid}/file`, null, token);
+    assert(
+      !lessonFileAfterCancel.data.timeline.some(t => t.kind === "lesson_report" && t.data.topic_studied === "קטע חדש"),
+      "טופס שבוטל (הקשת 3) אכן לא נשמר במסד הנתונים"
     );
 
     console.log("\n🏷️ תנועות: קטגוריית הוצאה מותאמת-אישית - אמירת 'אחר' מציעה תיאור חופשי, ונשמר ל'מילון' לפעם הבאה");
