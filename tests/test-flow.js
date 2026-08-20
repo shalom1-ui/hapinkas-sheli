@@ -1126,6 +1126,41 @@ async function run() {
       ymAddStudentSpokenDone.includes("נוסף תלמיד חדש") && ymAddStudentSpokenDone.includes("יוסי כהן"),
       "אמירת 'להוסיף' (לא רק 'הוסף'/הקשת 1) בשלב אישור הוספת תלמיד חדש אכן מוסיפה אותו בפועל, ולא מתפרשת בטעות כניסיון נוסף לומר שם"
     );
+
+    // תוקן (באג אמיתי חמור שהתגלה בבדיקה חיה בפועל מול קו אמיתי - יצר בפועל תלמיד עם השם המילולי
+    // "Digits-11" במסד הנתונים!): ימות לפעמים מדווחת על הקשה כפולה/ממושכת של אותה ספרה כמחרוזת חוזרת
+    // ("Digits-11" עבור הקשת 1 פעמיים, לא "Digits-1" רגיל) - onlyDigits("Digits-11") מחזיר "11", לא
+    // תואם בהשוואה מדויקת ל-"1", ונפל בעבר בטעות למסלול "מנסים שוב כאילו זה שם תלמיד" (ר' singleDigitPress/
+    // looksLikeRawDigitsArtifact ב-routes/ivr.js).
+    console.log("\n🐛 תוקן: שאריות הקשה גולמיות של ימות לא נופלות בטעות ליצירת תלמיד עם שם גיבריש");
+    // מקרה 1: הקשה כפולה של **אותה** ספרה ("Digits-11", כלומר הוקשה 1 פעמיים) - נחשבת סלחנית כמו
+    // הקשה בודדת (1=אישור), ומוסיפה את התלמיד **בשם הנכון** שכבר נאמר קודם - לא בשם "Digits-11".
+    const ymDoubleDigitCallId = `${ymCallId}-double-digit`;
+    await yemotCall({ callId: ymDoubleDigitCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymDoubleDigitCallId, speech: "חונכות" });
+    await yemotCall({ callId: ymDoubleDigitCallId, speech: "דני אבידר" }); // שם שלא קיים -> מוצעת הוספה
+    const ymDoubleDigitConfirm = await yemotCall({ callId: ymDoubleDigitCallId, speech: "Digits-11" });
+    assert(
+      ymDoubleDigitConfirm.includes("נוסף תלמיד חדש") && ymDoubleDigitConfirm.includes("דני אבידר"),
+      "הקשה כפולה של אותה ספרה ('Digits-11') נחשבת כמו הקשה בודדת (1=אישור) - מוסיפה את התלמיד בשם הנכון שכבר נאמר, לא נופלת ל'ניסיון לומר שם' חדש"
+    );
+
+    // מקרה 2: הקשה מעורבת/לא-חד-משמעית ("Digits-12", שתי ספרות שונות) - לא ברור מה בדיוק התכוונו,
+    // אז חוזרים על השאלה - **לא** יוצרים תלמיד עם השם המילולי "Digits-12" (זה בדיוק הבאג המקורי).
+    const ymAmbiguousDigitCallId = `${ymCallId}-ambiguous-digit`;
+    await yemotCall({ callId: ymAmbiguousDigitCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymAmbiguousDigitCallId, speech: "חונכות" });
+    await yemotCall({ callId: ymAmbiguousDigitCallId, speech: "רונית שדה" }); // שם שלא קיים -> מוצעת הוספה
+    const ymAmbiguousDigitResp = await yemotCall({ callId: ymAmbiguousDigitCallId, speech: "Digits-12" });
+    assert(
+      !ymAmbiguousDigitResp.includes("Digits") && ymAmbiguousDigitResp.includes("להוסיף את רונית שדה כתלמיד חדש"),
+      "הקשה מעורבת לא-חד-משמעית ('Digits-12') לא נחשבת אישור מפורש - חוזרת על שאלת ההוספה, לא נופלת ל'ניסיון לומר שם'"
+    );
+    const studentsAfterAmbiguous = await api("GET", "/api/students", null, token);
+    assert(
+      !studentsAfterAmbiguous.data.students.some(s => s.name.includes("Digits")),
+      "לא נוצר תלמיד עם שם שמכיל 'Digits' - הבאג המקורי (יצירת תלמיד עם שם כזה בפועל) לא חוזר"
+    );
     const studentsAfterSpokenAdd = await api("GET", "/api/students", null, token);
     assert(
       studentsAfterSpokenAdd.data.students.some(s => s.name === "יוסי כהן"),

@@ -103,7 +103,7 @@ function handleLessonFieldSpeak(fieldIndex, speech, draft, opts) {
 // כל קלט אחר = לנסות שוב לתאר בקול. לא digitConfirm-tap טהור בכוונה (בניגוד ל-lesson_prep_*_pick) -
 // כדי שאפשר יהיה גם פשוט להתחיל לדבר ישירות מכאן בלי להקיש כלום קודם, אם המתקשר מעדיף.
 function handleLessonFieldRetry(fieldIndex, s, draft) {
-  const digit = onlyDigits(s);
+  const digit = singleDigitPress(s);
   const field = LESSON_PREP_FIELDS[fieldIndex];
   if (digit === "1" || includesAny(s, ["בחירה", "לבחור", "רשימה", "ניסוחים"])) {
     const phrases = getDictionary(draft.mentorUserId, field.dictKind).slice(0, 5);
@@ -126,7 +126,7 @@ function handleLessonFieldRetry(fieldIndex, s, draft) {
 // (lessonPickOptions בדראפט, לא לפי dictKind מחדש - כדי שהבחירה תהיה בדיוק מה שהוקרא, גם אם המילון
 // השתנה בינתיים תיאורטית).
 function handleLessonFieldPick(fieldIndex, s, draft, opts) {
-  const digit = onlyDigits(s);
+  const digit = singleDigitPress(s);
   const options = draft.lessonPickOptions || [];
   const idx = digit ? parseInt(digit, 10) - 1 : -1;
   const field = LESSON_PREP_FIELDS[fieldIndex];
@@ -267,13 +267,34 @@ const MAIN_MENU_DIGIT_KEYWORDS = {
   "6": "הערת מפקח",
 };
 function mainMenuDigitKeyword(s) {
-  const digits = onlyDigits(s);
+  const digits = singleDigitPress(s);
   return digits && MAIN_MENU_DIGIT_KEYWORDS[digits] ? normalize(MAIN_MENU_DIGIT_KEYWORDS[digits]) : null;
 }
 // שולף ספרות בלבד מתוך קלט (כולל כשמעורבת בו גם סולמית) - מחזיר null אם אין ספרות בכלל
 function onlyDigits(s) {
   const digits = String(s || "").replace(/[^0-9]/g, "");
   return digits || null;
+}
+
+// תוקן (באג אמיתי שהתגלה בבדיקה חיה בפועל, גרם ליצירת תלמיד עם השם המילולי "Digits-11"!): ימות
+// לפעמים מדווחת על הקשה כפולה/ממושכת של אותה ספרה כמחרוזת חוזרת (למשל "Digits-11" כשהמתקשר הקיש
+// 1 פעמיים, לא "Digits-1" רגיל) - onlyDigits לבד היה מחזיר "11" במקרה כזה, שלא תואם בהשוואה מדויקת
+// ל-"1"/"2"/"3" באף אחד מהצמתים - והקלט היה "נופל" בטעות למסלול טיפול אחר (למשל נחשב כניסיון לומר
+// שם, ר' case "mentor_confirm_add_student"). הפונקציה הזו סולחת על הקשות כפולות של **אותה** ספרה
+// (מחזירה "1" גם עבור "11"/"111") - אבל **לא** על רצף ספרות שונות (למשל "12" נשאר לא תואם, כדי לא
+// להתבלבל עם קלט אמיתי אחר, כמו קוד PIN, שלא עובר דרך הפונקציה הזו בכלל - ר' onlyDigits הרגילה).
+function singleDigitPress(s) {
+  const digits = onlyDigits(s);
+  if (!digits) return null;
+  return /^(\d)\1*$/.test(digits) ? digits[0] : null;
+}
+
+// זיהוי "שאריות" גולמיות של פרוטוקול ההקשה של ימות (כמו "Digits-11") שלא תואמות אף בחירת הקשה
+// צפויה בצומת הנוכחי - כדי **לא** לתת להן ליפול בטעות למסלול "טקסט חופשי"/"שם" (בדיוק הבאג שיצר
+// תלמיד עם השם "Digits-11"). לא מסתמך רק על onlyDigits (ששולף גם ספרות מתוך שם אמיתי כמו "אבי בן
+// 5" תיאורטית) - בודק במפורש את התבנית המילולית "Digits" שימות עצמה שולחת עבור הקשות.
+function looksLikeRawDigitsArtifact(s) {
+  return /^digits[-\s]*\d*$/i.test(String(s || "").trim());
 }
 
 // הודעת "הכנסה או הוצאה" בתפריט תנועות - עם רמז הקשה (1/2) בערוצים שתומכים בזה
@@ -367,7 +388,7 @@ async function advance(state, speech, draft, user, opts = {}) {
     // ב-transactions_pick_type). כל שאר הקטגוריות (חונכות, תנועות וכו') וגם מילות הסיום עדיין
     // עובדות מכאן, דרך אותה matchMainMenuCategory משותפת עם main_menu - כדי לא לאבד גמישות.
     case "balance_next_action": {
-      const digit = onlyDigits(s);
+      const digit = singleDigitPress(s);
       if (digit === "1" || includesAny(s, ["הכנסה", "הכנסות"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
       if (digit === "2" || includesAny(s, ["הוצאה", "הוצאות"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
       const es = mainMenuDigitKeyword(s) || s;
@@ -382,7 +403,7 @@ async function advance(state, speech, draft, user, opts = {}) {
 
     // ---------- תנועות: בחירת סוג (הכנסה/הוצאה) ----------
     case "transactions_pick_type": {
-      const digit = onlyDigits(s);
+      const digit = singleDigitPress(s);
       if (digit === "2" || includesAny(s, ["הוצאה"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
       if (digit === "1" || includesAny(s, ["הכנסה"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
       return { text: `לא הבנתי.${retryHint()} הכנסה או הוצאה?`, nextState: "transactions_pick_type" };
@@ -401,7 +422,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       // טקסט חופשי (הוסר מ-FREE_TEXT_STATES ב-routes/yemot.js): תפריט קבוע של 7 אפשרויות בהקשה
       // (ר' EXPENSE_CATEGORY_DIGITS למעלה). "אחר" (7) עדיין מוביל לתיאור חופשי בקול - ר' הערה קודמת
       // ב-git history למה "אחר" לא הופך להיות שם הקטגוריה המילולי בעצמו.
-      const digit = onlyDigits(s);
+      const digit = singleDigitPress(s);
       if (digit && EXPENSE_CATEGORY_DIGITS[digit]) {
         const category = EXPENSE_CATEGORY_DIGITS[digit];
         return {
@@ -513,7 +534,11 @@ async function advance(state, speech, draft, user, opts = {}) {
       };
     }
     case "mentor_confirm_add_student": {
-      const digit = onlyDigits(s);
+      // digit: ר' singleDigitPress - סולח על "Digits-11"/"Digits-111" וכו' (הקשה כפולה/ממושכת של אותה
+      // ספרה שימות לפעמים מדווחת עליה במחרוזת חוזרת) - זה בדיוק מה שגרם בעבר ליצירת תלמיד עם השם
+      // המילולי "Digits-11" (ר' באג אמיתי שנמצא בבדיקה חיה): onlyDigits("Digits-11")==="11", לא תואם
+      // ל-"1"/"2" בהשוואה מדויקת, אז זה "נפל" בטעות למסלול "מנסים שוב כאילו זה שם תלמיד" למטה.
+      const digit = singleDigitPress(s);
       // תוקן (אבחון בפועל מול קו אמיתי): "להוסיף" (צורת המקור/עתיד, "אני רוצה להוסיף") היה חסר מרשימת
       // מילות המפתח - היו רק "הוסף"/"הוסיפו" (ציווי). מי שענה על השאלה "רוצים להוסיף אותו כתלמיד חדש?"
       // באופן טבעי ביותר בעברית ("כן, להוסיף") לא זוהה בכלל כאישור, ונפל בטעות למסלול "מנסים שוב כאילו
@@ -530,6 +555,16 @@ async function advance(state, speech, draft, user, opts = {}) {
       }
       if (wantsCancel) {
         return { text: `בסדר, לא הוספנו. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      }
+      // תוקן (אותו באג אמיתי שהוזכר למעלה - ר' singleDigitPress): שארית הקשה גולמית לא-מזוהה (למשל
+      // הקשה בת 2 ספרות שונות, לא נתמכת) **לא** אמורה להיחשב "ניסיון לומר שם" ולהיווצר כתלמיד בפועל -
+      // רק תוכן שבאמת יכול להיות שם (לא תבנית "Digits..." של ימות עצמה) ממשיך למסלול הזה.
+      if (looksLikeRawDigitsArtifact(s)) {
+        return {
+          text: `לא הבנתי.${retryHint()} רוצים להוסיף את ${draft.pendingStudentName} כתלמיד חדש?${addStudentDigitsNote(opts)}`,
+          nextState: "mentor_confirm_add_student",
+          draft,
+        };
       }
       // כל תשובה אחרת - מנסים שוב כאילו זה שם תלמיד (יתכן וזה ניסיון תיקון/חזרה על השם)
       const retryStudent = findStudentByName(user.id, s);
@@ -549,7 +584,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       };
     }
     case "mentor_action": {
-      const digit = onlyDigits(s);
+      const digit = singleDigitPress(s);
       if (digit === "2" || includesAny(s, ["אאוט", "יציאה", "סיום"])) return doCheckout(draft, user);
       if (digit === "1" || includesAny(s, ["אין", "כניסה", "התחלה"])) return doCheckin(draft);
       // "מפגש" נכלל כאן בנוסף ל"רגיל"/"מהיר"/"קבוע" - בבדיקה בפועל זיהוי הדיבור לפעמים קלט רק את המילה
@@ -871,7 +906,7 @@ async function advanceSignup(state, speech, draft, opts = {}) {
     // תלוי בזיהוי דיבור) - עוברים לשלב ביניים "רגיל" (לא טקסט חופשי, לא תלוי בהקלטה בכלל) שבו הקשת
     // ספרה **תמיד** עובדת: 1=לנסות שוב, 0=לדלג ולסיים את ההרשמה מיד, בלי שום תלות בזיהוי דיבור נוסף.
     case "signup_email_retry": {
-      const digit = onlyDigits(s);
+      const digit = singleDigitPress(s);
       if (digit === "1" || includesAny(s, ["כן", "שוב", "נסה שוב", "לנסות שוב"])) {
         return { text: "בסדר, אמרו את כתובת המייל שלכם עכשיו, לאט אם אפשר.", nextState: "signup_email_speak", draft };
       }
@@ -1312,7 +1347,9 @@ function isConfirmYes(s, opts) {
   if (includesAny(s, ["כן", "אישור", "מאשר", "לאשר", "מאושר"])) return true;
   if (opts && opts.digitConfirm) {
     const trimmed = String(s || "").trim();
-    return onlyDigits(trimmed) === "1" || trimmed === "#";
+    // singleDigitPress (לא onlyDigits ישירות) - סולח על הקשה כפולה/ממושכת של אותה ספרה שימות
+    // לפעמים מדווחת עליה כמחרוזת חוזרת ("Digits-11" וכו', ר' באג אמיתי בהערה ליד singleDigitPress).
+    return singleDigitPress(trimmed) === "1" || trimmed === "#";
   }
   return false;
 }
@@ -1323,7 +1360,7 @@ function isConfirmYes(s, opts) {
 // המשולשים (ר' wantsMenuChange/wantsMenuCancel למטה) - שם 2 הוא "שינוי", לא "לא".
 function isConfirmNo(s, opts) {
   if (includesAny(s, ["לא", "ביטול", "בטל"])) return true;
-  if (opts && opts.digitConfirm) return onlyDigits(String(s || "").trim()) === "2";
+  if (opts && opts.digitConfirm) return singleDigitPress(String(s || "").trim()) === "2";
   return false;
 }
 
@@ -1338,10 +1375,10 @@ function isConfirmNo(s, opts) {
 // שהיה גורם לשקט מיותר בין שלב לשלב (משוב אמיתי) - ולכן בדיקת המילים המדוברות ("כן"/"לא") ב-
 // isConfirmYes/isConfirmNo נשארת כרשת ביטחון בלבד (רלוונטית בעיקר לערוץ Twilio, שאין בו הקשות).
 function wantsMenuChange(s, opts) {
-  return !!(opts && opts.digitConfirm && onlyDigits(String(s || "").trim()) === "2");
+  return !!(opts && opts.digitConfirm && singleDigitPress(String(s || "").trim()) === "2");
 }
 function wantsMenuCancel(s, opts) {
-  return !!(opts && opts.digitConfirm && onlyDigits(String(s || "").trim()) === "3");
+  return !!(opts && opts.digitConfirm && singleDigitPress(String(s || "").trim()) === "3");
 }
 
 // טקסט נוסף שמצטרף לשאלות אישור בערוצים שתומכים בהקשה (ר' isConfirmYes/isConfirmNo) - מציע גם
