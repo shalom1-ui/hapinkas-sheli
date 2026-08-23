@@ -436,6 +436,60 @@ async function run() {
       "קובץ בלי עמודות מוכרות (תאריך/סכום/זכות/חובה) מחזיר הודעת שגיאה ברורה במקום לנסות לייבא זבל"
     );
 
+    console.log("\n📥 ייבוא 'אקסל' שהוא בפועל טבלת HTML עם סיומת .xls (טריק נפוץ אצל בנקים בישראל)");
+    // תוקן בעקבות קובץ אמיתי מהמשתמש (ייצוא "AccountActivity.xls" מבנק מרכנתיל-דיסקונט) - זהו לא
+    // ZIP אמיתי (xlsx) ולא CSV, אלא טבלת HTML פשוטה עם עמודת "סוג תנועה" (לא "תיאור"), ערכים ריקים
+    // כ-&nbsp;, וסכומים עם פסיקי אלפים. המבנה הסינתטי כאן משקף את המבנה האמיתי (כולל שורות "רעש"
+    // לפני שורת הכותרות האמיתית) אבל עם נתונים בדויים, לא הנתונים האמיתיים של המשתמש.
+    const htmlBankTable =
+      '<html dir="rtl" xmlns:x="urn:schemas-microsoft-com:office:excel"><head><title>Test</title></head><body>' +
+      "<table><tr><td><b>יתרה ותנועות בחשבון</b></td></tr><tr><td>&nbsp;</td></tr>" +
+      "<tr><td><b>מספר חשבון:</b></td><td>111-222 ישראל ישראלי</td></tr><tr><td>&nbsp;</td></tr></table>" +
+      "<table><tr><td>יתרה בחשבון: </td><td> 1,234.56</td><td> לתאריך -</td><td>01/01/26 10:00</td></tr>" +
+      "<tr><td>מסגרת אשראי: </td><td> 5,000.00</td></tr><tr><td>&nbsp;</td></tr>" +
+      "<tr><td><b>תנועות אחרונות</b></td></tr><tr><td>&nbsp;</td></tr>" +
+      '<tr><td style="background-color:#808080;color:White;"><b> תאריך</b></td><td style="background-color:#808080;color:White;"><b>תאריך ערך</b></td>' +
+      '<td style="background-color:#808080;color:White;"><b>סוג תנועה</b></td><td style="background-color:#808080;color:White;"><b>זכות</b></td>' +
+      '<td style="background-color:#808080;color:White;"><b>חובה</b></td><td style="background-color:#808080;color:White;"><b>יתרה בש"ח</b></td>' +
+      '<td style="background-color:#808080;color:White;"><b>אסמכתא</b></td></tr>' +
+      "<tr><td> 05/01/26</td><td>&nbsp;</td><td>זיכוי משכורת</td><td> 4,500.00</td><td>&nbsp;</td><td>&nbsp;</td><td>1001</td></tr>" +
+      "<tr><td> 06/01/26</td><td>&nbsp;</td><td>כספומט</td><td>&nbsp;</td><td> 300.00</td><td>&nbsp;</td><td>1002</td></tr>" +
+      "</table></body></html>";
+    const htmlImportPreview = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: Buffer.from(htmlBankTable, "utf8").toString("base64"), filename: "AccountActivity.xls", source_type: "bank" },
+      token
+    );
+    assert(
+      htmlImportPreview.status === 200 && htmlImportPreview.data.transactions.length === 2,
+      `ייבוא קובץ HTML עם סיומת .xls הצליח וזיהה 2 תנועות אמיתיות, דילג על שורות ה'רעש' (${JSON.stringify(htmlImportPreview.data)})`
+    );
+    assert(
+      htmlImportPreview.data.detectedColumns.descCol >= 0,
+      "עמודת 'סוג תנועה' (שאינה נקראת 'תיאור' במפורש) זוהתה בכל זאת כעמודת התיאור"
+    );
+    const htmlIncomeRow = htmlImportPreview.data.transactions.find(t => t.amount === 4500);
+    assert(
+      htmlIncomeRow && htmlIncomeRow.type === "income" && htmlIncomeRow.date === "2026-01-05" && htmlIncomeRow.description === "זיכוי משכורת",
+      "שורת 'זכות' עם סכום מופרד בפסיקים (4,500.00) ותאריך דו-ספרתי (05/01/26) זוהתה נכון כהכנסה"
+    );
+    const htmlExpenseRow = htmlImportPreview.data.transactions.find(t => t.amount === 300);
+    assert(htmlExpenseRow && htmlExpenseRow.type === "expense" && htmlExpenseRow.date === "2026-01-06", "שורת 'חובה' זוהתה נכון כהוצאה");
+    const htmlImportCommit = await api("POST", "/api/transactions/import/commit", { transactions: htmlImportPreview.data.transactions }, token);
+    assert(htmlImportCommit.data.imported === 2, "שתי התנועות מקובץ ה-HTML נשמרו בהצלחה");
+
+    console.log("\n📥 ייבוא - קובץ .xls ישן אמיתי (בינארי, לא נתמך) מקבל הודעת שגיאה ממוקדת");
+    const legacyXlsBuffer = Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1, 0, 0, 0, 0]);
+    const legacyXlsImport = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: legacyXlsBuffer.toString("base64"), filename: "old.xls", source_type: "bank" },
+      token
+    );
+    assert(
+      legacyXlsImport.status === 400 && /xlsx|csv/.test(legacyXlsImport.data.error),
+      "קובץ .xls ישן אמיתי (בינארי, פורמט Excel 97-2003) מזוהה במפורש ומקבל הנחיה ברורה לשמור מחדש כ-xlsx/csv, לא כישלון סתום"
+    );
+
     console.log("\n🎓 חונכות ותלמידים");
     const student = await api("POST", "/api/students", { name: "תלמיד בדיקה" }, token);
     assert(student.status === 201, "הוספת תלמיד הצליחה");

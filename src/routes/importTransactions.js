@@ -14,6 +14,7 @@ const { json } = require("../router");
 const { requireAuth } = require("../middleware/auth");
 const { parseXlsx } = require("../lib/xlsxParser");
 const { parseCsv } = require("../lib/csvParser");
+const { looksLikeHtml, looksLikeLegacyBinaryXls, parseHtmlTable } = require("../lib/htmlTableParser");
 const { rowsToTransactions } = require("../lib/importMapping");
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
@@ -51,14 +52,24 @@ function register(router) {
     if (!buffer.length) return json(ctx.res, 400, { error: "הקובץ ריק" });
     if (buffer.length > MAX_FILE_BYTES) return json(ctx.res, 400, { error: "הקובץ גדול מדי (מעל 15MB)" });
 
-    // זיהוי סוג הקובץ: לפי סיומת שם הקובץ קודם, ואם לא ברור - לפי "חתימת" הקובץ עצמו (xlsx הוא
-    // ארכיון ZIP שתמיד מתחיל בבתים "PK") - כך שגם קובץ בלי סיומת/עם שם משונה עדיין עובד.
-    const looksLikeZip = buffer.length >= 2 && buffer[0] === 0x50 && buffer[1] === 0x4b;
-    const isXlsx = isXlsxFilename(filename) || (!isCsvFilename(filename) && looksLikeZip);
-
+    // זיהוי סוג הקובץ **לפי תוכנו בפועל**, לא (רק) לפי הסיומת - כי בנקים/חברות אשראי רבים בישראל
+    // מייצאים "אקסל" שהוא בפועל טבלת HTML פשוטה עם סיומת .xls/.xlsx (Excel פותח את זה בלי בעיה,
+    // כי הוא מזהה לפי תוכן - ר' htmlTableParser.js, תוקן בעקבות קובץ אמיתי ("AccountActivity.xls")
+    // שהתברר להיות בדיוק כזה). הבדיקה לפי תוכן קודמת לסיומת בכוונה, כדי לתפוס גם קבצים כאלה שנקראים
+    // "xlsx" אבל בפועל HTML. xlsx אמיתי הוא תמיד ארכיון ZIP (מתחיל בבתים "PK").
     let rows;
     try {
-      rows = isXlsx ? parseXlsx(buffer) : parseCsv(buffer.toString("utf8"));
+      if (looksLikeHtml(buffer)) {
+        rows = parseHtmlTable(buffer.toString("utf8"));
+      } else if (looksLikeLegacyBinaryXls(buffer)) {
+        return json(ctx.res, 400, {
+          error: "זהו קובץ .xls ישן (בפורמט בינארי של Excel 97-2003) שלא נתמך כרגע. פתחו אותו ב-Excel ושמרו מחדש כ-.xlsx או כ-.csv, ונסו שוב.",
+        });
+      } else {
+        const looksLikeZip = buffer.length >= 2 && buffer[0] === 0x50 && buffer[1] === 0x4b;
+        const isXlsx = isXlsxFilename(filename) || (!isCsvFilename(filename) && looksLikeZip);
+        rows = isXlsx ? parseXlsx(buffer) : parseCsv(buffer.toString("utf8"));
+      }
     } catch (e) {
       return json(ctx.res, 400, { error: `לא ניתן לקרוא את הקובץ: ${e.message}` });
     }
