@@ -658,6 +658,18 @@ async function run() {
       balanceXml.includes("רוצים להוסיף הכנסה או הוצאה") && balanceXml.includes("1 להכנסה"),
       "מיד אחרי קריאת היתרה מוצעת הוספת הכנסה/הוצאה (בדיוק כמו באתר), עם קיצור הקשה ייעודי (1=הכנסה, 2=הוצאה)"
     );
+    // משוב אמיתי ממשתמש: "ששומעים מן היתרה... שיאמר מה סכום הכנסה ומה סכום הוצאות וחובת מעשרות"
+    assert(
+      balanceXml.includes("סך ההכנסות") && balanceXml.includes("סך ההוצאות") && balanceXml.includes("חובת המעשר שלך היא"),
+      "קריאת היתרה כוללת גם את סך ההכנסות, סך ההוצאות, וחובת המעשר - לא רק את היתרה הסופית"
+    );
+    const balanceSummary = await api("GET", "/api/transactions", null, token);
+    assert(
+      balanceXml.includes(`סך ההכנסות: ${balanceSummary.data.summary.income} שקלים`) &&
+      balanceXml.includes(`סך ההוצאות: ${balanceSummary.data.summary.expense} שקלים`) &&
+      balanceXml.includes(`חובת המעשר שלך היא ${balanceSummary.data.tithe.obligation} שקלים`),
+      "הסכומים שמוקראים בטלפון (הכנסות/הוצאות/חובת מעשר) תואמים בדיוק למה שמחושב ומוצג באתר (GET /api/transactions)"
+    );
     const balanceIncomeAmount = await ivrSay(balanceCallSid, "הכנסה");
     assert(balanceIncomeAmount.includes("מה סכום ההכנסה"), "אמירת 'הכנסה' מיד אחרי היתרה עוברת ישר לזרימת הוספת הכנסה, בלי לחזור לתפריט הראשי הכללי");
 
@@ -868,6 +880,10 @@ async function run() {
     assert(
       ymBalance.includes("רוצים להוסיף הכנסה או הוצאה") && !ymBalance.includes("g-hangup"),
       "אחרי שמיעת היתרה לא מנתקים מיד - שואלים במפורש אם להוסיף הכנסה/הוצאה (בדיוק כמו באתר), עם קיצור הקשה ייעודי"
+    );
+    assert(
+      ymBalance.includes("סך ההכנסות") && ymBalance.includes("סך ההוצאות") && ymBalance.includes("חובת המעשר שלך היא"),
+      "קריאת היתרה דרך ימות כוללת גם היא את סך ההכנסות, סך ההוצאות, וחובת המעשר"
     );
 
     console.log("\n🔁 כמה פעולות באותה שיחה, ואז סיום בנימוס מהתפריט הראשי");

@@ -1031,18 +1031,38 @@ function createPhoneUser(fullName, phone, email, pin) {
 // תוקן (משוב אמיתי ממשתמש): לא חוזרים ישר לתפריט הראשי הכללי אחרי קריאת היתרה - שואלים במפורש
 // אם להוסיף הכנסה/הוצאה (עם קיצור הקשה ייעודי 1/2, ר' case "balance_next_action"), בדיוק כמו שיש
 // באתר. עדיין אפשר לומר כל קטגוריה אחרת או לסיים מכאן - ר' matchMainMenuCategory.
+//
+// תוקן (משוב אמיתי ממשתמש: "ששומעים מן היתרה... שיאמר מה סכום הכנסה ומה סכום הוצאות וחובת
+// מעשרות") - קריאת היתרה כוללת עכשיו גם את סך ההכנסות, סך ההוצאות, וחובת המעשר (10% מההכנסות,
+// בדיוק כמו החישוב באתר ב-routes/transactions.js), כל אחד כמשפט קצר ונפרד משלו - לא רצף אחד עם
+// פסיקים, לפי ההנחיה המפורשת שהמאזינים לא תופסים הפסקות בפסיק בטלפון.
 function doBalance(user) {
   const row = db
     .prepare(
       `SELECT
          COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income,
-         COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense
+         COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense,
+         COALESCE(SUM(CASE WHEN type = 'expense' AND category = 'מעשרות' THEN amount ELSE 0 END), 0) AS tithePaid
        FROM transactions WHERE user_id = ?`
     )
     .get(user.id);
   const balance = row.income - row.expense;
+  const titheObligation = Math.round(row.income * 0.1 * 100) / 100;
+  const titheRemaining = Math.round((titheObligation - row.tithePaid) * 100) / 100;
+
+  const parts = [
+    `היתרה הנוכחית שלך היא ${balance} שקלים.`,
+    `סך ההכנסות: ${row.income} שקלים.`,
+    `סך ההוצאות: ${row.expense} שקלים.`,
+  ];
+  if (titheObligation > 0) {
+    parts.push(`חובת המעשר שלך היא ${titheObligation} שקלים.`);
+    parts.push(titheRemaining > 0 ? `נותרו לך ${titheRemaining} שקלים לתת.` : `כבר נתת את המעשר במלואו.`);
+  }
+  parts.push("רוצים להוסיף הכנסה או הוצאה, או לסיים? אפשר גם להקיש: 1 להכנסה, 2 להוצאה.");
+
   return {
-    text: `היתרה הנוכחית שלך היא ${balance} שקלים. רוצים להוסיף הכנסה או הוצאה, או לסיים? אפשר גם להקיש: 1 להכנסה, 2 להוצאה.`,
+    text: parts.join(" "),
     nextState: "balance_next_action",
     hints: MAIN_MENU_HINTS,
     outcome: "balance_read",
