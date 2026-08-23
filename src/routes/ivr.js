@@ -41,20 +41,24 @@ const DIGIT_ENTRY_STATES = new Set(["signup_pin", "signup_pin_confirm"]);
 // בערוצים שתומכים בהקשה (ימות, ר' routes/yemot.js) עוברים למצב הקשה טהור (tap, בדיוק כמו קוד
 // PIN - ר' DIGIT_ENTRY_STATES) כדי לחסוך את זמן ההמתנה לזיהוי דיבור/עיבוד קול לגמרי - משוב אמיתי
 // ממשתמש על שקט מיותר בין שלב לשלב, ובקשה מפורשת ש"האישורים יהיו על המקשים לא בזיהוי דיבור".
-// לא כולל mentor_note_offer/mentor_confirm_add_student/signup_email_offer/signup_email_retry -
-// אלה כן/לא (או תפריט קצר) "רגילים" עם קיצור הקשה קיים כבר, לא חלק מהמודל המשולש הזה.
+// לא כולל mentor_note_offer/mentor_confirm_add_student - אלה כן/לא "רגילים" עם קיצור הקשה קיים
+// כבר, לא חלק מהמודל המשולש הזה. הרשמת מייל בטלפון (signup_email_*) הוסרה לגמרי - ר' משוב אמיתי
+// ליד case "signup_pin_confirm".
 const CONFIRM_MENU_STATES = new Set([
   "expense_confirm", "income_confirm", "mentor_remove_confirm", "mentor_note_confirm",
-  "therapist_confirm", "supervisor_confirm", "signup_email_confirm", "lesson_prep_confirm",
+  "therapist_confirm", "supervisor_confirm", "lesson_prep_confirm",
 ]);
 
 // תפריטי-הקשה קבועים נוספים (לא "אישור/שינוי/ביטול" - תפריט בחירה עם כמה אפשרויות ממוספרות) -
 // אותו מנגנון פרוטוקול בדיוק כמו CONFIRM_MENU_STATES (מצב tap, ספרה אחת, ר' routes/yemot.js),
-// רק סמנטיקת הספרות שונה לכל צומת (ר' EXPENSE_CATEGORY_DIGITS למטה). expense_category - משוב אמיתי
-// ("לסדר בקטגוריות... רק עם הקשות"). ה-lesson_prep_*_pick נוספו בעקבות אותו עקרון - בחירת ניסוח
-// קודם מה"מילון" (ר' LESSON_PREP_FIELDS/handleLessonFieldPick למטה) היא גם היא תפריט הקשה טהור.
+// רק סמנטיקת הספרות שונה לכל צומת (ר' EXPENSE_CATEGORY_DIGITS/INCOME_CATEGORY_DIGITS למטה).
+// expense_category/income_category - משוב אמיתי ("לסדר בקטגוריות... רק עם הקשות"). ה-lesson_prep_*_pick
+// נוספו בעקבות אותו עקרון - בחירת ניסוח קודם מה"מילון" (ר' LESSON_PREP_FIELDS/handleLessonFieldPick
+// למטה) היא גם היא תפריט הקשה טהור. transaction_saved_menu (ר' askTransactionContinue) - תפריט
+// המשך אחרי שמירת תנועה (עוד מאותו סוג/לעבור לסוג השני/לסיים), אותו עיקרון בדיוק.
 const DIGIT_MENU_STATES = new Set([
-  "expense_category", "lesson_prep_topic_studied_pick", "lesson_prep_goal_pick",
+  "expense_category", "income_category", "transaction_saved_menu",
+  "lesson_prep_topic_studied_pick", "lesson_prep_goal_pick",
   "lesson_prep_practical_application_pick", "lesson_prep_connection_cooperation_pick",
 ]);
 
@@ -254,6 +258,24 @@ function askMoreOrFinish(baseText, outcome) {
   return { text: `${baseText} רוצים לעשות עוד משהו, או לסיים?`, nextState: "main_menu", hints: MAIN_MENU_HINTS, outcome };
 }
 
+// משוב אמיתי ממשתמש: אחרי שמירת תנועה (הכנסה/הוצאה) - במקום החזרה הכללית לתפריט הראשי, שאלת המשך
+// ממוקדת ל-3 האפשרויות הכי סבירות: עוד מאותו הסוג, לעבור לסוג השני, או לסיים. "בכל מעבר בקטגוריות"
+// (כלשון המשוב) - כרגע רק בין הכנסה/הוצאה, כי שם יש בדיוק "סוג משלים" ברור אחד; בקטגוריות אחרות
+// (חונכות/מטפלים) אין "סוג משלים" יחיד כזה, אז נשארות עם askMoreOrFinish הכללי.
+// משפטים קצרים ונפרדים בכוונה (לא רצף אחד עם פסיקים) - משוב אמיתי: "אנשים לא מבינים אם יש פסיק או לא".
+function transactionContinueMenuText(savedType) {
+  const sameLabel = savedType === "income" ? "הכנסה" : "הוצאה";
+  const otherLabel = savedType === "income" ? "הוצאה" : "הכנסה";
+  return `רוצים עוד ${sameLabel}? הקישו 1. לעבור ל${otherLabel}? הקישו 2. לסיים? הקישו 3.`;
+}
+function askTransactionContinue(baseText, savedType) {
+  return {
+    text: `${baseText} ${transactionContinueMenuText(savedType)}`,
+    nextState: "transaction_saved_menu",
+    draft: { savedType },
+  };
+}
+
 // ---------- קיצורי הקשה (DTMF) לתפריט הראשי ----------
 // ימות מאפשרת הקשת ספרות תוך כדי זיהוי דיבור בלי לחסום (ר' services/yemot.js) - כלומר אפשר להקיש
 // כבר תוך כדי השמעת התפריט, בלי לחכות. הספרה שהוקשה מגיעה באותו שדה כמו הדיבור, ולכן פשוט ממירים
@@ -330,6 +352,18 @@ function expenseCategoryMenuText(opts) {
     return "לאיזו קטגוריה? הקישו: 1 מזון, 2 תחבורה, 3 דיור, 4 בריאות, 5 חינוך, 6 ביגוד, 7 אחר.";
   }
   return "לאיזו קטגוריה? למשל: מזון, תחבורה, דיור, אחר.";
+}
+
+// תפריט קטגוריות הכנסה קבוע - אותו עיקרון בדיוק כמו EXPENSE_CATEGORY_DIGITS (משוב אמיתי: "לאיזה
+// הכנסה - ציינו ביטוח לאומי, משכורת"). "אחר" (3) מוביל לתיאור חופשי בקול (ר' case "income_category_other"),
+// ונשמר ל"מילון" האישי (kind=income_category) בדיוק כמו expense_category_other - כדי שניסוח מותאם-אישית
+// שהוכתב פעם אחת יוצע גם באתר, ולתלמידים... כלומר לתנועות הבאות.
+const INCOME_CATEGORY_DIGITS = { "1": "משכורת", "2": "ביטוח לאומי" };
+function incomeCategoryMenuText(opts) {
+  if (opts && opts.digitConfirm) {
+    return "מאיזה מקור ההכנסה? הקישו: 1 משכורת, 2 ביטוח לאומי, 3 אחר.";
+  }
+  return "מאיזה מקור ההכנסה? למשל: משכורת, ביטוח לאומי, אחר.";
 }
 
 // מנסה להתאים קטגוריה בתפריט הראשי (כולל מילות סיום שיחה) - מחזיר null אם לא זוהתה אף קטגוריה,
@@ -475,7 +509,7 @@ async function advance(state, speech, draft, user, opts = {}) {
         // "מילון" הקטגוריות האישי - אותו kind בדיוק כמו הוספת תנועה דרך האתר (ר' routes/transactions.js)
         // כדי שקטגוריה שהוכתבה בטלפון (למשל "תרופות") תוצע גם באתר בפעם הבאה, ולהפך.
         if (draft.category) rememberPhrase(user.id, "expense_category", draft.category);
-        return askMoreOrFinish(`נשמר. הוצאה של ${draft.amount} שקלים ב${draft.category}.`, "expense_saved");
+        return askTransactionContinue(`נשמר. הוצאה של ${draft.amount} שקלים ב${draft.category}.`, "expense");
       }
       // "שינוי" (2, ר' wantsMenuChange) - חוזרים להתחלת הפריט (סכום) כדי להזין הכל מחדש, במקום
       // ביטול מוחלט - משוב אמיתי ממשתמש שרצה דרך לתקן טעות בלי לחזור לתפריט הראשי ולהתחיל מאפס.
@@ -494,23 +528,83 @@ async function advance(state, speech, draft, user, opts = {}) {
     case "income_amount": {
       const amount = extractAmount(s);
       if (!amount) return { text: `לא זיהיתי סכום.${retryHint()} מה סכום ההכנסה?`, nextState: "income_amount" };
-      return { text: `לאשר: הכנסה של ${amount} שקלים? ${confirmMenuText(opts)}`, nextState: "income_confirm", draft: { amount } };
+      // תוקן (משוב אמיתי: "לאיזה הכנסה - ציינו ביטוח לאומי, משכורת") - אותו דפוס בדיוק כמו
+      // expense_category (תפריט הקשה קבוע, "אחר" מוביל לתיאור חופשי) - ר' INCOME_CATEGORY_DIGITS למעלה.
+      return { text: `רשמתי ${amount} שקלים. ${incomeCategoryMenuText(opts)}`, nextState: "income_category", draft: { amount } };
+    }
+    case "income_category": {
+      const digit = singleDigitPress(s);
+      if (digit && INCOME_CATEGORY_DIGITS[digit]) {
+        const category = INCOME_CATEGORY_DIGITS[digit];
+        return {
+          text: `לאשר: הכנסה של ${draft.amount} שקלים מ${category}? ${confirmMenuText(opts)}`,
+          nextState: "income_confirm",
+          draft: { ...draft, category },
+        };
+      }
+      if (digit === "3" || s === "אחר" || s === "אחרת") {
+        return { text: "אפשר לתאר במילים חופשיות מאיזה מקור? למשל: מענק, תרומה, החזר.", nextState: "income_category_other", draft };
+      }
+      // גיבוי ל-Twilio בלבד (אין שם הקשות מוגדרות) - עדיין אפשר לומר את המקור בקול ישירות.
+      if (!(opts && opts.digitConfirm)) {
+        const spoken = String(speech || "").trim();
+        if (spoken) {
+          return {
+            text: `לאשר: הכנסה של ${draft.amount} שקלים מ${spoken}? ${confirmMenuText(opts)}`,
+            nextState: "income_confirm",
+            draft: { ...draft, category: spoken },
+          };
+        }
+      }
+      return { text: `לא הבנתי.${retryHint()} ${incomeCategoryMenuText(opts)}`, nextState: "income_category", draft };
+    }
+    // מקור הכנסה מותאם-אישית (אחרי "אחר") - טקסט חופשי, אותו מנגנון Whisper כמו expense_category_other.
+    case "income_category_other": {
+      const customCategory = String(speech || "").trim();
+      if (!customCategory) {
+        return { text: `לא שמעתי.${retryHint()} אפשר לתאר במילים חופשיות מאיזה מקור?`, nextState: "income_category_other", draft };
+      }
+      return {
+        text: `לאשר: הכנסה של ${draft.amount} שקלים מ${customCategory}? ${confirmMenuText(opts)}`,
+        nextState: "income_confirm",
+        draft: { ...draft, category: customCategory },
+      };
     }
     case "income_confirm": {
       // ר' הערה ב-expense_confirm - אותו עיקרון: מבטלים רק ב"לא" מפורש, לא בכל קלט לא ברור.
       if (isConfirmYes(s, opts)) {
-        db.prepare("INSERT INTO transactions (user_id, type, amount, source) VALUES (?, 'income', ?, 'phone')").run(user.id, draft.amount);
-        return askMoreOrFinish(`נשמר. הכנסה של ${draft.amount} שקלים.`, "income_saved");
+        db.prepare("INSERT INTO transactions (user_id, type, amount, category, source) VALUES (?, 'income', ?, ?, 'phone')")
+          .run(user.id, draft.amount, draft.category);
+        if (draft.category) rememberPhrase(user.id, "income_category", draft.category);
+        return askTransactionContinue(`נשמר. הכנסה של ${draft.amount} שקלים מ${draft.category}.`, "income");
       }
       if (wantsMenuChange(s, opts)) return { text: "בסדר, נתחיל מחדש. מה סכום ההכנסה?", nextState: "income_amount" };
       if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
         return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       }
       return {
-        text: `לא הבנתי.${retryHint()} לאשר: הכנסה של ${draft.amount} שקלים? ${confirmMenuText(opts)}`,
+        text: `לא הבנתי.${retryHint()} לאשר: הכנסה של ${draft.amount} שקלים מ${draft.category}? ${confirmMenuText(opts)}`,
         nextState: "income_confirm",
         draft,
       };
+    }
+    case "transaction_saved_menu": {
+      const digit = singleDigitPress(s);
+      const savedType = draft.savedType;
+      if (digit === "1" || includesAny(s, ["עוד"])) {
+        return savedType === "income"
+          ? { text: "מה סכום ההכנסה?", nextState: "income_amount" }
+          : { text: "כמה עלה, בשקלים?", nextState: "expense_amount" };
+      }
+      if (digit === "2" || includesAny(s, ["לעבור"])) {
+        return savedType === "income"
+          ? { text: "כמה עלה, בשקלים?", nextState: "expense_amount" }
+          : { text: "מה סכום ההכנסה?", nextState: "income_amount" };
+      }
+      if (digit === "3" || includesAny(s, ["לסיים", "תודה", "סיום", "להתראות"])) {
+        return { text: "תודה, להתראות.", nextState: "done", hangup: true, outcome: "menu_exit" };
+      }
+      return { text: `לא הבנתי.${retryHint()} ${transactionContinueMenuText(savedType)}`, nextState: "transaction_saved_menu", draft };
     }
 
     // ---------- חונכות ----------
@@ -725,7 +819,7 @@ async function advance(state, speech, draft, user, opts = {}) {
     }
     case "mentor_note_speak": {
       const noteTrim = String(speech || "").trim();
-      // בדיוק כמו signup_email_speak - "דלג" (או שתיקה) תמיד משלים בלי דיווח, בלי תלות בזיהוי דיבור נוסף.
+      // "דלג" (או שתיקה) תמיד משלים בלי דיווח, בלי תלות בזיהוי דיבור נוסף.
       if (!noteTrim || includesAny(s, ["דלג", "לדלג", "לא רוצה", "בלי", "ביטול", "וויתור", "לוותר", "אין לי", "לא צריך", "עזוב"])) {
         return askMoreOrFinish(draft.baseMessage, draft.outcome);
       }
@@ -886,10 +980,17 @@ async function advanceSignup(state, speech, draft, opts = {}) {
     case "signup_pin_confirm": {
       const digits = onlyDigits(speech);
       if (digits && digits.length === 4 && digits === draft.pendingPin) {
+        // תוקן (משוב אמיתי: "צריך לקצר... רק לומר מומלץ להוסיף מייל באתר ולהמשיך, בלי הקשות") - שלב
+        // הכתבת המייל בטלפון (signup_email_offer/speak/confirm/retry) הוסר לגמרי מתהליך ההרשמה: זה
+        // היה השלב הכי ארוך ורגיש-לטעויות בהרשמה (הכתבת כתובת מייל מלאה בקול), עבור פרט לא-חובה
+        // שקל בהרבה למלא באתר. עכשיו רק מזכירים את זה במשפט אחד ומסיימים את ההרשמה ישר, בלי שאלה בכלל.
+        const newUser = createPhoneUser(draft.fullName, draft.phone, null, draft.pendingPin);
         return {
-          text: "הקוד הוגדר בהצלחה. רוצים לצרף כתובת מייל קיימת לחשבון? זה לא חובה, ואפשר גם להוסיף אותה מאוחר יותר באתר - זה לרוב קל יותר אם יש בכתובת גם אותיות באנגלית. אמרו כן, או הקישו 1. אם לא, אמרו לא, או הקישו 2.",
-          nextState: "signup_email_offer",
-          draft: { ...draft, pin: draft.pendingPin, pendingPin: undefined },
+          text: `הקוד הוגדר בהצלחה, ונרשמת! מומלץ להוסיף כתובת מייל דרך האתר בהמשך - זה לא חובה. ${mainMenuPrompt(newUser.full_name, opts)}`,
+          nextState: "main_menu",
+          newUserId: newUser.id,
+          hints: MAIN_MENU_HINTS,
+          outcome: "phone_signup_completed",
         };
       }
       return {
@@ -898,217 +999,9 @@ async function advanceSignup(state, speech, draft, opts = {}) {
         draft: { ...draft, pendingPin: undefined },
       };
     }
-    // תוקן (משוב אמיתי ממשתמש בבדיקה חיה): בעבר בשלב הזה לא ביקשנו לדבר בכלל - רק בחירת ספק בהקשה
-    // (1/2/0), וה"כתובת" עצמה נבנתה אוטומטית מתעתיק לטיני של השם המלא (ר' buildEmailLocalPart/
-    // HEBREW_TO_LATIN שהוסרו). זו לא הייתה כתובת אמיתית שאפשר לשלוח אליה שום דבר - בדיוק מה שגרם
-    // לבלבול ("לחצתי 1 וזה לא נכון"). התיקון: קודם שואלים כן/לא רגיל אם יש כתובת קיימת לצרף (שלב
-    // "רגיל" - לא טקסט חופשי, בדיוק כמו expense_confirm וכו') - ורק אם "כן", עוברים לבקש להכתיב את
-    // הכתובת האמיתית בקול (case "signup_email_speak", כן טקסט חופשי - ר' FREE_TEXT_STATES ב-
-    // routes/yemot.js). בניסיון קודם (מתועד למטה, ר' parseSpokenEmail) הכתבת מייל בקול נכשלה כמעט
-    // תמיד מול מנוע הזיהוי המובנה של ימות - אבל עכשיו, עם אותו מנגנון תמלול Whisper מדויק שכבר
-    // עובד היטב בתפריט הראשי, יש סיכוי טוב בהרבה שזה יעבוד. אם בכל זאת לא מצליחים לפענח כתובת
-    // תקינה - פשוט מדלגים (בלי מייל, אפשר להוסיף אח"כ באתר) במקום להמציא כתובת מזויפת.
-    case "signup_email_offer": {
-      if (isConfirmYes(s, opts)) {
-        return {
-          text: "אמרו את כתובת המייל שלכם עכשיו, לאט אם אפשר. לדוגמה: שם המשתמש, שטרודל, ג'ימייל. אם התחרטתם - פשוט אל תגידו כלום וחכו בשקט.",
-          nextState: "signup_email_speak",
-          draft,
-        };
-      }
-      if (isConfirmNo(s, opts)) {
-        const newUser = createPhoneUser(draft.fullName, draft.phone, null, draft.pin);
-        return {
-          text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
-          nextState: "main_menu",
-          newUserId: newUser.id,
-          hints: MAIN_MENU_HINTS,
-          outcome: "phone_signup_completed",
-        };
-      }
-      return {
-        text: `לא הבנתי.${retryHint()} רוצים לצרף כתובת מייל קיימת לחשבון? זה לא חובה. אמרו כן, או הקישו 1. אם לא, אמרו לא, או הקישו 2.`,
-        nextState: "signup_email_offer",
-        draft,
-      };
-    }
-    // תוקן (משוב אמיתי ממשתמש בבדיקה חיה - מקרה חמור): אמירת "דלג" בשלב הזה לא תמיד נקלטת נכון
-    // ע"י Whisper (יתכן שה"רמז אוצר מילים" המוטה לכיוון מילות כתובת מייל - ר' vocabularyHintFor
-    // ב-routes/yemot.js - "מושך" את התמלול לכיוון לא נכון גם כשבפועל נאמרה רק מילת דילוג קצרה) -
-    // וזה השאיר משתמש **תקוע בלולאה בלי שום דרך החוצה** עד שניתק את השיחה, למרות שהמייל לא חובה בכלל!
-    // זה באג חמור בהרבה מסתם "לא נוח" - חובה שתמיד תהיה דרך החוצה אמינה. התיקון: אחרי ניסיון הכתבה
-    // כושל (לא זוהתה כתובת תקינה ולא זוהתה מילת דילוג), **לא** חוזרים ישר לעוד ניסיון הקלטה (שוב
-    // תלוי בזיהוי דיבור) - עוברים לשלב ביניים "רגיל" (לא טקסט חופשי, לא תלוי בהקלטה בכלל) שבו הקשת
-    // ספרה **תמיד** עובדת: 1=לנסות שוב, 0=לדלג ולסיים את ההרשמה מיד, בלי שום תלות בזיהוי דיבור נוסף.
-    case "signup_email_retry": {
-      const digit = singleDigitPress(s);
-      if (digit === "1" || includesAny(s, ["כן", "שוב", "נסה שוב", "לנסות שוב"])) {
-        return { text: "בסדר, אמרו את כתובת המייל שלכם עכשיו, לאט אם אפשר.", nextState: "signup_email_speak", draft };
-      }
-      if (digit === "0" || isConfirmNo(s, opts) || includesAny(s, ["דלג", "לדלג"])) {
-        const newUser = createPhoneUser(draft.fullName, draft.phone, null, draft.pin);
-        return {
-          text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
-          nextState: "main_menu",
-          newUserId: newUser.id,
-          hints: MAIN_MENU_HINTS,
-          outcome: "phone_signup_completed",
-        };
-      }
-      return {
-        text: `לא הבנתי.${retryHint()} לנסות שוב להכתיב את כתובת המייל - הקישו 1. לדלג ולהמשיך בלי מייל - הקישו 0.`,
-        nextState: "signup_email_retry",
-        draft,
-      };
-    }
-    case "signup_email_speak": {
-      const spokenTrim = String(speech || "").trim();
-      // אם אין כלום, או שנאמרה בפירוש מילת דילוג/ויתור - ממשיכים בלי מייל מיד (לא תוקעים בלולאה,
-      // ולא מחכים לשלב הקשה - זה עדיין "בונוס" למי שאמירת הדילוג שלו כן זוהתה נכון).
-      if (!spokenTrim || includesAny(s, ["דלג", "לדלג", "לא רוצה", "בלי מייל", "ללא מייל", "ביטול", "וויתור", "לוותר", "אין לי", "לא צריך", "עזוב", "בלי"])) {
-        const newUser = createPhoneUser(draft.fullName, draft.phone, null, draft.pin);
-        return {
-          text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
-          nextState: "main_menu",
-          newUserId: newUser.id,
-          hints: MAIN_MENU_HINTS,
-          outcome: "phone_signup_completed",
-        };
-      }
-      const parsed = parseSpokenEmail(speech);
-      if (!parsed) {
-        // ר' הערה למעלה ליד case "signup_email_retry" - **לא** חוזרים ישר לעוד ניסיון הקלטה, כדי
-        // שתמיד תהיה דרך החוצה אמינה בהקשה, גם אם זיהוי הדיבור ימשיך להיכשל.
-        return {
-          text: `לא הצלחתי להבין כתובת מייל תקינה מתוך "${spokenTrim}". לנסות שוב להכתיב אותה - הקישו 1. לדלג ולהמשיך בלי מייל - הקישו 0.`,
-          nextState: "signup_email_retry",
-          draft,
-        };
-      }
-      return {
-        text: `לאשר: כתובת המייל שלכם היא ${parsed}? ${confirmMenuText(opts)}`,
-        nextState: "signup_email_confirm",
-        draft: { ...draft, pendingEmail: parsed },
-      };
-    }
-    case "signup_email_confirm": {
-      if (isConfirmYes(s, opts)) {
-        const newUser = createPhoneUser(draft.fullName, draft.phone, draft.pendingEmail, draft.pin);
-        return {
-          text: `נרשמת בהצלחה! נשמרה גם כתובת המייל ${draft.pendingEmail} (אפשר לשנות אותה מאוחר יותר באתר). ${mainMenuPrompt(newUser.full_name, opts)}`,
-          nextState: "main_menu",
-          newUserId: newUser.id,
-          hints: MAIN_MENU_HINTS,
-          outcome: "phone_signup_completed",
-        };
-      }
-      // "שינוי" (2) - זה בדיוק מה ש"לא" עשתה כאן בעבר (הכתבה חוזרת) - "ביטול" (3) חדש: מדלגים על
-      // המייל לגמרי ומסיימים את ההרשמה בלעדיו (בדיוק כמו דילוג ב-signup_email_retry/signup_email_speak).
-      if (wantsMenuChange(s, opts)) {
-        return {
-          text: "בסדר, ננסה שוב. אמרו את כתובת המייל שלכם עכשיו, לאט אם אפשר.",
-          nextState: "signup_email_speak",
-          draft: { ...draft, pendingEmail: undefined },
-        };
-      }
-      if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
-        const newUser = createPhoneUser(draft.fullName, draft.phone, null, draft.pin);
-        return {
-          text: `נרשמת בהצלחה! ${mainMenuPrompt(newUser.full_name, opts)}`,
-          nextState: "main_menu",
-          newUserId: newUser.id,
-          hints: MAIN_MENU_HINTS,
-          outcome: "phone_signup_completed",
-        };
-      }
-      return {
-        text: `לא הבנתי.${retryHint()} לאשר: כתובת המייל שלכם היא ${draft.pendingEmail}? ${confirmMenuText(opts)}`,
-        nextState: "signup_email_confirm",
-        draft,
-      };
-    }
     default:
       return { text: "מה השם המלא שלכם?", nextState: "signup_name", draft };
   }
-}
-
-// ---------- כתובת מייל בהרשמה טלפונית: פענוח הכתבה בקול ----------
-// מזהה מילות סימנים נפוצות בעברית ("שטרודל"/"כרוכית" ל-@, "נקודה" לנקודה וכו') וגם ספקי מייל
-// נפוצים - ומחזיר כתובת מייל תקינה אם אפשר לזהות אחת בבירור, אחרת null (ואז מבקשים לנסות שוב,
-// ר' case "signup_email_speak"). לא מנסה לפרש ספרות שנאמרו במילים (למשל "שמונים וחמש") - Whisper
-// בדרך כלל כבר מתמלל מספרים קצרים כספרות; אם לא, המשתמש יתפוס את זה בקריאה חוזרת לאישור
-// (ר' signup_email_confirm) וינסה שוב.
-// תוקן (נבדק ידנית מול כמה ניסוחים אמיתיים אפשריים): גרסה קודמת "מחקה" מילת ספק כמו "ג'ימייל" מהטקסט
-// כדי להשלים סיומת ".com" אוטומטית - אבל זה שבר בדיוק את המקרה הכי טבעי, שבו המתקשר כן אומר את כל
-// הכתובת במפורש כולל שם הספק ("...שטרודל ג'ימייל נקודה קום") - המילה "gmail" עצמה נמחקה בטעות ונשארה
-// כתובת שבורה כמו "...@.com". התיקון: **מחליפים** מילת ספק בשם הלטיני שלה (לא מוחקים), כך שהיא
-// נשארת חלק אמיתי מהכתובת בכל מקרה; והשלמת סיומת דומיין קורית רק בסוף, אם אחרי כל ההחלפות עדיין
-// אין נקודה בחלק הדומיין (כלומר המתקשר אמר רק "ג'ימייל" בלי "נקודה קום" בכלל).
-const PROVIDER_WORD_TO_ASCII = [
-  { words: ["ג'ימייל", "גימייל", "גימיל", "gmail"], ascii: "gmail" },
-  { words: ["אאוטלוק", "אוטלוק", "outlook"], ascii: "outlook" },
-  { words: ["הוטמייל", "hotmail"], ascii: "hotmail" },
-  { words: ["וואלה", "walla"], ascii: "walla" },
-  { words: ["יאהו", "yahoo"], ascii: "yahoo" },
-];
-// סיומת דומיין ידועה לכל ספק - משמשת רק כשלא נאמרה סיומת מפורשת בכלל (ר' PROVIDER_WORD_TO_ASCII).
-const PROVIDER_TLD = { gmail: "gmail.com", outlook: "outlook.com", hotmail: "hotmail.com", walla: "walla.co.il", yahoo: "yahoo.com" };
-const EMAIL_REGEX = /^[a-z0-9._-]+@[a-z0-9.-]+\.[a-z]{2,}$/;
-
-// טבלת תעתיק גס (עיצורים בעיקר) מעברית ללטינית - לא לבניית כתובת מזויפת (ר' ההערה למעלה על מה
-// שהוסר), אלא כדי **לתעתק את מה שהמתקשר בפועל אמר**: Whisper מתמלל דיבור עברי באותיות עבריות
-// תמיד, גם אם המתקשר בעצם התכוון לשם משתמש/כתובת שהם באנגלית (למשל "שלום 85" ולא "shalom85") -
-// בלי תעתיק, החלק שנאמר בעברית היה נמחק לגמרי (ר' הסינון ל-a-z0-9 בהמשך) והכתובת הייתה תמיד ריקה.
-// לא מדויק בלשנית - אבל זה בסדר: התוצאה תמיד מוקראת בחזרה לאישור, כך שהמתקשר יתפוס ניחוש שגוי.
-const HEBREW_TO_LATIN = {
-  א: "a", ב: "b", ג: "g", ד: "d", ה: "h", ו: "v", ז: "z", ח: "ch", ט: "t",
-  י: "i", כ: "k", ך: "k", ל: "l", מ: "m", ם: "m", נ: "n", ן: "n", ס: "s",
-  ע: "a", פ: "p", ף: "f", צ: "tz", ץ: "tz", ק: "k", ר: "r", ש: "sh", ת: "t",
-};
-
-function parseSpokenEmail(rawSpeech) {
-  let t = String(rawSpeech || "").trim().toLowerCase();
-  if (!t) return null;
-
-  // מחליפים מילת ספק (בעברית או באנגלית) בשם הלטיני התקני שלה - **החלפה**, לא מחיקה (ר' הערה למעלה).
-  for (const p of PROVIDER_WORD_TO_ASCII) {
-    for (const w of p.words) {
-      if (t.includes(w)) t = t.split(w).join(p.ascii);
-    }
-  }
-
-  t = t
-    // "נקודה קום/נט/אורג" כרצף אחד -> סיומת דומיין ישירה (לפני ההחלפה הכללית של "נקודה" בלבד ל-".")
-    // - כדי לתמוך בניסוח הכי טבעי ("...ג'ימייל נקודה קום") בלי תלות בהשלמה האוטומטית שבסוף הפונקציה.
-    .replace(/נקודה\s*קום/g, ".com")
-    .replace(/נקודה\s*נט/g, ".net")
-    .replace(/נקודה\s*אורג/g, ".org")
-    .replace(/שטרודל|כרוכית/g, "@")
-    .replace(/\bat\b/g, "@")
-    .replace(/נקודה/g, ".")
-    .replace(/\bdot\b/g, ".")
-    .replace(/מקף/g, "-")
-    .replace(/קו תחתון|אנדרסקור/g, "_")
-    .replace(/\s+/g, "")
-    .split("")
-    .map(ch => HEBREW_TO_LATIN[ch] ?? ch) // מתעתק כל אות עברית שנשארה (ר' הערה למעלה)
-    .join("")
-    .replace(/[^a-z0-9@._-]/g, ""); // מסיר את מה שנשאר ולא ניתן לתעתק/סימן לא רלוונטי
-
-  if (!t.includes("@")) return null;
-
-  const atIdx = t.indexOf("@");
-  const local = t.slice(0, atIdx);
-  let domainPart = t.slice(atIdx + 1).replace(/@/g, ""); // רק ה-@ הראשון נחשב
-
-  if (!local || !domainPart) return null;
-  if (!domainPart.includes(".")) {
-    // נאמר רק שם ספק בלי סיומת מפורשת (למשל "@gmail" בלי "נקודה קום") - משלימים אוטומטית.
-    if (!PROVIDER_TLD[domainPart]) return null;
-    domainPart = PROVIDER_TLD[domainPart];
-  }
-  const candidate = `${local}@${domainPart}`;
-  return EMAIL_REGEX.test(candidate) ? candidate : null;
 }
 
 // יוצר משתמש חדש ישירות מתוך שיחת טלפון. הזיהוי בשיחות הבאות תמיד לפי Caller ID, לא סיסמה - אבל
@@ -1510,6 +1403,5 @@ module.exports = {
   DIGIT_ENTRY_STATES,
   CONFIRM_MENU_STATES,
   DIGIT_MENU_STATES,
-  parseSpokenEmail, // מיוצא כדי לאפשר בדיקה ישירה (ר' tests/test-flow.js) - בלי לעבור זרימת שיחה מלאה
   extractAmount, // מיוצא כדי לאפשר בדיקה ישירה (ר' tests/test-flow.js) - כולל פענוח מספרים במילים
 };

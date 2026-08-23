@@ -666,7 +666,9 @@ async function run() {
     const txMenu = await ivrSay(txCallSid, "תנועות");
     assert(txMenu.includes("הכנסה או הוצאה"), "קטגוריית 'תנועות' פותחת תת-תפריט הכנסה/הוצאה");
     await ivrSay(txCallSid, "הכנסה");
-    const txIncomeConfirm = await ivrSay(txCallSid, "300");
+    const txIncomeCategory = await ivrSay(txCallSid, "300");
+    assert(txIncomeCategory.includes("מאיזה מקור ההכנסה"), "אחרי סכום ההכנסה נשאלת קטגוריית מקור ההכנסה");
+    const txIncomeConfirm = await ivrSay(txCallSid, "משכורת");
     assert(txIncomeConfirm.includes("לאשר"), "תת-תפריט תנועות ממשיך לזרימת הכנסה הרגילה");
     await ivrSay(txCallSid, "כן");
 
@@ -737,13 +739,14 @@ async function run() {
       "אם הספרות באישור לא תואמות למה שהוקש קודם, מתבקשים להתחיל את הגדרת ה-PIN מחדש (לא נשמר קוד שגוי בטעות)"
     );
     await ivrSay(signupCallSid, "1234");
-    const signupEmailOfferPrompt = await ivrSay(signupCallSid, "1234");
+    // תוקן (משוב אמיתי: "צריך לקצר... רק לומר מומלץ להוסיף מייל באתר ולהמשיך, בלי הקשות") - שלב
+    // הכתבת המייל בטלפון הוסר לגמרי: אחרי הקשה כפולה תואמת של ה-PIN, ההרשמה מסתיימת מיד, עם משפט
+    // מידע קצר במקום שאלה אינטראקטיבית.
+    const signupDoneXml = await ivrSay(signupCallSid, "1234");
     assert(
-      signupEmailOfferPrompt.includes("הוגדר בהצלחה") && signupEmailOfferPrompt.includes("כתובת מייל") && signupEmailOfferPrompt.includes("<Gather"),
-      "אחרי הקשה כפולה תואמת של קוד ה-PIN, המערכת שואלת (כן/לא, לא חובה) על כתובת מייל לפני יצירת המשתמש, עם אישור ברור שהקוד הוגדר"
+      signupDoneXml.includes("הוגדר בהצלחה") && signupDoneXml.includes("מומלץ להוסיף כתובת מייל") && signupDoneXml.includes("נא לציין"),
+      "אחרי הקשה כפולה תואמת של קוד ה-PIN, ההרשמה מסתיימת מיד - משפט מידע קצר על מייל באתר (לא שאלה), וישר לתפריט הרגיל"
     );
-    const signupDoneXml = await ivrSay(signupCallSid, "לא");
-    assert(signupDoneXml.includes("נרשמת בהצלחה") && signupDoneXml.includes("נא לציין"), "אמירת 'לא' על הצעת המייל עדיין יוצרת את המשתמש ועובר ישר לתפריט הקטגוריות הרגיל, בלי כתובת מזויפת כלשהי");
 
     const signupPinLogin = await api("POST", "/api/auth/login", { username: `phone_${signupPhone.replace(/\D/g, "").slice(-9)}`, password: "1234" });
     assert(signupPinLogin.status === 200 && signupPinLogin.data.token, "קוד ה-PIN שהוקש בטלפון בהרשמה עובד גם כסיסמה להתחברות באתר");
@@ -752,89 +755,6 @@ async function run() {
     assert(
       secondCallSameNumber.includes("רותם כהן") && !secondCallSameNumber.includes("אינו מזוהה"),
       "שיחה חוזרת מאותו מספר אחרי ההרשמה כבר מזהה את המשתמש (בלי הצעת הרשמה נוספת)"
-    );
-
-    // תוקן (משוב אמיתי ממשתמש בבדיקה חיה): בעבר בחירת ספק (1=ג'ימייל/2=אאוטלוק) בנתה אוטומטית כתובת
-    // מזויפת מתוך תעתיק השם - זו לא הייתה כתובת אמיתית, וזה בדיוק מה שבלבל. עכשיו מבקשים מהמתקשר
-    // להכתיב את הכתובת האמיתית שלו בקול, עם קריאה חוזרת לאישור לפני השמירה.
-    console.log("\n📧 הרשמה בטלפון עם כתובת מייל אמיתית שמוכתבת בקול (לא נבנית אוטומטית מהשם)");
-    const emailSignupCallSid = `${callSid}-signup-email`;
-    const emailSignupPhone = "+972500000078";
-    await ivrCall(emailSignupCallSid, emailSignupPhone);
-    await ivrSay(emailSignupCallSid, "גל שני");
-    await ivrSay(emailSignupCallSid, "5678");
-    const emailOfferXml = await ivrSay(emailSignupCallSid, "5678");
-    assert(
-      emailOfferXml.includes("רוצים לצרף כתובת מייל") && emailOfferXml.includes("<Gather"),
-      "אחרי הגדרת קוד PIN, נשאלת שאלת כן/לא רגילה אם לצרף כתובת מייל קיימת - לא נבנית שום כתובת אוטומטית"
-    );
-    const emailSpeakPromptXml = await ivrSay(emailSignupCallSid, "כן");
-    assert(emailSpeakPromptXml.includes("אמרו את כתובת המייל"), "אחרי 'כן', מתבקשים להכתיב את כתובת המייל האמיתית בקול");
-    const emailConfirmXml = await ivrSay(emailSignupCallSid, "gal.shani@gmail.com");
-    assert(
-      emailConfirmXml.includes("לאשר") && emailConfirmXml.includes("gal.shani@gmail.com"),
-      "הכתובת שהוכתבה (כאן כבר בפורמט אנגלי תקני, כפי שתמלול Whisper יכול להחזיר) מוקראת בחזרה לאישור לפני השמירה"
-    );
-    const emailDoneXml = await ivrSay(emailSignupCallSid, "כן");
-    assert(
-      emailDoneXml.includes("נרשמת בהצלחה") && emailDoneXml.includes("gal.shani@gmail.com"),
-      "אישור הכתובת שהוכתבה שומר אותה בפועל אצל המשתמש החדש"
-    );
-
-    console.log("\n📧 הכתבת מייל בעברית (עם שטרודל/נקודה מדוברים) - מתועתקת ומורכבת לכתובת תקינה");
-    const emailHebrewSignupCallSid = `${callSid}-signup-email-he`;
-    const emailHebrewSignupPhone = "+972500000079";
-    await ivrCall(emailHebrewSignupCallSid, emailHebrewSignupPhone);
-    await ivrSay(emailHebrewSignupCallSid, "רונית לוי");
-    await ivrSay(emailHebrewSignupCallSid, "4321");
-    await ivrSay(emailHebrewSignupCallSid, "4321");
-    await ivrSay(emailHebrewSignupCallSid, "כן");
-    const emailHebrewConfirmXml = await ivrSay(emailHebrewSignupCallSid, "רונית שטרודל ג'ימייל נקודה קום");
-    assert(
-      emailHebrewConfirmXml.includes("לאשר") && emailHebrewConfirmXml.includes("@gmail.com"),
-      "הכתבה בעברית מלאה ('שטרודל'/'נקודה'/'קום', ושם ספק בעברית) מתועתקת ומורכבת לכתובת gmail.com תקינה"
-    );
-    const emailHebrewDoneXml = await ivrSay(emailHebrewSignupCallSid, "כן");
-    assert(emailHebrewDoneXml.includes("נרשמת בהצלחה"), "אישור הכתובת המתועתקת שומר אותה ומשלים את ההרשמה");
-
-    console.log("\n📧 כשלא מצליחים לפענח כתובת - אפשר לדלג ולהמשיך בלי מייל, בלי להיתקע");
-    const emailFailSignupCallSid = `${callSid}-signup-email-fail`;
-    const emailFailSignupPhone = "+972500000080";
-    await ivrCall(emailFailSignupCallSid, emailFailSignupPhone);
-    await ivrSay(emailFailSignupCallSid, "משה אברהם");
-    await ivrSay(emailFailSignupCallSid, "1122");
-    await ivrSay(emailFailSignupCallSid, "1122");
-    await ivrSay(emailFailSignupCallSid, "כן");
-    const emailFailRetryXml = await ivrSay(emailFailSignupCallSid, "אני לא זוכר");
-    assert(
-      emailFailRetryXml.includes("לא הצלחתי להבין כתובת מייל") && emailFailRetryXml.includes("הקישו 1") && emailFailRetryXml.includes("הקישו 0"),
-      "אם לא הצליחו לפענח כתובת תקינה (אין @), עוברים לשלב הקשה 'רגיל' (לא תלוי בזיהוי דיבור נוסף) - 1 לנסות שוב, 0 לדלג"
-    );
-    const emailFailSkipXml = await ivrSay(emailFailSignupCallSid, "דלג");
-    assert(emailFailSkipXml.includes("נרשמת בהצלחה") && emailFailSkipXml.includes("נא לציין"), "אמירת 'דלג' בשלב ההקשה גם היא מזוהה ומשלימה את ההרשמה בלי מייל");
-
-    // תוקן (משוב אמיתי ממשתמש - מקרה חמור): לפני התיקון, אם "דלג" לא זוהה נכון ע"י זיהוי הדיבור
-    // (יתכן בגלל רמז אוצר המילים המוטה לכתובות מייל), המשתמש נשאר תקוע בלולאה בלי שום דרך החוצה,
-    // עד שניתק את השיחה - חמור במיוחד כי המייל בכלל לא חובה. עכשיו, אחרי ניסיון הכתבה כושל, יש
-    // תמיד הקשת ספרה אמינה (0) שעובדת גם אם זיהוי הדיבור ימשיך להיכשל לגמרי בכל ניסיון.
-    console.log("\n🔢 אחרי הכתבת מייל כושלת - הקשת 0 (לא רק אמירת 'דלג') תמיד משלימה את ההרשמה, גם אם זיהוי הדיבור נכשל שוב ושוב");
-    const emailDigitEscapeCallSid = `${callSid}-signup-email-digit-escape`;
-    const emailDigitEscapePhone = "+972500000083";
-    await ivrCall(emailDigitEscapeCallSid, emailDigitEscapePhone);
-    await ivrSay(emailDigitEscapeCallSid, "יעל ברקוביץ");
-    await ivrSay(emailDigitEscapeCallSid, "9988");
-    await ivrSay(emailDigitEscapeCallSid, "9988");
-    await ivrSay(emailDigitEscapeCallSid, "כן");
-    const escapeRetryXml = await ivrSay(emailDigitEscapeCallSid, "משהו לגמרי לא קשור");
-    assert(escapeRetryXml.includes("הקישו 1") && escapeRetryXml.includes("הקישו 0"), "גם כאן, ניסיון הכתבה כושל עובר לשלב הקשה עם 0 לדלג");
-    const escapeRetryAgainXml = await ivrSay(emailDigitEscapeCallSid, "1"); // הקשת 1 = לנסות שוב
-    assert(escapeRetryAgainXml.includes("אמרו את כתובת המייל"), "הקשת 1 בשלב ההקשה מחזירה לניסיון הכתבה נוסף");
-    const escapeFailAgainXml = await ivrSay(emailDigitEscapeCallSid, "עדיין לא ברור"); // עוד ניסיון כושל
-    assert(escapeFailAgainXml.includes("הקישו 0"), "ניסיון כושל נוסף מחזיר שוב לשלב ההקשה עם אפשרות דילוג");
-    const escapeDoneXml = await ivrSay(emailDigitEscapeCallSid, "0"); // הקשת 0 = דלג, לא מילה
-    assert(
-      escapeDoneXml.includes("נרשמת בהצלחה") && escapeDoneXml.includes("נא לציין"),
-      "הקשת 0 (לא תלויה בזיהוי דיבור בכלל) תמיד משלימה את ההרשמה בלי מייל - אין יותר לולאה בלי דרך החוצה"
     );
 
     console.log("\n☎️ מנוע השיחה הקולית מול ימות המשיח (שלוחת API) — אותה מכונת מצבים, פרוטוקול שונה");
@@ -860,8 +780,8 @@ async function run() {
     await yemotCall({ callId: ymCallId, speech: "1" }); // 1 = מזון (תפריט קטגוריות בהקשה, ר' EXPENSE_CATEGORY_DIGITS)
     const ymConfirm = await yemotCall({ callId: ymCallId, speech: "כן" });
     assert(
-      ymConfirm.includes("נשמר") && ymConfirm.includes("רוצים לעשות עוד משהו") && !ymConfirm.includes("g-hangup"),
-      "זרימת הוצאה קולית מלאה דרך ימות הושלמה ואושרה, וחוזרת לתפריט עם שאלה אם יש עוד משהו (לא מנתקת מיד)"
+      ymConfirm.includes("נשמר") && ymConfirm.includes("רוצים עוד הוצאה") && ymConfirm.includes("לסיים? הקישו 3") && !ymConfirm.includes("g-hangup"),
+      "זרימת הוצאה קולית מלאה דרך ימות הושלמה ואושרה, וחוזרת עם תפריט המשך ממוקד (עוד הוצאה/לעבור להכנסה/לסיים), לא מנתקת מיד"
     );
 
     const afterYmTx = await api("GET", "/api/transactions", null, token);
@@ -873,7 +793,9 @@ async function run() {
     const ymAmountWithCurrencyCallId = `${ymCallId}-amount-currency`;
     await yemotCall({ callId: ymAmountWithCurrencyCallId, phone: "0500000001" });
     await yemotCall({ callId: ymAmountWithCurrencyCallId, speech: "הכנסה" });
-    const ymAmountEcho = await yemotCall({ callId: ymAmountWithCurrencyCallId, speech: '100 ש"ח' });
+    const ymAmountCategoryPrompt = await yemotCall({ callId: ymAmountWithCurrencyCallId, speech: '100 ש"ח' });
+    assert(ymAmountCategoryPrompt.includes("מאיזה מקור ההכנסה"), "בימות, סכום עם 'ש\"ח' צמוד לספרות עדיין מזוהה נכון כ-100 וממשיך ישר לשאלת מקור ההכנסה");
+    const ymAmountEcho = await yemotCall({ callId: ymAmountWithCurrencyCallId, speech: "1" }); // 1 = משכורת
     assert(ymAmountEcho.includes("לאשר: הכנסה של 100 שקלים"), "בימות, סכום עם 'ש\"ח' צמוד לספרות (לא רק ספרה נקייה) עדיין מזוהה נכון כ-100");
 
     console.log("\n❓ קלט לא ברור בשאלת אישור לא מבטל בשקט (רק 'לא' מפורש מבטל) - כדי לא לאבד תנועה שהוזנה");
@@ -896,7 +818,7 @@ async function run() {
     );
     const ymUnclearThenYes = await yemotCall({ callId: ymUnclearCallId, speech: "כן" });
     assert(
-      ymUnclearThenYes.includes("נשמר") && ymUnclearThenYes.includes("רוצים לעשות עוד משהו"),
+      ymUnclearThenYes.includes("נשמר") && ymUnclearThenYes.includes("רוצים עוד הוצאה"),
       "אחרי הקלט הלא ברור, אמירת 'כן' עדיין שומרת את התנועה כרגיל"
     );
     const afterUnclearYes = await api("GET", "/api/transactions", null, token);
@@ -913,11 +835,13 @@ async function run() {
     const ymDigitCallId = `${ymCallId}-digit-confirm`;
     await yemotCall({ callId: ymDigitCallId, phone: "0500000001" });
     await yemotCall({ callId: ymDigitCallId, speech: "הכנסה" });
-    const ymDigitConfirmPrompt = await yemotCall({ callId: ymDigitCallId, speech: "77" });
+    const ymDigitCategoryPrompt = await yemotCall({ callId: ymDigitCallId, speech: "77" });
+    assert(ymDigitCategoryPrompt.includes("מאיזה מקור ההכנסה"), "אחרי הסכום שואלים על מקור ההכנסה בהקשה");
+    const ymDigitConfirmPrompt = await yemotCall({ callId: ymDigitCallId, speech: "1" }); // 1 = משכורת
     assert(ymDigitConfirmPrompt.includes("הקישו 1"), "שאלת האישור בימות מזכירה אפשרות הקשת 1 לאישור מהיר");
     const ymDigitConfirmDone = await yemotCall({ callId: ymDigitCallId, speech: "1" });
     assert(
-      ymDigitConfirmDone.includes("נשמר") && ymDigitConfirmDone.includes("רוצים לעשות עוד משהו"),
+      ymDigitConfirmDone.includes("נשמר") && ymDigitConfirmDone.includes("רוצים עוד הכנסה"),
       "הקשת 1 בלבד, בלי לומר 'כן', נחשבת אישור תקף ושומרת את התנועה"
     );
     const afterDigitTx = await api("GET", "/api/transactions", null, token);
@@ -930,9 +854,10 @@ async function run() {
     await yemotCall({ callId: ymHashConfirmCallId, phone: "0500000001" });
     await yemotCall({ callId: ymHashConfirmCallId, speech: "הכנסה" });
     await yemotCall({ callId: ymHashConfirmCallId, speech: "88" });
+    await yemotCall({ callId: ymHashConfirmCallId, speech: "1" }); // 1 = משכורת
     const ymHashConfirmDone = await yemotCall({ callId: ymHashConfirmCallId, speech: "#" });
     assert(
-      ymHashConfirmDone.includes("נשמר") && ymHashConfirmDone.includes("רוצים לעשות עוד משהו"),
+      ymHashConfirmDone.includes("נשמר") && ymHashConfirmDone.includes("רוצים עוד הכנסה"),
       "סולמית בודדת עדיין מתקבלת כאישור תקף אם היא כן מגיעה לשרת (גיבוי נוסף, גם אם לא מוצע יותר למתקשר)"
     );
 
@@ -957,13 +882,13 @@ async function run() {
     await yemotCall({ callId: ymMultiCallId, speech: "6" }); // 6 = ביגוד
     const ymMultiExpenseDone = await yemotCall({ callId: ymMultiCallId, speech: "כן" });
     assert(
-      ymMultiExpenseDone.includes("נשמר") && ymMultiExpenseDone.includes("רוצים לעשות עוד משהו"),
+      ymMultiExpenseDone.includes("נשמר") && ymMultiExpenseDone.includes("רוצים עוד הוצאה"),
       "פעולה שנייה (הוצאה) הושלמה בהצלחה באותה שיחה בדיוק, בלי שהשיחה נותקה בין לבין"
     );
-    const ymMultiFinish = await yemotCall({ callId: ymMultiCallId, speech: "תודה, זהו" });
+    const ymMultiFinish = await yemotCall({ callId: ymMultiCallId, speech: "3" }); // 3 = לסיים (בתפריט ההמשך הממוקד)
     assert(
       ymMultiFinish.includes("להתראות") && ymMultiFinish.includes("g-hangup"),
-      "אמירת 'תודה' מהתפריט הראשי מסיימת את השיחה בנימוס ומנתקת בפועל"
+      "הקשת 3 (לסיים) בתפריט ההמשך אחרי שמירת תנועה מסיימת את השיחה בנימוס ומנתקת בפועל"
     );
     const afterMulti = await api("GET", "/api/transactions", null, token);
     assert(
@@ -983,10 +908,12 @@ async function run() {
     assert(ymDigitTxType.includes("הכנסה או הוצאה") && ymDigitTxType.includes("1 להכנסה"), "הקשת 2 בתפריט הראשי שקולה לאמירת 'תנועות', ומזכירה גם קיצורי הקשה לשלב הבא");
     const ymDigitIncome = await yemotCall({ callId: ymDigitTxCallId, speech: "1" }); // 1 = הכנסה
     assert(ymDigitIncome.includes("מה סכום ההכנסה"), "הקשת 1 בבחירת סוג תנועה שקולה לאמירת 'הכנסה'");
-    await yemotCall({ callId: ymDigitTxCallId, speech: "500" });
+    const ymDigitIncomeCategoryPrompt = await yemotCall({ callId: ymDigitTxCallId, speech: "500" });
+    assert(ymDigitIncomeCategoryPrompt.includes("מאיזה מקור ההכנסה"), "אחרי הסכום בהקשות ממשיכים ישר לתפריט מקור ההכנסה בהקשה");
+    await yemotCall({ callId: ymDigitTxCallId, speech: "1" }); // 1 = משכורת
     const ymDigitIncomeConfirm = await yemotCall({ callId: ymDigitTxCallId, speech: "#" });
     assert(
-      ymDigitIncomeConfirm.includes("נשמר") && ymDigitIncomeConfirm.includes("רוצים לעשות עוד משהו"),
+      ymDigitIncomeConfirm.includes("נשמר") && ymDigitIncomeConfirm.includes("רוצים עוד הכנסה"),
       "זרימה מלאה של תנועה דרך הקשות בלבד (בלי מילה אחת בדיבור) עובדת עד הסוף"
     );
 
@@ -1010,7 +937,8 @@ async function run() {
     const ymStarMidConfirmCallId = `${ymCallId}-star-mid-confirm`;
     await yemotCall({ callId: ymStarMidConfirmCallId, phone: "0500000001" });
     await yemotCall({ callId: ymStarMidConfirmCallId, speech: "הכנסה" });
-    const ymStarConfirmPrompt = await yemotCall({ callId: ymStarMidConfirmCallId, speech: "999" });
+    await yemotCall({ callId: ymStarMidConfirmCallId, speech: "999" });
+    const ymStarConfirmPrompt = await yemotCall({ callId: ymStarMidConfirmCallId, speech: "1" }); // 1 = משכורת
     assert(
       ymStarConfirmPrompt.includes("הקישו 1") && ymStarConfirmPrompt.includes("הקישו 2") && ymStarConfirmPrompt.includes("הקישו 3"),
       "שאלת האישור בימות מזכירה את שלושת האפשרויות: 1 לאישור, 2 לשינוי, 3 לביטול - בלי 'אמרו כן'"
@@ -1091,10 +1019,92 @@ async function run() {
     await yemotCall({ callId: ymMenuCancelCallId, phone: "0500000001" });
     await yemotCall({ callId: ymMenuCancelCallId, speech: "הכנסה" });
     await yemotCall({ callId: ymMenuCancelCallId, speech: "70" });
+    await yemotCall({ callId: ymMenuCancelCallId, speech: "1" }); // 1 = משכורת -> מגיע לשאלת האישור
     const ymMenuCancel = await yemotCall({ callId: ymMenuCancelCallId, speech: "3" });
     assert(ymMenuCancel.includes("בוטל") && ymMenuCancel.includes("ניהול חשבונות"), "הקשת 3 (ביטול) בשאלת האישור חוזרת לתפריט הראשי");
     const afterMenuCancel = await api("GET", "/api/transactions", null, token);
     assert(!afterMenuCancel.data.transactions.some(t => t.amount === 70), "התנועה שבוטלה בהקשת 3 אכן לא נשמרה במסד הנתונים");
+
+    console.log("\n🏷️ תנועות: תפריט קטגוריות הכנסה (הקשה) - 1=משכורת, 2=ביטוח לאומי, 3=אחר עם טקסט חופשי");
+    // משוב אמיתי ממשתמש: "לגבי קטגוריות... הכנסה שיהיה עוד קטגוריות... ביטוח לאומי משכורת... בקטגוריה אחר שיהיה טקסט חופשי".
+    const ymIncomeCategoryMenuCallId = `${ymCallId}-income-category-menu`;
+    await yemotCall({ callId: ymIncomeCategoryMenuCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymIncomeCategoryMenuCallId, speech: "הכנסה" });
+    const ymIncomeCategoryPrompt = await yemotCall({ callId: ymIncomeCategoryMenuCallId, speech: "120" });
+    assert(
+      ymIncomeCategoryPrompt.includes("1") && ymIncomeCategoryPrompt.includes("משכורת") && ymIncomeCategoryPrompt.includes("ביטוח לאומי"),
+      "אחרי סכום ההכנסה, תפריט הקטגוריות בהקשה מציע גם 'משכורת' וגם 'ביטוח לאומי'"
+    );
+    const ymIncomeCategoryDigit2 = await yemotCall({ callId: ymIncomeCategoryMenuCallId, speech: "2" }); // 2 = ביטוח לאומי
+    assert(ymIncomeCategoryDigit2.includes("ביטוח לאומי"), "הקשת 2 בתפריט קטגוריות ההכנסה שקולה לבחירת 'ביטוח לאומי'");
+    await yemotCall({ callId: ymIncomeCategoryMenuCallId, speech: "1" }); // מאשר
+    const afterIncomeCategoryDigit2 = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterIncomeCategoryDigit2.data.transactions.some(t => t.source === "phone" && t.amount === 120 && t.category === "ביטוח לאומי" && t.type === "income"),
+      "התנועה נשמרה עם קטגוריית ההכנסה שנבחרה בהקשה (ביטוח לאומי)"
+    );
+
+    const ymIncomeCategoryOtherCallId = `${ymCallId}-income-category-other`;
+    await yemotCall({ callId: ymIncomeCategoryOtherCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymIncomeCategoryOtherCallId, speech: "הכנסה" });
+    await yemotCall({ callId: ymIncomeCategoryOtherCallId, speech: "250" });
+    const ymIncomeCategoryOtherOffer = await yemotCall({ callId: ymIncomeCategoryOtherCallId, speech: "3" }); // 3 = אחר
+    assert(ymIncomeCategoryOtherOffer.includes("לתאר במילים חופשיות"), "הקשת 3 (אחר) בתפריט קטגוריות ההכנסה מציעה לתאר את המקור בקול חופשי");
+    const ymIncomeCategoryOtherConfirm = await yemotCall({ callId: ymIncomeCategoryOtherCallId, speech: "מענק לימודים" });
+    assert(ymIncomeCategoryOtherConfirm.includes("מענק לימודים"), "מקור הכנסה מותאם-אישית שהוכתב אחרי 'אחר' נקלט כטקסט חופשי, בדיוק כמו בקטגוריות ההוצאה");
+    await yemotCall({ callId: ymIncomeCategoryOtherCallId, speech: "1" }); // מאשר
+    const afterIncomeCategoryOther = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterIncomeCategoryOther.data.transactions.some(t => t.source === "phone" && t.amount === 250 && t.category === "מענק לימודים"),
+      "התנועה נשמרה עם מקור ההכנסה המותאם-אישית שהוכתב ('מענק לימודים'), לא עם 'אחר'"
+    );
+
+    console.log("\n🔀 תפריט המשך ממוקד אחרי שמירת תנועה: 1=עוד מאותו סוג, 2=לעבור לסוג השני, 3=לסיים");
+    // משוב אמיתי ממשתמש: "אחרי שכבר כתבתי וסימנתי הכנסה... להוספה הכנסות הקישו 1 לעבור להוצאה הקישו 2 לסיים הקישו 3".
+    const ymContinueSameCallId = `${ymCallId}-continue-same`;
+    await yemotCall({ callId: ymContinueSameCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymContinueSameCallId, speech: "הכנסה" });
+    await yemotCall({ callId: ymContinueSameCallId, speech: "10" });
+    await yemotCall({ callId: ymContinueSameCallId, speech: "1" }); // משכורת
+    const ymContinueSameDone = await yemotCall({ callId: ymContinueSameCallId, speech: "1" }); // מאשר -> תפריט המשך
+    assert(
+      ymContinueSameDone.includes("רוצים עוד הכנסה") && ymContinueSameDone.includes("לעבור להוצאה") && ymContinueSameDone.includes("לסיים? הקישו 3"),
+      "אחרי שמירת הכנסה, תפריט ההמשך הממוקד מזכיר בדיוק את שלושת האפשרויות: עוד הכנסה, לעבור להוצאה, לסיים"
+    );
+    const ymContinueSameNextAmount = await yemotCall({ callId: ymContinueSameCallId, speech: "1" }); // 1 = עוד הכנסה
+    assert(ymContinueSameNextAmount.includes("מה סכום ההכנסה"), "הקשת 1 בתפריט ההמשך עוברת ישר לשאלת סכום הכנסה נוספת, בלי לחזור לתפריט הראשי");
+    await yemotCall({ callId: ymContinueSameCallId, speech: "20" });
+    await yemotCall({ callId: ymContinueSameCallId, speech: "1" }); // משכורת
+    await yemotCall({ callId: ymContinueSameCallId, speech: "1" }); // מאשר
+    const afterContinueSame = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterContinueSame.data.transactions.some(t => t.source === "phone" && t.amount === 10 && t.type === "income") &&
+      afterContinueSame.data.transactions.some(t => t.source === "phone" && t.amount === 20 && t.type === "income"),
+      "שתי ההכנסות שנוספו ברצף דרך תפריט ההמשך (10 ואז 20) אכן נשמרו שתיהן"
+    );
+
+    const ymContinueSwitchCallId = `${ymCallId}-continue-switch`;
+    await yemotCall({ callId: ymContinueSwitchCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymContinueSwitchCallId, speech: "הכנסה" });
+    await yemotCall({ callId: ymContinueSwitchCallId, speech: "15" });
+    await yemotCall({ callId: ymContinueSwitchCallId, speech: "1" }); // משכורת
+    await yemotCall({ callId: ymContinueSwitchCallId, speech: "1" }); // מאשר -> תפריט המשך
+    const ymContinueSwitchAmount = await yemotCall({ callId: ymContinueSwitchCallId, speech: "2" }); // 2 = לעבור להוצאה
+    assert(ymContinueSwitchAmount.includes("כמה עלה") || ymContinueSwitchAmount.includes("סכום ההוצאה"), "הקשת 2 בתפריט ההמשך עוברת ישר לשאלת סכום הוצאה, בלי לחזור לתפריט הראשי");
+    await yemotCall({ callId: ymContinueSwitchCallId, speech: "18" });
+    const ymContinueSwitchCategoryPrompt = await yemotCall({ callId: ymContinueSwitchCallId, speech: "1" }); // 1 = מזון
+    assert(ymContinueSwitchCategoryPrompt.includes("מזון") && ymContinueSwitchCategoryPrompt.includes("הקישו 1"), "אחרי בחירת קטגוריית ההוצאה מגיעים ישר לשאלת האישור");
+    const ymContinueSwitchDone = await yemotCall({ callId: ymContinueSwitchCallId, speech: "1" }); // מאשר
+    assert(
+      ymContinueSwitchDone.includes("נשמר") && ymContinueSwitchDone.includes("רוצים עוד הוצאה"),
+      "אחרי המעבר מהכנסה להוצאה דרך תפריט ההמשך, ההוצאה נשמרת ותפריט ההמשך הבא מתייחס ל'הוצאה' (הסוג האחרון שנשמר)"
+    );
+    const afterContinueSwitch = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterContinueSwitch.data.transactions.some(t => t.source === "phone" && t.amount === 15 && t.type === "income") &&
+      afterContinueSwitch.data.transactions.some(t => t.source === "phone" && t.amount === 18 && t.type === "expense" && t.category === "מזון"),
+      "גם ההכנסה (15) וגם ההוצאה (18) שנוספו ברצף דרך תפריט ההמשך נשמרו נכון, כל אחת עם הסוג הנכון שלה"
+    );
 
     console.log("\n📋 חונכות: תפריט-הקשה של התלמידים הרשומים ('על איזה תלמיד רוצים לדווח?')");
     // משוב אמיתי ממשתמש: "אחרי שרשמתי כמה תלמידים... שיהיה לפי הרשימה, אם הראשון הוא X לחצו 1".
@@ -1413,13 +1423,13 @@ async function run() {
       ymSignupPinConfirmPrompt.includes("התקבל") && ymSignupPinConfirmPrompt.includes("שוב"),
       "אחרי הקשת 4 הספרות הראשונות, המענה פותח ב'התקבל' - כדי שהמתקשר ידע בבירור שההקשה נקלטה, גם עם עיכוב הרשת"
     );
-    const ymSignupEmailPrompt = await yemotCall({ callId: ymSignupCallId, speech: "4321" });
+    // תוקן (משוב אמיתי: "צריך לקצר... רק לומר מומלץ להוסיף מייל באתר ולהמשיך, בלי הקשות") - שלב
+    // הכתבת המייל בטלפון הוסר לגמרי (גם בימות) - ההרשמה מסתיימת מיד אחרי הקשה כפולה תואמת של ה-PIN.
+    const ymSignupDone = await yemotCall({ callId: ymSignupCallId, speech: "4321" });
     assert(
-      ymSignupEmailPrompt.includes("הוגדר בהצלחה") && ymSignupEmailPrompt.includes("כתובת מייל"),
-      "גם בימות, אחרי הקשה כפולה תואמת של קוד ה-PIN שואלים (לא חובה) על כתובת מייל, עם אישור ברור שהקוד הוגדר"
+      ymSignupDone.includes("הוגדר בהצלחה") && ymSignupDone.includes("מומלץ להוסיף כתובת מייל") && ymSignupDone.includes("דנה לוי"),
+      "גם בימות, אחרי הקשה כפולה תואמת של קוד ה-PIN, ההרשמה מסתיימת מיד עם משפט מידע קצר על מייל באתר (לא שאלה)"
     );
-    const ymSignupDone = await yemotCall({ callId: ymSignupCallId, speech: "לא" });
-    assert(ymSignupDone.includes("נרשמת בהצלחה") && ymSignupDone.includes("דנה לוי"), "הרשמה טלפונית דרך ימות יוצרת משתמש ועוברת לתפריט הרגיל, גם כשמוותרים על המייל (בלי כתובת מזויפת)");
 
     const ymSignupPinLogin = await api("POST", "/api/auth/login", { username: `phone_${ymSignupPhone.replace(/\D/g, "").slice(-9)}`, password: "4321" });
     assert(ymSignupPinLogin.status === 200 && ymSignupPinLogin.data.token, "קוד ה-PIN שהוקש בימות עובד גם כסיסמה להתחברות באתר");
@@ -1429,49 +1439,6 @@ async function run() {
       ymSecondCall.includes("דנה לוי") && !ymSecondCall.includes("אינו מזוהה"),
       "שיחת ימות חוזרת מאותו מספר אחרי ההרשמה כבר מזהה את המשתמש שנוצר"
     );
-
-    // תוקן (משוב אמיתי ממשתמש בבדיקה חיה): כאן בודקים שגם בימות אפשר ממש להקיש 1 (לא רק לומר "כן")
-    // על הצעת המייל, ושהכתובת שנשמרת היא זו שהוכתבה בפועל - לא כתובת שנבנתה אוטומטית מהשם.
-    console.log("\n📧 הרשמה בימות עם כתובת מייל אמיתית שמוכתבת בקול (לא נבנית אוטומטית מהשם)");
-    const ymEmailCallId = `${ymCallId}-signup-email-digit`;
-    const ymEmailPhone = "+972500000082";
-    await yemotCall({ callId: ymEmailCallId, phone: ymEmailPhone });
-    await yemotCall({ callId: ymEmailCallId, speech: "עידן ברק" });
-    await yemotCall({ callId: ymEmailCallId, speech: "1122" });
-    await yemotCall({ callId: ymEmailCallId, speech: "1122" });
-    const ymEmailSpeakPrompt = await yemotCall({ callId: ymEmailCallId, speech: "1" }); // הקשת 1 = כן, רוצה לצרף מייל
-    assert(ymEmailSpeakPrompt.includes("אמרו את כתובת המייל"), "בימות, הקשת 1 ממש (לא רק אמירת 'כן') על הצעת המייל גם עובדת, ומעבירה לבקשת הכתבה בקול");
-    const ymEmailConfirmPrompt = await yemotCall({ callId: ymEmailCallId, speech: "idan.brk@gmail.com" });
-    // הטקסט המוקרא בקול "מנוקה" מנקודות (ר' sanitizeForYemot ב-services/yemot.js - תווי בקרה בפרוטוקול
-    // ימות) - זה תקין, זו רק ההקראה. הכתובת האמיתית (עם נקודות) נשמרת בשלמותה בנתונים - נבדק בהמשך דרך התחברות.
-    assert(
-      ymEmailConfirmPrompt.includes("לאשר") && ymEmailConfirmPrompt.includes("idanbrk@gmailcom"),
-      "הכתובת שהוכתבה מוקראת בחזרה לאישור - לא נבנית אוטומטית מהשם"
-    );
-    const ymEmailDigitDone = await yemotCall({ callId: ymEmailCallId, speech: "1" }); // הקשת 1 = אישור מהיר
-    assert(ymEmailDigitDone.includes("נרשמת בהצלחה"), "הקשת 1 (אישור מהיר) על קריאת הכתובת החוזרת משלימה את ההרשמה עם הכתובת שהוכתבה");
-    const ymEmailLogin = await api("POST", "/api/auth/login", { username: `phone_${ymEmailPhone.replace(/\D/g, "").slice(-9)}`, password: "1122" });
-    assert(
-      ymEmailLogin.status === 200 && ymEmailLogin.data.user?.email === "idan.brk@gmail.com",
-      "כתובת המייל שהוכתבה בקול ואושרה נשמרה בפועל במסד הנתונים (הכתובת האמיתית שנאמרה, לא כתובת מזויפת)"
-    );
-
-    console.log("\n📧 הכתבת מייל בעברית בימות (עם שטרודל/נקודה מדוברים) - מתועתקת ומורכבת לכתובת תקינה");
-    const ymEmailHebrewCallId = `${ymCallId}-signup-email-hebrew`;
-    const ymEmailHebrewPhone = "+972500000081";
-    await yemotCall({ callId: ymEmailHebrewCallId, phone: ymEmailHebrewPhone });
-    await yemotCall({ callId: ymEmailHebrewCallId, speech: "אורית שמעוני" });
-    await yemotCall({ callId: ymEmailHebrewCallId, speech: "3344" });
-    await yemotCall({ callId: ymEmailHebrewCallId, speech: "3344" });
-    await yemotCall({ callId: ymEmailHebrewCallId, speech: "כן" });
-    const ymEmailHebrewConfirm = await yemotCall({ callId: ymEmailHebrewCallId, speech: "אורית שטרודל ג'ימייל נקודה קום" });
-    // שוב, הנקודה נעלמת מהטקסט המוקרא בקול בלבד (ר' הערה למעלה) - "@gmailcom" ולא "@gmail.com".
-    assert(
-      ymEmailHebrewConfirm.includes("לאשר") && ymEmailHebrewConfirm.includes("@gmailcom"),
-      "גם בימות, הכתבה בעברית מלאה מתועתקת ומורכבת לכתובת gmail.com תקינה"
-    );
-    const ymEmailHebrewDone = await yemotCall({ callId: ymEmailHebrewCallId, speech: "כן" });
-    assert(ymEmailHebrewDone.includes("נרשמת בהצלחה"), "אישור הכתובת המתועתקת משלים את ההרשמה גם בימות");
 
     console.log("\n🎙️ זיהוי דיבור משודרג (ימות + Whisper) — במצב MOCK (בלי מפתחות) נשאר שקוף לחלוטין");
     const speechToText = require("../src/services/speechToText");

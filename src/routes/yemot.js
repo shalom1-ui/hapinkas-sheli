@@ -33,10 +33,6 @@ const debugLog = require("../debugLog");
 // ב-mainMenuPrompt (routes/ivr.js) שמסיר גם את ההזכרה המילולית של האפשרות הזו במצב הזה, כדי לא להטעות.
 // "balance_next_action" נוסף בעקבות משוב אמיתי: אחרי קריאת יתרה (ר' doBalance ב-routes/ivr.js), שואלים
 // אם להוסיף הכנסה/הוצאה - שלב עם גם מילים חופשיות וגם קיצורי הקשה (1/2), בדיוק כמו main_menu.
-// "signup_email_speak" נוסף בעקבות משוב אמיתי נוסף: בעבר "signup_email" היה רק בחירת ספק בהקשה
-// (1/2/0) עם כתובת מזויפת שנבנתה אוטומטית מהשם - זה בלבל, כי זו לא כתובת אמיתית (ר' הערה מפורטת
-// ב-routes/ivr.js, פונקציית parseSpokedEmail/case "signup_email_speak"). עכשיו מבקשים מהמתקשר
-// להכתיב את הכתובת האמיתית שלו בקול, ולכן זה חייב לעבור דרך אותו מנגנון תמלול Whisper מדויק.
 // "expense_amount"/"income_amount" נוספו בעקבות משוב אמיתי נוסף ("אמרתי 100 ש"ח והוא לא זיהה") -
 // עד עכשיו סכומים זוהו רק דרך מנוע הזיהוי המובנה (הלא-משודרג) של ימות, בדיוק כמו שהיה עם התפריט
 // הראשי לפני שעבר ל-Whisper - ואין בהם שום קיצור הקשה קיים היום שהיה נשבר (ר' extractAmount
@@ -54,15 +50,15 @@ const debugLog = require("../debugLog");
 //   ההקלטה" - **שינוי הגדרות חובה בצד ימות לפני שזה יעבוד טוב לשדות הארוכים האלה**, אחרת דיווח/הערה
 //   ארוכים עלולים להיחתך. שדות קצרים (שם/קטגוריה/סכום) לא מושפעים לרעה מההגדלה - הם ממילא נגמרים
 //   מוקדם יותר בגלל זיהוי 3 השניות השקט.
-// "signup_email_offer"/"signup_email_confirm" **לא** כאן בכוונה - אלה שלבי כן/לא רגילים (בדיוק כמו
-// expense_confirm וכו'), לא טקסט חופשי. גם transactions_pick_type/mentor_action/mentor_confirm_add_student
-// **לא** כאן בכוונה - יש בהם קיצורי הקשה עובדים ואמינים (1/2/3/4) שהיו נחסמים במצב "הקלטה".
+// transactions_pick_type/mentor_action/mentor_confirm_add_student **לא** כאן בכוונה - יש בהם
+// קיצורי הקשה עובדים ואמינים (1/2/3/4) שהיו נחסמים במצב "הקלטה". הרשמת מייל בטלפון (signup_email_*)
+// הוסרה לגמרי - ר' משוב אמיתי ליד case "signup_pin_confirm" ב-routes/ivr.js.
 // "mentor_note_speak" נוסף בעקבות בקשת פיצ'ר: דיווח מעקב חופשי על מפגש חונכות (בדיוק אותו note
 // אופציונלי שכבר קיים באתר, ר' routes/students.js checkout/quick-session) - עכשיו אפשר להכתיב אותו
 // גם בטלפון, מיד אחרי checkout/מפגש רגיל (ר' offerMentorNote/case "mentor_note_speak" ב-routes/ivr.js).
 // **גם הוא** תוכן חופשי וארוך יותר (כמו therapist_note/supervisor_readback) - כפוף לאותה דרישת
 // עדכון option_record ל-3-1-60 שכבר תועדה למעלה. "mentor_note_offer"/"mentor_note_confirm" **לא**
-// כאן בכוונה - אלה שלבי כן/לא רגילים עם קיצור הקשה 1/2 אמין, בדיוק כמו signup_email_offer/confirm.
+// כאן בכוונה - אלה שלבי כן/לא רגילים עם קיצור הקשה 1/2 אמין, בדיוק כמו mentor_confirm_add_student.
 // "expense_category_other" נוסף בעקבות משוב אמיתי נוסף ("כשאני אומר אחר, המערכת צריכה להציע דיבור
 // חופשי ושזה יישמר לפעם הבאה") - תיאור חופשי של קטגוריה מותאמת-אישית (ר' case "expense_category"/
 // "expense_category_other" ב-routes/ivr.js) - עדיין טקסט חופשי, גם אחרי ש-"expense_category" עצמו
@@ -75,10 +71,10 @@ const debugLog = require("../debugLog");
 // (ר' DIGIT_MENU_STATES).
 const FREE_TEXT_STATES = new Set([
   "signup_name", "mentor_pick_student", "main_menu", "balance_next_action",
-  "signup_email_speak", "expense_amount", "income_amount",
+  "expense_amount", "income_amount",
   "therapist_role", "therapist_student", "supervisor_pick_student",
   "guardian_pick_child", "therapist_note", "supervisor_readback", "mentor_note_speak",
-  "expense_category_other",
+  "expense_category_other", "income_category_other",
   "lesson_prep_topic_studied_speak", "lesson_prep_goal_speak",
   "lesson_prep_practical_application_speak", "lesson_prep_connection_cooperation_speak",
 ]);
@@ -90,19 +86,16 @@ const FREE_TEXT_STATES = new Set([
 function vocabularyHintFor(state) {
   if (state === "main_menu" || state === "balance_next_action") return "ניהול חשבונות, תנועות, חונכות, מטפלים, הורה, הערת מפקח, הכנסה, הוצאה";
   if (state === "signup_name" || state === "mentor_pick_student") return "שם פרטי ושם משפחה בעברית, לדוגמה: שלום כהן, דוד לוי, רחל אברהם";
-  // "דלג" נוסף לרמז בכוונה (ר' README/ הערה ב-routes/ivr.js ליד case "signup_email_retry"): בבדיקה
-  // בפועל התברר שרמז מוטה כולו לכיוון מילות כתובת מייל עלול "למשוך" את Whisper להזות משהו אחר גם
-  // כשבפועל נאמרה רק מילת דילוג קצרה - הוספת המילה עצמה לרמז אמורה להקטין את הסיכוי לזה.
-  if (state === "signup_email_speak") return "כתובת אימייל, שטרודל, כרוכית, נקודה, ג'ימייל, אאוטלוק, הוטמייל, או דלג";
   if (state === "expense_amount" || state === "income_amount") return "סכום כסף בשקלים, מספרים, לדוגמה: מאה שקלים, מאתיים וחמישים, חמישים שקל";
   if (state === "expense_category_other") return "שם קטגוריית הוצאה מותאמת אישית, לדוגמה: תרופות, מתנות, תיקונים";
+  if (state === "income_category_other") return "מקור הכנסה מותאם אישית, לדוגמה: מענק, תרומה, החזר מס";
   if (state === "therapist_role") return "סוג דיווח מקצועי: ריפוי בעיסוק, טיפול רגשי, או אחר";
   if (state === "therapist_student" || state === "supervisor_pick_student" || state === "guardian_pick_child") {
     return "שם פרטי ושם משפחה בעברית, לדוגמה: שלום כהן, דוד לוי, רחל אברהם";
   }
   // "therapist_note"/"supervisor_readback" - תוכן חופשי וארוך יותר (לא שם/מילה בודדת) - בכוונה בלי
-  // רמז אוצר מילים ספציפי (רמז מוטה מדי עלול "למשוך" תוכן ארוך וחופשי לכיוון לא נכון, ר' ההערה
-  // ב-signup_email_speak על התופעה הזו בדיוק) - משאירים את Whisper חופשי לתמלל בלי הטיה.
+  // רמז אוצר מילים ספציפי (רמז מוטה מדי עלול "למשוך" תוכן ארוך וחופשי לכיוון לא נכון) - משאירים
+  // את Whisper חופשי לתמלל בלי הטיה.
   return undefined;
 }
 
