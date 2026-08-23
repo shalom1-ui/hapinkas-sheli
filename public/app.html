@@ -112,6 +112,17 @@
   .bar-fill{height:100%; border-radius:6px;}
   .bar-amount{width:70px; flex-shrink:0; text-align:left; font-weight:700; font-size:12.5px;}
 
+  /* גרפים (SVG בלי ספרייה חיצונית - ר' renderTrendChart/renderCategoryDonut) */
+  .chart-legend{display:flex; gap:16px; margin-bottom:10px; flex-wrap:wrap;}
+  .chart-legend-item{display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text-secondary); font-weight:600;}
+  .chart-swatch{width:11px; height:11px; border-radius:3px; flex-shrink:0; display:inline-block;}
+  .donut-wrap{display:flex; align-items:center; gap:24px; flex-wrap:wrap;}
+  .chart-legend-list{flex:1; min-width:200px;}
+  .chart-legend-row{padding:6px 0; border-bottom:1px solid var(--border);}
+  .chart-legend-row:last-child{border-bottom:none;}
+  .chart-legend-row .chart-swatch{border-radius:50%;}
+  .chart-legend-amount{font-weight:700; font-size:12.5px; white-space:nowrap;}
+
   .empty-state{color:var(--text-muted); font-size:13.5px; padding:14px 4px;}
   .hint{font-size:12.5px; color:var(--text-muted); margin:-4px 0 12px; line-height:1.6;}
   select.plain, input.plain{padding:10px 12px; border:1.5px solid var(--border); border-radius:10px; font-size:14px; background:var(--surface);}
@@ -302,7 +313,12 @@
         <div class="card">
           <h3>דוח חודשי: הכנסות מול הוצאות</h3>
           <div class="hint" style="margin-bottom:10px">12 החודשים האחרונים שבהם היו תנועות. "יתרת חודש" היא הכנסות פחות הוצאות לאותו חודש בלבד (לא מצטבר).</div>
+          <div id="tx-trend-chart"></div>
           <div id="tx-trend-report"><div class="empty-state">אין עדיין מספיק נתונים לדוח</div></div>
+        </div>
+        <div class="card">
+          <h3>הוצאות לפי קטגוריה</h3>
+          <div id="tx-category-donut"><div class="empty-state">אין עדיין הוצאות להצגה</div></div>
         </div>
         <div class="card">
           <h3>כל התנועות</h3>
@@ -762,6 +778,7 @@ async function loadTransactionsTrend() {
   if (!el) return;
   if (!r.ok) return;
   const rows = (r.data.trend || []).filter(m => m.income > 0 || m.expense > 0);
+  renderTrendChart(rows);
   if (!rows.length) { el.innerHTML = '<div class="empty-state">אין עדיין מספיק נתונים לדוח</div>'; return; }
 
   const totalIncome = rows.reduce((sum, m) => sum + m.income, 0);
@@ -787,6 +804,135 @@ async function loadTransactionsTrend() {
       </tbody>
     </table>`;
 }
+
+// ---------- גרפים (SVG בלי ספרייה חיצונית, בדיוק כמו שאר הפרויקט) ----------
+// בקשת פיצ'ר: "בתנועות שיהיה גרף הכנסות מול הוצאות, או שיהיה עיגול עם צבעים" - שני הגרפים למטה
+// עונים על שני החלקים: renderTrendChart (עמודות מקובצות לפי חודש) ו-renderCategoryDonut (עיגול).
+// עיצוב הצבעים תואם למה שכבר קיים באפליקציה: --success ל"הכנסות", --danger ל"הוצאות" (בדיוק כמו
+// ה-pill/report-table הקיימים), ו-CATEGORY_COLORS לקטגוריות (אותה רשימה שכבר משמשת את "הוצאות
+// לפי קטגוריה" בסקירה הכללית) - נבדקו שני הצירופים מול scripts/validate_palette.js (מיומנות
+// dataviz) ועוברים את כל הבדיקות.
+
+// מחשב "צעד עגול" נעים לקווי הרשת (0/1,000/2,000 וכו') - לא צעד לפי הערך המקסימלי הגולמי הלא-עגול.
+function niceStep(maxVal) {
+  if (maxVal <= 0) return 1;
+  const rough = maxVal / 4;
+  const mag = Math.pow(10, Math.floor(Math.log10(rough)));
+  const norm = rough / mag;
+  return (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
+}
+
+// מלבן עם פינות מעוגלות רק למעלה ("קצה נתונים מעוגל, בסיס ישר" - ר' מיומנות dataviz) - SVG <rect>
+// לא תומך בעיגול חלקי של פינות, אז בונים נתיב ידני.
+function roundedTopRectPath(x, y, w, h, r) {
+  if (h <= 0) return '';
+  r = Math.min(r, w / 2, h);
+  return `M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h} Z`;
+}
+
+function renderTrendChart(rows) {
+  const el = document.getElementById('tx-trend-chart');
+  if (!el) return;
+  if (!rows.length) { el.innerHTML = ''; return; }
+
+  const maxVal = Math.max(1, ...rows.flatMap(m => [m.income, m.expense]));
+  const step = niceStep(maxVal);
+  const niceMax = Math.ceil(maxVal / step) * step;
+  const ticks = [];
+  for (let v = 0; v <= niceMax + 0.0001; v += step) ticks.push(Math.round(v));
+
+  const groupW = 58, barW = 18, barGap = 3, plotH = 150, padTop = 10, padBottom = 26, padLeft = 54, padRight = 10;
+  const W = padLeft + padRight + rows.length * groupW;
+  const H = padTop + plotH + padBottom;
+  const baseY = padTop + plotH;
+  const scaleY = v => plotH * (v / niceMax);
+
+  const gridLines = ticks.map(t => {
+    const y = baseY - scaleY(t);
+    return `<line x1="${padLeft}" y1="${y}" x2="${W - padRight}" y2="${y}" style="stroke:var(--border)" stroke-width="1"/>
+            <text x="${padLeft - 8}" y="${y + 4}" text-anchor="end" font-size="11" style="fill:var(--text-muted)">${t.toLocaleString('he-IL')}</text>`;
+  }).join('');
+
+  const bars = rows.map((m, i) => {
+    const gx = padLeft + i * groupW;
+    const incH = scaleY(m.income), expH = scaleY(m.expense);
+    const incX = gx + (groupW - (barW * 2 + barGap)) / 2;
+    const expX = incX + barW + barGap;
+    const [yy, mm] = String(m.month).split('-');
+    const shortLabel = mm ? `${mm}/${yy.slice(2)}` : m.month;
+    return `
+      <path d="${roundedTopRectPath(incX, baseY - incH, barW, incH, 4)}" style="fill:var(--success)"><title>${m.month} · הכנסות ₪${m.income.toLocaleString('he-IL')}</title></path>
+      <path d="${roundedTopRectPath(expX, baseY - expH, barW, expH, 4)}" style="fill:var(--danger)"><title>${m.month} · הוצאות ₪${m.expense.toLocaleString('he-IL')}</title></path>
+      <text x="${gx + groupW / 2}" y="${baseY + 18}" text-anchor="middle" font-size="11" style="fill:var(--text-secondary)">${shortLabel}</text>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="chart-legend">
+      <span class="chart-legend-item"><span class="chart-swatch" style="background:var(--success)"></span>הכנסות</span>
+      <span class="chart-legend-item"><span class="chart-swatch" style="background:var(--danger)"></span>הוצאות</span>
+    </div>
+    <div style="overflow-x:auto">
+      <svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" style="max-width:100%; display:block" role="img" aria-label="גרף הכנסות מול הוצאות לפי חודש">
+        <line x1="${padLeft}" y1="${baseY}" x2="${W - padRight}" y2="${baseY}" style="stroke:var(--border)" stroke-width="1"/>
+        ${gridLines}
+        ${bars}
+      </svg>
+    </div>`;
+}
+
+// עיגול (donut) עם ה"חור" באמצע נושא את סה"כ ההוצאות - ר' בקשת המשתמש "עיגול עם צבעים". מעל 6
+// קטגוריות מקפלים את השאר ל"אחר" (המלצת מיומנות dataviz - יותר מ-6 פרוסות נהיה קשה לקרוא בעין).
+function renderCategoryDonut(byCategory) {
+  const el = document.getElementById('tx-category-donut');
+  if (!el) return;
+  const sorted = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
+  if (!sorted.length) { el.innerHTML = '<div class="empty-state">אין עדיין הוצאות להצגה</div>'; return; }
+
+  let entries = sorted;
+  if (sorted.length > 6) {
+    const top = sorted.slice(0, 6);
+    const restSum = sorted.slice(6).reduce((s, [, v]) => s + v, 0);
+    const otherIdx = top.findIndex(([cat]) => cat === 'אחר');
+    if (otherIdx >= 0) top[otherIdx] = ['אחר', top[otherIdx][1] + restSum];
+    else top.push(['אחר', restSum]);
+    entries = top;
+  }
+
+  const total = entries.reduce((s, [, v]) => s + v, 0);
+  const R = 70, strokeW = 30, cx = 90, cy = 90, gap = 2;
+  const circumference = 2 * Math.PI * R;
+
+  let offset = 0;
+  const segments = entries.map(([cat, amt], i) => {
+    const frac = amt / total;
+    const len = Math.max(0, frac * circumference - (entries.length > 1 ? gap : 0));
+    const color = CATEGORY_COLORS[i % CATEGORY_COLORS.length];
+    const dashoffset = -offset;
+    offset += frac * circumference;
+    return `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" style="stroke:${color}" stroke-width="${strokeW}"
+              stroke-dasharray="${len} ${circumference - len}" stroke-dashoffset="${dashoffset}" transform="rotate(-90 ${cx} ${cy})">
+              <title>${cat} · ₪${amt.toLocaleString('he-IL')} (${Math.round(frac * 100)}%)</title>
+            </circle>`;
+  }).join('');
+
+  const legend = entries.map(([cat, amt], i) => `
+    <div class="chart-legend-item chart-legend-row">
+      <span class="chart-swatch" style="background:${CATEGORY_COLORS[i % CATEGORY_COLORS.length]}"></span>
+      <span style="flex:1">${cat}</span>
+      <span class="chart-legend-amount">₪${amt.toLocaleString('he-IL')} · ${Math.round(amt / total * 100)}%</span>
+    </div>`).join('');
+
+  el.innerHTML = `
+    <div class="donut-wrap">
+      <svg viewBox="0 0 180 180" width="180" height="180" role="img" aria-label="פילוח הוצאות לפי קטגוריה" style="flex-shrink:0">
+        ${segments}
+        <text x="90" y="85" text-anchor="middle" font-size="12" style="fill:var(--text-secondary)">סה"כ הוצאות</text>
+        <text x="90" y="105" text-anchor="middle" font-size="17" font-weight="700" style="fill:var(--text-primary)">₪${total.toLocaleString('he-IL')}</text>
+      </svg>
+      <div class="chart-legend-list">${legend}</div>
+    </div>`;
+}
+
 // "מילון" קטגוריות ההוצאה האישי - מוסיף לרשימת ההצעות הקבועה (category-suggestions) גם קטגוריות
 // מותאמות-אישית שהוזנו בעבר (למשל "תרופות"), בין אם הוזנו כאן באתר ובין אם הוכתבו בטלפון תחת
 // "אחר" (ר' routes/ivr.js case "expense_category_other") - אותו מילון בדיוק, קטגוריה אחת מכל צד
@@ -843,6 +989,7 @@ async function loadTransactions() {
         <div class="bar-amount">₪${amt}</div>
       </div>`).join('')
     : '<div class="empty-state">אין עדיין הוצאות להצגה</div>';
+  renderCategoryDonut(byCategory);
 }
 
 // ---------- MENTORING ----------
