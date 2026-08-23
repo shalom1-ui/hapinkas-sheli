@@ -1496,6 +1496,41 @@ async function run() {
       "containsHebrew מזהה נכון תמלול 'מוזה' בכתב לטיני/קירילי/ערבי (בלי אף אות עברית) - כמו שנצפה בפועל בבדיקה חיה עם gpt-4o-mini-transcribe"
     );
 
+    console.log("\n🔢 גם כשה-Whisper פעיל, תפריט הראשי ('ניהול חשבונות'/'חונכות' וכו') נשאר עם קיצור הקשה");
+    // משוב אמיתי ממשתמש בבדיקה חיה: "קטגוריית ניהול חשבון חונכות השארת רק בזיהוי דיבור, אני צריך
+    // אופציה של הקשות" - מדמים Whisper פעיל (בלי מפתחות אמיתיים) ומוודאים ש-main_menu/balance_next_action
+    // לא עוברים לשלוחת ההקלטה הנפרדת (שם ימות חוסמת הקשות), בעוד ששלבי טקסט חופשי אמיתיים (כמו שם
+    // בהרשמה) כן ממשיכים ליהנות מדיוק ה-Whisper כרגיל.
+    const yemotRoutes = require("../src/routes/yemot");
+    assert(
+      yemotRoutes.MENU_DIGIT_FREE_TEXT_STATES.has("main_menu") && yemotRoutes.MENU_DIGIT_FREE_TEXT_STATES.has("balance_next_action"),
+      "MENU_DIGIT_FREE_TEXT_STATES כולל את שני השלבים עם קיצור הקשה שימושי: תפריט ראשי, ותפריט אחרי יתרה"
+    );
+    // הערה: הבדיקות כאן מריצות את השרת האמיתי כתהליך-בן נפרד (child_process.spawn, ר' תחילת הקובץ) -
+    // "זיוף" isConfigured() בתהליך הבדיקות עצמו לא משפיע על תהליך השרת שמטפל בפועל בבקשות ה-HTTP, אז
+    // לא ניתן לבדוק כאן את תגובת הפרוטוקול המלאה מקצה-לקצה בלי להקים שרת-בדיקה נפרד עם משתני סביבה
+    // מזויפים (וסיכון לנסות פנייה רשתית אמיתית ל-OpenAI). לכן בודקים ישירות את לוגיקת ה-shouldUseRecordExtension
+    // המיוצאת - זו הפונקציה היחידה שקובעת את ההתנהגות הזו, אז בדיקת יחידה עליה מכסה את התיקון במלואו.
+    const originalIsConfigured = speechToText.isConfigured;
+    speechToText.isConfigured = () => true; // מדמים Whisper פעיל, בלי לגעת במשתני הסביבה האמיתיים
+    try {
+      assert(
+        yemotRoutes.shouldUseRecordExtension("main_menu") === false && yemotRoutes.shouldUseRecordExtension("balance_next_action") === false,
+        "גם כש-Whisper פעיל, main_menu ו-balance_next_action לא עוברים לשלוחת ההקלטה - קיצור ההקשה (1-6, 1/2) נשאר זמין"
+      );
+      assert(
+        yemotRoutes.shouldUseRecordExtension("signup_name") === true && yemotRoutes.shouldUseRecordExtension("therapist_note") === true,
+        "שלבי טקסט חופשי אמיתיים (שם בהרשמה, תוכן דיווח) עדיין עוברים לשלוחת ההקלטה כשה-Whisper פעיל, כי אין בהם קיצור הקשה להפסיד"
+      );
+    } finally {
+      speechToText.isConfigured = originalIsConfigured; // חובה להחזיר, כדי לא להשפיע על שאר הבדיקות
+    }
+    assert(speechToText.isConfigured() === false, "אחרי שחזור isConfigured() המקורי, שאר הבדיקות ממשיכות לרוץ במצב MOCK הרגיל");
+    assert(
+      yemotRoutes.shouldUseRecordExtension("main_menu") === false && yemotRoutes.shouldUseRecordExtension("signup_name") === false,
+      "כש-Whisper לא פעיל (מצב הבדיקות הרגיל), אף שלב לא עובר לשלוחת ההקלטה - כולם נשארים במצב voice רגיל"
+    );
+
   } catch (err) {
     failed++;
     console.error("❌ שגיאה בלתי צפויה בבדיקות:", err);

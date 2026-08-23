@@ -124,6 +124,20 @@ function whisperRecordModeActive() {
   return WHISPER_RECORD_MODE_ENABLED && speechToText.isConfigured();
 }
 
+// תוקן (משוב אמיתי ממשתמש בבדיקה חיה: "קטגוריית ניהול חשבון חונכות השארת רק בזיהוי דיבור, אני
+// צריך אופציה של הקשות") - "main_menu" ו-"balance_next_action" הם שני השלבים היחידים ב-FREE_TEXT_STATES
+// שיש בהם קיצור הקשה אמין ושימושי (1-6 בתפריט הראשי, 1/2 אחרי יתרה) - לא רק "טקסט חופשי גרידא".
+// כשמעבירים אותם לשלוחת ההקלטה הנפרדת של Whisper (ר' freeTextPrompt למטה), ימות חוסמת כל הקשה
+// לגמרי תוך כדי ההקלטה (מגבלה של ימות עצמו) - כך שקיצור ההקשה נעלם בפועל בכל פעם שה-Whisper פעיל,
+// גם אם המתקשר מעדיף להקיש ולא לדבר בכלל. הפתרון: השלבים האלה **תמיד** נשארים במצב הזיהוי הרגיל
+// של ימות (voice, עם quiet_max מכוון - ר' sayAndReadStt) ולא עוברים לשלוחת ההקלטה - גם כשה-Whisper
+// מוגדר ופעיל בשאר השלבים (שם בהרשמה, תוכן דיווח חופשי וכו', ששם ממילא אין קיצור הקשה להפסיד).
+const MENU_DIGIT_FREE_TEXT_STATES = new Set(["main_menu", "balance_next_action"]);
+
+function shouldUseRecordExtension(state) {
+  return whisperRecordModeActive() && !MENU_DIGIT_FREE_TEXT_STATES.has(state);
+}
+
 // מייצר draft חדש לשמירה: אם עוברים למצב שדורש הקלטה נפרדת (whisper מופעל) - מסמנים
 // "_recording: true" כדי שכשהשיחה תחזור אלינו משלוחת ההקלטה (ר' reattachRecordingCall/הבדיקה
 // בתחילת הטיפול בבקשה למטה) נדע לתמלל את ההקלטה במקום להתייחס לשדה "speech" הרגיל. אם לא -
@@ -138,8 +152,8 @@ function withRecordingFlag(draft, active) {
   return d;
 }
 
-function freeTextPrompt(callId, text_) {
-  if (whisperRecordModeActive()) {
+function freeTextPrompt(callId, text_, state) {
+  if (shouldUseRecordExtension(state)) {
     const recordExt = process.env.YEMOT_RECORD_EXTENSION;
     return sayAndGoToRecordExtension(`${text_}${RECORD_CONFIRM_HINT}`, recordExt);
   }
@@ -223,23 +237,22 @@ function register(router) {
 
     // ---------- תחילת שיחה חדשה: מזהים משתמש לפי מספר טלפון ----------
     if (!call) {
-      const whisperOn = whisperRecordModeActive();
       const user = findUserByPhone(v.ApiPhone);
       if (!user) {
-        upsertCall(callId, null, "signup_name", withRecordingFlag({ phone: v.ApiPhone }, whisperOn), null, v.ApiPhone);
+        upsertCall(callId, null, "signup_name", withRecordingFlag({ phone: v.ApiPhone }, shouldUseRecordExtension("signup_name")), null, v.ApiPhone);
         return text(
           ctx.res,
           200,
-          freeTextPrompt(callId, `${OPENING_GREETING}מספר הטלפון שלך אינו מזוהה במערכת. אפשר להירשם עכשיו ישירות בטלפון, בלי לגשת לאתר. מה השם המלא שלכם?`)
+          freeTextPrompt(callId, `${OPENING_GREETING}מספר הטלפון שלך אינו מזוהה במערכת. אפשר להירשם עכשיו ישירות בטלפון, בלי לגשת לאתר. מה השם המלא שלכם?`, "signup_name")
         );
       }
 
-      upsertCall(callId, user.id, "main_menu", withRecordingFlag({}, whisperOn), null, v.ApiPhone);
-      const menuVoiceOnly = whisperOn;
+      upsertCall(callId, user.id, "main_menu", withRecordingFlag({}, shouldUseRecordExtension("main_menu")), null, v.ApiPhone);
+      const menuVoiceOnly = shouldUseRecordExtension("main_menu");
       return text(
         ctx.res,
         200,
-        freeTextPrompt(callId, `${OPENING_GREETING}${mainMenuPrompt(user.full_name, { digitConfirm: true, menuVoiceOnly })}`)
+        freeTextPrompt(callId, `${OPENING_GREETING}${mainMenuPrompt(user.full_name, { digitConfirm: true, menuVoiceOnly })}`, "main_menu")
       );
     }
 
@@ -272,16 +285,16 @@ function register(router) {
 
     // digitConfirm: true - בימות אפשר להקיש (כולל סולמית) תוך כדי זיהוי דיבור בלי לחסום את זה
     // (ר' services/yemot.js / sayAndReadStt), אז מוסיפים אפשרות אישור מהירה בהקשה בכל שאלת "אמרו כן לאישור".
-    // menuVoiceOnly: ר' הערה מפורטת ב-mainMenuPrompt (routes/ivr.js) - רק כשזה true מוסתרת ההזכרה
-    // המילולית של הקשת 1-6 בתפריט הראשי (כי היא לא זמינה במצב הקלטה של Whisper); לשאר שאלות האישור
-    // בשיחה (שאינן מצב הקלטה) זה לא משפיע - הן ממשיכות להשתמש ב-digitConfirm הרגיל.
-    const opts = { digitConfirm: true, menuVoiceOnly: whisperRecordModeActive() };
+    // menuVoiceOnly: ר' הערה מפורטת ב-mainMenuPrompt (routes/ivr.js) ו-MENU_DIGIT_FREE_TEXT_STATES
+    // למעלה - main_menu כבר לא עובר למצב הקלטה גולמי בכלל (כדי לא לאבד את קיצור ההקשה 1-6), אז זה
+    // תמיד false עכשיו - ההזכרה המילולית של קיצור ההקשה תמיד מופיעה.
+    const opts = { digitConfirm: true, menuVoiceOnly: shouldUseRecordExtension("main_menu") };
     const result = call.user_id
       ? await advance(call.state, speech, draft, db.prepare("SELECT * FROM users WHERE id = ?").get(call.user_id), opts)
       : await advanceSignup(call.state, speech, draft, opts);
 
     const goingToFreeText = !result.hangup && !DIGIT_ENTRY_STATES.has(result.nextState) && FREE_TEXT_STATES.has(result.nextState);
-    const draftToSave = withRecordingFlag(result.draft || draft, goingToFreeText && whisperRecordModeActive());
+    const draftToSave = withRecordingFlag(result.draft || draft, goingToFreeText && shouldUseRecordExtension(result.nextState));
 
     upsertCall(callId, result.newUserId || call.user_id, result.nextState, draftToSave, result.outcome, v.ApiPhone);
 
@@ -304,7 +317,7 @@ function register(router) {
       return text(ctx.res, 200, sayAndReadDigits(result.text, 1));
     }
     if (FREE_TEXT_STATES.has(result.nextState)) {
-      return text(ctx.res, 200, freeTextPrompt(callId, result.text));
+      return text(ctx.res, 200, freeTextPrompt(callId, result.text, result.nextState));
     }
     return text(ctx.res, 200, sayAndReadStt(result.text));
   });
@@ -412,4 +425,10 @@ function phoneCandidates(rawPhone) {
   ).filter(Boolean);
 }
 
-module.exports = { register };
+module.exports = {
+  register,
+  // מיוצאים כדי לאפשר בדיקה ישירה של הלוגיקה (ר' shouldUseRecordExtension) בלי צורך במפתחות Whisper
+  // אמיתיים - הבדיקות "מזייפות" זמנית את speechToText.isConfigured() כדי לבדוק את שני המצבים.
+  shouldUseRecordExtension,
+  MENU_DIGIT_FREE_TEXT_STATES,
+};
