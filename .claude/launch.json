@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hapinkas-sheli-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["src/server.js"],
+      "port": 3050,
+      "env": { "PORT": "3050" }
+    }
+  ]
+}

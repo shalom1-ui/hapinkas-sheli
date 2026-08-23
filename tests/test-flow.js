@@ -6,6 +6,7 @@
 const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
+const { buildTestXlsx } = require("./helpers/buildTestXlsx");
 
 const TEST_PORT = 3999;
 const BASE = `http://localhost:${TEST_PORT}`;
@@ -331,6 +332,109 @@ async function run() {
     assert(listAfterTithe.data.tithe.paid === 120, `'כבר ניתן' עודכן לפי הוצאת המעשרות בלבד, לא כולל צדקה (${listAfterTithe.data.tithe.paid} === 120)`);
     assert(listAfterTithe.data.tithe.remaining === 180, `'נותר לתת' חושב נכון: חובה 300 פחות 120 שכבר ניתנו = 180 (${listAfterTithe.data.tithe.remaining} === 180)`);
     assert(listAfterTithe.data.byCategory["צדקה"] === 50, "הוצאת הצדקה מופיעה בפילוח הוצאות לפי קטגוריה בנפרד");
+
+    console.log("\n📥 ייבוא אקסל/CSV של דף בנק - זיהוי עמודות זכות/חובה אוטומטי");
+    // משוב אמיתי ממשתמש: "רוצה להכניס אקסל של דפי בנק או דפי כרטיס אשראי, שיוכל להוריד אותו
+    // והמערכת תכניס את זה להכנסות והוצאות". ר' src/lib/xlsxParser.js, src/lib/importMapping.js,
+    // src/routes/importTransactions.js.
+    const bankRows = [
+      ["תאריך", "תיאור פעולה", "זכות", "חובה"],
+      [45658, "משכורת ינואר", 5000, 0],   // 2025-01-01, ר' xlsxParser excelSerialToIsoDate
+      [45660, "סופר פארם", 0, 120.5],     // 2025-01-03
+      [45661, "שורה בלי תנועה בפועל", 0, 0], // צריכה להידלג - שתי העמודות אפס
+    ];
+    const bankXlsxBuf = buildTestXlsx(bankRows, 0);
+    const bankImportPreview = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: bankXlsxBuf.toString("base64"), filename: "bank-statement.xlsx", source_type: "bank" },
+      token
+    );
+    assert(bankImportPreview.status === 200, `תצוגה מקדימה של ייבוא דף בנק (xlsx) הצליחה (סטטוס ${bankImportPreview.status})`);
+    assert(bankImportPreview.data.transactions.length === 2, `זוהו בדיוק 2 תנועות תקינות מתוך 3 שורות (השורה עם 0/0 דולגה) (${bankImportPreview.data.transactions.length})`);
+    assert(
+      bankImportPreview.data.detectedColumns.creditCol === 2 && bankImportPreview.data.detectedColumns.debitCol === 3,
+      "עמודות 'זכות'/'חובה' זוהו אוטומטית לפי כותרות העמודות בעברית"
+    );
+    const bankIncomeRow = bankImportPreview.data.transactions.find(t => t.amount === 5000);
+    assert(
+      bankIncomeRow && bankIncomeRow.type === "income" && bankIncomeRow.date === "2025-01-01" && bankIncomeRow.description === "משכורת ינואר",
+      "שורת 'זכות' זוהתה כהכנסה, עם התאריך הנכון (הומר ממספר סידורי של אקסל) והתיאור הנכון"
+    );
+    const bankExpenseRow = bankImportPreview.data.transactions.find(t => t.amount === 120.5);
+    assert(bankExpenseRow && bankExpenseRow.type === "expense" && bankExpenseRow.date === "2025-01-03", "שורת 'חובה' זוהתה כהוצאה, עם התאריך הנכון");
+    assert(
+      bankImportPreview.data.transactions.every(t => t.alreadyImported === false),
+      "לפני הייבוא בפועל, אף תנועה לא מסומנת כ'כבר יובאה'"
+    );
+
+    const bankImportCommit = await api("POST", "/api/transactions/import/commit", { transactions: bankImportPreview.data.transactions }, token);
+    assert(
+      bankImportCommit.status === 201 && bankImportCommit.data.imported === 2 && bankImportCommit.data.skippedDuplicates === 0,
+      `שמירת התנועות שאושרו בתצוגה המקדימה הצליחה, שתיהן נשמרו בפעם הראשונה (${JSON.stringify(bankImportCommit.data)})`
+    );
+    const afterBankImport = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterBankImport.data.transactions.some(t => t.source === "import" && t.amount === 5000 && t.type === "income" && t.note === "משכורת ינואר") &&
+      afterBankImport.data.transactions.some(t => t.source === "import" && t.amount === 120.5 && t.type === "expense"),
+      "התנועות שיובאו נשמרו במסד הנתונים עם source='import' והתיאור המקורי כ-note"
+    );
+
+    console.log("\n📥 ייבוא אקסל - מניעת כפילויות (אותו קובץ פעמיים)");
+    const bankImportPreviewAgain = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: bankXlsxBuf.toString("base64"), filename: "bank-statement.xlsx", source_type: "bank" },
+      token
+    );
+    assert(
+      bankImportPreviewAgain.data.transactions.every(t => t.alreadyImported === true),
+      "בהעלאה חוזרת של אותו קובץ בדיוק, כל התנועות כבר מסומנות כ'כבר יובאו' בתצוגה המקדימה"
+    );
+    const bankImportCommitAgain = await api("POST", "/api/transactions/import/commit", { transactions: bankImportPreviewAgain.data.transactions }, token);
+    assert(
+      bankImportCommitAgain.data.imported === 0 && bankImportCommitAgain.data.skippedDuplicates === 2,
+      `ניסיון לייבא את אותו קובץ שוב לא יוצר תנועות כפולות - שתיהן דולגו כ'כבר קיים' (${JSON.stringify(bankImportCommitAgain.data)})`
+    );
+    const afterBankImportAgain = await api("GET", "/api/transactions", null, token);
+    assert(
+      afterBankImportAgain.data.transactions.filter(t => t.source === "import" && t.amount === 5000).length === 1,
+      "אחרי הניסיון החוזר עדיין קיימת רק תנועה אחת בודדת של אותה משכורת - לא נוצרה כפילות במסד הנתונים"
+    );
+
+    console.log("\n📥 ייבוא CSV של כרטיס אשראי - עמודת סכום יחידה, זיכוי מזוהה כהכנסה");
+    const cardCsvText =
+      "תאריך,תיאור,סכום\n" +
+      "05/02/2026,סופרמרקט,250.90\n" +
+      "06/02/2026,זיכוי החזר,-41.5\n";
+    const cardImportPreview = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: Buffer.from(cardCsvText, "utf8").toString("base64"), filename: "card-statement.csv", source_type: "card" },
+      token
+    );
+    assert(cardImportPreview.status === 200 && cardImportPreview.data.transactions.length === 2, "תצוגה מקדימה של ייבוא כרטיס אשראי (CSV) זיהתה 2 תנועות");
+    const cardCharge = cardImportPreview.data.transactions.find(t => t.amount === 250.9);
+    assert(cardCharge && cardCharge.type === "expense" && cardCharge.date === "2026-02-05", "חיוב רגיל בכרטיס אשראי (סכום חיובי) זוהה כהוצאה, עם תאריך dd/mm/yyyy שהומר נכון ל-ISO");
+    const cardCredit = cardImportPreview.data.transactions.find(t => t.amount === 41.5);
+    assert(cardCredit && cardCredit.type === "income", "שורת זיכוי בכרטיס אשראי (סכום שלילי) זוהתה כהכנסה, לא כהוצאה");
+    const cardImportCommit = await api(
+      "POST", "/api/transactions/import/commit",
+      { transactions: cardImportPreview.data.transactions.map(t => ({ ...t, category: "אחר" })) },
+      token
+    );
+    assert(cardImportCommit.data.imported === 2, "שתי תנועות הכרטיס נשמרו בהצלחה עם קטגוריה שנבחרה בתצוגה המקדימה");
+
+    console.log("\n📥 ייבוא אקסל - טיפול בשגיאות (קובץ לא תקין / בלי עמודות מוכרות)");
+    const badBase64Import = await api("POST", "/api/transactions/import/parse", { data_base64: "not-a-real-file!!", filename: "x.xlsx", source_type: "bank" }, token);
+    assert(badBase64Import.status === 400, "קובץ xlsx לא תקין (לא ZIP אמיתי) מחזיר שגיאה ברורה, לא קורס");
+    const noHeadersCsv = "שלום,עולם\nמשהו,אחר\n";
+    const noHeadersImport = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: Buffer.from(noHeadersCsv, "utf8").toString("base64"), filename: "x.csv", source_type: "bank" },
+      token
+    );
+    assert(
+      noHeadersImport.status === 400 && /תאריך|כותר/.test(noHeadersImport.data.error),
+      "קובץ בלי עמודות מוכרות (תאריך/סכום/זכות/חובה) מחזיר הודעת שגיאה ברורה במקום לנסות לייבא זבל"
+    );
 
     console.log("\n🎓 חונכות ותלמידים");
     const student = await api("POST", "/api/students", { name: "תלמיד בדיקה" }, token);

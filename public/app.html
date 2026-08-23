@@ -279,6 +279,27 @@
           <div class="hint">טיפ: לרישום מעשר שנתתם, בחרו סוג "הוצאה" וקטגוריה "מעשרות" - זה יתעדכן אוטומטית בסקירה הכללית.</div>
         </div>
         <div class="card">
+          <h3>ייבוא תנועות מאקסל / CSV</h3>
+          <div class="hint" style="margin-bottom:10px">מעלים קובץ שהורדתם מהבנק או מחברת כרטיס האשראי (xlsx/csv) - המערכת מזהה אוטומטית את עמודות התאריך/סכום/תיאור, ומציגה תצוגה מקדימה לאישור. שום תנועה לא נשמרת לפני שלוחצים "ייבוא" בפועל, ואפשר להעלות את אותו קובץ כמה פעמים בלי ליצור כפילויות.</div>
+          <div class="row">
+            <input id="imp_file" class="plain" type="file" accept=".xlsx,.csv">
+            <select id="imp_source_type" class="plain">
+              <option value="bank">דף בנק (עו״ש)</option>
+              <option value="card">דף כרטיס אשראי</option>
+            </select>
+            <button class="btn secondary" onclick="previewImport()">תצוגה מקדימה</button>
+          </div>
+          <div id="import-preview-area" style="display:none; margin-top:14px">
+            <div class="row" style="margin-bottom:10px">
+              <span class="hint" id="import-preview-summary"></span>
+              <input id="imp_bulk_category" class="plain" placeholder="קטגוריה להחלה על הכל" list="category-suggestions">
+              <button class="btn secondary" onclick="applyBulkCategory()">החל על כל השורות המסומנות</button>
+            </div>
+            <div id="import-preview-table" style="overflow-x:auto"></div>
+            <button class="btn" style="margin-top:10px" onclick="commitImport()">ייבוא השורות המסומנות</button>
+          </div>
+        </div>
+        <div class="card">
           <h3>דוח חודשי: הכנסות מול הוצאות</h3>
           <div class="hint" style="margin-bottom:10px">12 החודשים האחרונים שבהם היו תנועות. "יתרת חודש" היא הכנסות פחות הוצאות לאותו חודש בלבד (לא מצטבר).</div>
           <div id="tx-trend-report"><div class="empty-state">אין עדיין מספיק נתונים לדוח</div></div>
@@ -653,6 +674,85 @@ async function addTransaction() {
   if (!amount) { toast('יש להזין סכום', 'error'); return; }
   const r = await api('POST', '/api/transactions', { type, amount, category: category || undefined });
   if (r.ok) { toast('התנועה נוספה בהצלחה', 'success'); document.getElementById('t_amount').value = ''; document.getElementById('t_category').value = ''; loadTransactions(); }
+}
+
+// ---------- ייבוא תנועות מאקסל/CSV (דף בנק/כרטיס אשראי) ----------
+// משוב אמיתי ממשתמש: "רוצה להכניס אקסל של דפי בנק או דפי כרטיס אשראי, שיוכל להוריד אותו והמערכת
+// תכניס את זה להכנסות והוצאות". שני שלבים בכוונה (תצוגה מקדימה -> ייבוא) - ר' src/routes/importTransactions.js.
+let importPreviewRows = []; // הרשימה האחרונה שהתקבלה מהשרת בתצוגה המקדימה, כולל עריכות המשתמש (סוג/קטגוריה/סימון)
+
+async function previewImport() {
+  const fileInput = document.getElementById('imp_file');
+  if (!fileInput.files.length) { toast('יש לבחור קובץ קודם', 'error'); return; }
+  const file = fileInput.files[0];
+  const sourceType = document.getElementById('imp_source_type').value;
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const r = await api('POST', '/api/transactions/import/parse', { data_base64: dataUrl, filename: file.name, source_type: sourceType });
+  if (!r.ok) return;
+  // שורה "מסומנת" כברירת מחדל רק אם עוד לא יובאה בעבר (alreadyImported) - כדי לא לעודד ייבוא כפול בטעות.
+  importPreviewRows = r.data.transactions.map(t => ({ ...t, included: !t.alreadyImported }));
+  renderImportPreview(r.data.skippedRowsCount);
+}
+
+function renderImportPreview(skippedRowsCount) {
+  const area = document.getElementById('import-preview-area');
+  const summary = document.getElementById('import-preview-summary');
+  const tableEl = document.getElementById('import-preview-table');
+  area.style.display = 'block';
+
+  const alreadyCount = importPreviewRows.filter(t => t.alreadyImported).length;
+  summary.textContent = `זוהו ${importPreviewRows.length} תנועות` +
+    (alreadyCount ? ` (${alreadyCount} מהן כבר יובאו בעבר ולא מסומנות)` : '') +
+    (skippedRowsCount ? ` · ${skippedRowsCount} שורות בקובץ דולגו (לא זוהו כתנועה תקינה)` : '');
+
+  if (!importPreviewRows.length) { tableEl.innerHTML = '<div class="empty-state">לא נמצאו תנועות בקובץ</div>'; return; }
+
+  tableEl.innerHTML = `
+    <table class="report-table">
+      <thead><tr><th></th><th>תאריך</th><th>תיאור</th><th>סכום</th><th>סוג</th><th>קטגוריה</th></tr></thead>
+      <tbody>
+        ${importPreviewRows.map((t, i) => `
+          <tr style="${t.alreadyImported ? 'opacity:.55' : ''}">
+            <td><input type="checkbox" ${t.included ? 'checked' : ''} onchange="importPreviewRows[${i}].included = this.checked"></td>
+            <td>${t.date}</td>
+            <td>${(t.description || '').replace(/</g, '&lt;')}</td>
+            <td class="num ${t.type}">₪${t.amount}</td>
+            <td>
+              <select class="plain" onchange="importPreviewRows[${i}].type = this.value">
+                <option value="expense" ${t.type === 'expense' ? 'selected' : ''}>הוצאה</option>
+                <option value="income" ${t.type === 'income' ? 'selected' : ''}>הכנסה</option>
+              </select>
+            </td>
+            <td><input class="plain" list="category-suggestions" value="${(t.category || '').replace(/"/g, '&quot;')}" onchange="importPreviewRows[${i}].category = this.value"></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+    ${alreadyCount ? '<div class="hint" style="margin-top:8px">שורות מוצללות כבר יובאו בעבר - אפשר עדיין לסמן ולייבא אותן שוב במפורש אם צריך.</div>' : ''}`;
+}
+
+function applyBulkCategory() {
+  const value = document.getElementById('imp_bulk_category').value.trim();
+  if (!value) { toast('יש להזין קטגוריה קודם', 'error'); return; }
+  importPreviewRows.forEach(t => { if (t.included) t.category = value; });
+  renderImportPreview(0);
+}
+
+async function commitImport() {
+  const selected = importPreviewRows.filter(t => t.included);
+  if (!selected.length) { toast('לא סומנה אף שורה לייבוא', 'error'); return; }
+  const r = await api('POST', '/api/transactions/import/commit', { transactions: selected });
+  if (!r.ok) return;
+  const { imported, skippedDuplicates, skippedInvalid } = r.data;
+  toast(`יובאו ${imported} תנועות` + (skippedDuplicates ? ` · ${skippedDuplicates} דולגו ככבר-קיימות` : '') + (skippedInvalid ? ` · ${skippedInvalid} דולגו (לא תקינות)` : ''), 'success');
+  document.getElementById('import-preview-area').style.display = 'none';
+  document.getElementById('imp_file').value = '';
+  importPreviewRows = [];
+  loadTransactions();
 }
 // דוח חודשי מסודר: הכנסות מול הוצאות (בנוסף לרשימת התנועות הגולמית) - מבוסס על /api/transactions/trend,
 // שכבר מחשב בשרת סכומי הכנסה/הוצאה לכל אחד מ-12 החודשים האחרונים.

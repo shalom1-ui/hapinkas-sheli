@@ -69,7 +69,11 @@ db.exec(`
     amount REAL NOT NULL,
     category TEXT,
     note TEXT,
-    source TEXT NOT NULL DEFAULT 'web',-- phone | web
+    source TEXT NOT NULL DEFAULT 'web',-- phone | web | import
+    -- טביעת-אצבע (hash) של תנועה שיובאה מקובץ אקסל/CSV (ר' routes/importTransactions.js) - מאפשרת
+    -- לזהות ולדלג על תנועות שכבר יובאו בעבר אם אותו קובץ (או קובץ חופף) מועלה שוב. NULL לתנועות
+    -- רגילות (טלפון/אתר) שלא הגיעו מייבוא.
+    import_hash TEXT,
     occurred_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -229,12 +233,23 @@ for (const alterSql of [
   // אימות טלפוני חינמי דרך ימות (ר' services/yemotAuth.js) - ר' הערה מפורטת ב-CREATE TABLE למעלה.
   "ALTER TABLE password_resets ADD COLUMN verify_via TEXT",
   "ALTER TABLE admin_claim_requests ADD COLUMN verify_via TEXT",
+  // "ייבוא אקסל" (ר' routes/importTransactions.js) - זיהוי כפילויות בין ייבוא לייבוא.
+  "ALTER TABLE transactions ADD COLUMN import_hash TEXT",
 ]) {
   try {
     db.exec(alterSql);
   } catch (e) {
     if (!/duplicate column/i.test(e.message)) throw e; // מתעלמים רק אם העמודה כבר קיימת
   }
+}
+
+// אינדקס ייחודי חלקי (רק על שורות עם import_hash) - חוסם כפילויות מייבוא באופן אמין גם אם שתי
+// בקשות /api/transactions/import/commit רצות בו-זמנית (בדיקת "האם כבר קיים" באפליקציה לבדה לא
+// מספיקה נגד מרוץ תזמון - ר' routes/importTransactions.js).
+try {
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_import_hash ON transactions(user_id, import_hash) WHERE import_hash IS NOT NULL");
+} catch (e) {
+  console.error("שגיאה ביצירת אינדקס import_hash (לא קריטי - בדיקת הכפילות באפליקציה עדיין פעילה):", e.message);
 }
 
 // זריעת תוכניות ברירת מחדל אם עדיין לא קיימות
