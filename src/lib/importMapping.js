@@ -29,6 +29,21 @@ function findColumn(headerRow, keywords) {
   return -1;
 }
 
+// כמו findColumn, אבל כשיש כמה עמודות שתואמות (למשל כרטיס אשראי עם "סכום עסקה" *וגם* "סכום חיוב" -
+// ר' pdfParser.js, נבדק מול קובץ אמיתי) מעדיפים את זו שמכילה גם אחת ממילות ה-preferKeywords.
+// "סכום חיוב" (הסכום שבפועל מחויב החודש) עדיף בבירור על "סכום עסקה" (הסכום המקורי - יכול לכלול
+// תשלומים עתידיים/המרת מטבע שלא רלוונטיים לחודש הנוכחי) לצורך מעקב תקציב.
+function findColumnPreferred(headerRow, keywords, preferKeywords) {
+  let firstMatch = -1;
+  for (let i = 0; i < headerRow.length; i++) {
+    const cell = normalizeHeaderCell(headerRow[i]);
+    if (!cell || !keywords.some(k => cell.includes(k.toLowerCase()))) continue;
+    if (firstMatch < 0) firstMatch = i;
+    if (preferKeywords.some(k => cell.includes(k.toLowerCase()))) return i;
+  }
+  return firstMatch;
+}
+
 // מזהה איזו שורה בקובץ היא שורת הכותרות: סורקים את 15 השורות הראשונות (חלק מהבנקים מוסיפים כמה
 // שורות כותרת/תקציר לפני טבלת הנתונים בפועל) ובוחרים את זו עם הכי הרבה התאמות מילות-מפתח, כל עוד
 // יש לפחות 2 התאמות (כדי לא "לתפוס" בטעות שורת נתונים רגילה).
@@ -54,20 +69,26 @@ function detectColumns(headerRow) {
     descCol: findColumn(headerRow, HEADER_KEYWORDS.description),
     creditCol: findColumn(headerRow, HEADER_KEYWORDS.credit),
     debitCol: findColumn(headerRow, HEADER_KEYWORDS.debit),
-    amountCol: findColumn(headerRow, HEADER_KEYWORDS.amount),
+    // מעדיפים "סכום חיוב" (הסכום שבפועל מחויב) על "סכום עסקה" (הסכום המקורי) אם שתיהן קיימות - ר' הערה ב-findColumnPreferred.
+    amountCol: findColumnPreferred(headerRow, HEADER_KEYWORDS.amount, ["חיוב"]),
     balanceCol: findColumn(headerRow, HEADER_KEYWORDS.balance),
   };
 }
 
-// מנקה סכום שהגיע כטקסט חופשי (מ-CSV, או תא אקסל שמעוצב כטקסט): מסיר סימני מטבע/פסיקי אלפים/רווחים,
-// ומטפל בסוגריים כסימון שלילי מקובל בדוחות חשבונאיים - "(120.00)" == -120.
+// מנקה סכום שהגיע כטקסט חופשי (מ-CSV, תא אקסל שמעוצב כטקסט, או שורת PDF שחולצה): מסיר סימני
+// מטבע/פסיקי אלפים/רווחים, ומטפל בסוגריים כסימון שלילי מקובל בדוחות חשבונאיים - "(120.00)" == -120.
+// תוקן (נבדק מול קובץ PDF אמיתי - כאל): שולפים רק את *הטוקן המספרי הראשון* בתוך הטקסט, לא ממירים
+// את כל המחרוזת למספר - כי שחזור טקסט מ-PDF לפעמים מצרף לשורה גם הערה טקסטואלית סמוכה (כמו "הנחה
+// קבועה") שנופלת קרוב מדי בקואורדינטות ל-y של שורת הסכום עצמה. חיפוש הטוקן המספרי הראשון מתעלם
+// מהזבל הזה בלי לאבד את הסכום האמיתי.
 function parseAmountValue(raw) {
   if (typeof raw === "number") return raw;
-  let s = String(raw ?? "").trim();
+  const s = String(raw ?? "").trim();
   if (!s) return NaN;
   const negativeByParens = /^\(.*\)$/.test(s);
-  s = s.replace(/[()]/g, "").replace(/[₪$€,\s]/g, "");
-  const n = Number(s);
+  const m = /-?[\d,]*\d(?:\.\d+)?/.exec(s.replace(/[₪$€]/g, ""));
+  if (!m) return NaN;
+  const n = Number(m[0].replace(/,/g, ""));
   if (Number.isNaN(n)) return NaN;
   return negativeByParens ? -Math.abs(n) : n;
 }
@@ -118,7 +139,11 @@ function rowsToTransactions(rows, sourceType) {
 
     let amount = NaN;
     let type = null;
-    if (cols.creditCol >= 0 || cols.debitCol >= 0) {
+    // תוקן (נבדק מול קובץ אמיתי - כאל): דורשים ששתי העמודות זכות/חובה יימצאו *יחד* כדי לבחור
+    // במסלול הזה - זה מבנה עו"ש אמיתי (יש תמיד את שתיהן, כסף או נכנס או יוצא). אם נמצאה רק אחת מהן
+    // בלבד (למשל "סכום חיוב" בכרטיס אשראי - שם "חיוב" תואם גם למילות המפתח של debit במקרה), זה כנראה
+    // באמת עמודת סכום בודדת (ר' amountCol/findColumnPreferred למעלה) ולא זוג זכות/חובה אמיתי.
+    if (cols.creditCol >= 0 && cols.debitCol >= 0) {
       const credit = cols.creditCol >= 0 ? parseAmountValue(row[cols.creditCol]) : 0;
       const debit = cols.debitCol >= 0 ? parseAmountValue(row[cols.debitCol]) : 0;
       if (credit > 0) { amount = credit; type = "income"; }

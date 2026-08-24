@@ -7,6 +7,7 @@ const path = require("path");
 const fs = require("fs");
 const { spawn } = require("child_process");
 const { buildTestXlsx } = require("./helpers/buildTestXlsx");
+const { buildTestPdf } = require("./helpers/buildTestPdf");
 
 const TEST_PORT = 3999;
 const BASE = `http://localhost:${TEST_PORT}`;
@@ -488,6 +489,85 @@ async function run() {
     assert(
       legacyXlsImport.status === 400 && /xlsx|csv/.test(legacyXlsImport.data.error),
       "קובץ .xls ישן אמיתי (בינארי, פורמט Excel 97-2003) מזוהה במפורש ומקבל הנחיה ברורה לשמור מחדש כ-xlsx/csv, לא כישלון סתום"
+    );
+
+    console.log("\n📥 ייבוא דף חיוב בפורמט PDF (דף כרטיס אשראי) - נבדק במקור מול קובץ אמיתי מכאל");
+    // תוקן/נבנה בעקבות בקשת פיצ'ר ("PDF תוכל גם לפענח?") ובדיקה מול קובץ אמיתי (דף פירוט דיגיטלי
+    // של כאל) - ר' src/lib/pdfParser.js. בדיקת ה-API כאן משתמשת ב-PDF סינתטי (tests/helpers/
+    // buildTestPdf.js, לא הקובץ האמיתי - שלא נשמר בריפו) שממדל את מבנה הטבלה (תאריך/שם בית העסק/
+    // סכום) בלי לשכפל את הקוונטיות המדויקת של פיצול תו-אחר-תו שהתגלתה בקובץ האמיתי - זו נבדקת
+    // בנפרד ובאופן ממוקד יותר ב-reorderRunsForReading למטה.
+    const pdfBuffer = buildTestPdf([
+      { text: "תאריך", x: 500, y: 700 },
+      { text: "שם בית העסק", x: 350, y: 700 },
+      { text: "סכום", x: 100, y: 700 },
+      { text: "01/02/2026", x: 500, y: 680 },
+      { text: "סופר גדול", x: 350, y: 680 },
+      { text: "₪ 150.00", x: 100, y: 680 },
+      { text: "02/02/2026", x: 500, y: 660 },
+      { text: "בית קפה", x: 350, y: 660 },
+      { text: "45.50", x: 100, y: 660 },
+    ]);
+    const pdfImportPreview = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: pdfBuffer.toString("base64"), filename: "cal-statement.pdf", source_type: "card" },
+      token
+    );
+    assert(
+      pdfImportPreview.status === 200 && pdfImportPreview.data.transactions.length === 2,
+      `ייבוא PDF סינתטי הצליח וזיהה 2 תנועות (${JSON.stringify(pdfImportPreview.data)})`
+    );
+    const pdfRow1 = pdfImportPreview.data.transactions.find(t => t.amount === 150);
+    assert(
+      pdfRow1 && pdfRow1.date === "2026-02-01" && pdfRow1.description === "סופר גדול" && pdfRow1.type === "expense",
+      "שורה ראשונה מה-PDF זוהתה נכון: תאריך, שם בית עסק (עברית) וסכום - עם ברירת המחדל 'הוצאה' לכרטיס אשראי"
+    );
+    const pdfRow2 = pdfImportPreview.data.transactions.find(t => t.amount === 45.5);
+    assert(pdfRow2 && pdfRow2.date === "2026-02-02" && pdfRow2.description === "בית קפה", "שורה שנייה מה-PDF זוהתה נכון");
+    const pdfImportCommit = await api("POST", "/api/transactions/import/commit", { transactions: pdfImportPreview.data.transactions }, token);
+    assert(pdfImportCommit.data.imported === 2, "שתי התנועות מה-PDF נשמרו בהצלחה");
+
+    console.log("\n📥 ייבוא PDF - שחזור סדר קריאה נכון (bidi) בתוך שורה שבה כל תו הוא ריצת-טקסט נפרדת");
+    // משוב אמיתי מבדיקה מול קובץ כאל אמיתי: PDF מצייר שם כל תו (גם בעברית וגם במספרים) כ-Tj נפרד,
+    // ממוקם מימין לשמאל - כלומר תאריך כמו "19/07/2026" מגיע כ-10 ריצות-תו בודדות בסדר "הפוך"
+    // (6,2,0,2,/,7,0,/,9,1), וטקסט לועזי בתוך ההקשר העברי (כמו "aliexpress") מגיע גם הוא הפוך
+    // (s,s,e,r,p,x,e,i,l,a) - בעוד עברית "רגילה" (מילה-אחר-מילה, ריצה בודדת) כבר מגיעה נכון. הבדיקה
+    // הזו קוראת ישירות ל-reorderRunsForReading (ולא דרך PDF מלא) כדי לבודד את הלוגיקה העדינה הזו.
+    const { reorderRunsForReading } = require("../src/lib/pdfParser");
+    const dateRuns = ["6", "2", "0", "2", "/", "7", "0", "/", "9", "1"].map((text, i) => ({ x: 100 - i, y: 0, text }));
+    assert(
+      reorderRunsForReading(dateRuns) === "19/07/2026",
+      "תאריך שמגיע כ-10 ריצות-תו בודדות (מסודרות ימין-לשמאל) משוחזר נכון לסדר הקריאה הרגיל"
+    );
+    const latinRuns = ["s", "s", "e", "r", "p", "x", "e", "i", "l", "a"].map((text, i) => ({ x: 100 - i, y: 0, text }));
+    assert(
+      reorderRunsForReading(latinRuns) === "aliexpress",
+      "מילה לועזית בתוך הקשר עברי (גם היא מפוצלת לריצות-תו בודדות, גם היא הפוכה) משוחזרת נכון"
+    );
+    const hebrewWordRuns = [{ x: 130, y: 0, text: "ס" }, { x: 120, y: 0, text: "ו" }, { x: 110, y: 0, text: "פ" }, { x: 100, y: 0, text: "ר" }];
+    assert(
+      reorderRunsForReading(hebrewWordRuns) === "סופר",
+      "מילה עברית שמפוצלת לריצות-תו בודדות (ימין לשמאל) כבר בסדר קריאה נכון - לא הופכים אותה"
+    );
+    const mixedRuns = [
+      { x: 200, y: 0, text: "₪ 13.30" }, // ריצה שלמה, כבר בסדר נכון - כמו שדה סכום אמיתי ב-PDF
+      ...["ס", "ו", "פ", "ר"].map((text, i) => ({ x: 100 - i, y: 0, text })),
+    ];
+    assert(
+      reorderRunsForReading(mixedRuns) === "₪ 13.30סופר",
+      "ריצה רב-תווית שכבר בסדר נכון (כמו סכום מוכן-מראש) לא נהפכת פנימית, גם כשמעורבת עם ריצות-תו עבריות בודדות"
+    );
+
+    console.log("\n📥 ייבוא PDF - קובץ בלי טקסט הניתן לחילוץ (מדמה מסמך סרוק) מקבל שגיאה ברורה");
+    const noCmapPdf = Buffer.from("%PDF-1.4\n1 0 obj\n<</Type/Catalog>>\nendobj\n%%EOF", "latin1");
+    const noCmapImport = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: noCmapPdf.toString("base64"), filename: "scanned.pdf", source_type: "bank" },
+      token
+    );
+    assert(
+      noCmapImport.status === 400 && /טקסט|סרוק/.test(noCmapImport.data.error),
+      "PDF בלי גופן/ToUnicode הניתן לחילוץ (מדמה מסמך סרוק) מקבל הודעת שגיאה ברורה, לא קורס"
     );
 
     console.log("\n🎓 חונכות ותלמידים");

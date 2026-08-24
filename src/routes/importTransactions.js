@@ -15,6 +15,7 @@ const { requireAuth } = require("../middleware/auth");
 const { parseXlsx } = require("../lib/xlsxParser");
 const { parseCsv } = require("../lib/csvParser");
 const { looksLikeHtml, looksLikeLegacyBinaryXls, parseHtmlTable } = require("../lib/htmlTableParser");
+const { parsePdf } = require("../lib/pdfParser");
 const { rowsToTransactions } = require("../lib/importMapping");
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
@@ -59,7 +60,11 @@ function register(router) {
     // "xlsx" אבל בפועל HTML. xlsx אמיתי הוא תמיד ארכיון ZIP (מתחיל בבתים "PK").
     let rows;
     try {
-      if (looksLikeHtml(buffer)) {
+      if (buffer.length >= 5 && buffer.toString("latin1", 0, 5) === "%PDF-") {
+        // ר' src/lib/pdfParser.js - דף חיוב/עו"ש שהורד כ-PDF (למשל דפי כאל, ר' README). זורק שגיאה
+        // עברית ברורה בעצמו למקרים לא-נתמכים (מוצפן/סרוק בלי טקסט אמיתי) - לא צריך טיפול נוסף כאן.
+        rows = parsePdf(buffer).rows;
+      } else if (looksLikeHtml(buffer)) {
         rows = parseHtmlTable(buffer.toString("utf8"));
       } else if (looksLikeLegacyBinaryXls(buffer)) {
         return json(ctx.res, 400, {
