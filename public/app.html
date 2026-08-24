@@ -273,9 +273,9 @@
         <div class="card">
           <h3>הוספת תנועה</h3>
           <div class="row">
-            <select id="t_type" class="plain"><option value="expense">הוצאה</option><option value="income">הכנסה</option></select>
+            <select id="t_type" class="plain" onchange="loadCategoryDictionary(this.value)"><option value="expense">הוצאה</option><option value="income">הכנסה</option></select>
             <input id="t_amount" class="plain" type="number" placeholder="סכום בש״ח" value="50">
-            <input id="t_category" class="plain" placeholder="קטגוריה (להוצאה), למשל מזון" list="category-suggestions">
+            <input id="t_category" class="plain" placeholder="קטגוריה, למשל מזון" list="category-suggestions">
             <datalist id="category-suggestions">
               <option value="מעשרות">
               <option value="צדקה">
@@ -933,21 +933,27 @@ function renderCategoryDonut(byCategory) {
     </div>`;
 }
 
-// "מילון" קטגוריות ההוצאה האישי - מוסיף לרשימת ההצעות הקבועה (category-suggestions) גם קטגוריות
-// מותאמות-אישית שהוזנו בעבר (למשל "תרופות"), בין אם הוזנו כאן באתר ובין אם הוכתבו בטלפון תחת
-// "אחר" (ר' routes/ivr.js case "expense_category_other") - אותו מילון בדיוק, קטגוריה אחת מכל צד
-// מספיקה כדי שהיא תופיע גם בצד השני.
-async function loadCategoryDictionary() {
-  const r = await api('GET', '/api/transactions/dictionary');
+// "מילון" קטגוריות אישי - מוסיף לרשימת ההצעות הקבועה (category-suggestions) גם קטגוריות מותאמות-
+// אישית שהוזנו בעבר (למשל "תרופות" בהוצאה, "חונכות" בהכנסה), בין אם הוזנו כאן באתר ובין אם הוכתבו
+// בטלפון תחת "אחר" (ר' routes/ivr.js case "expense_category_other"/"income_category_other") - אותו
+// מילון בדיוק, קטגוריה אחת מכל צד מספיקה כדי שהיא תופיע גם בצד השני.
+// תוקן (משוב אמיתי: "כשאני לוחץ על הכנסה אין קטגוריה אם זה ביטוח לאומי או משכורת או חונכות") -
+// לפני כן ההצעות היו קבועות להוצאה בלבד, גם כשנבחר "הכנסה" בסוג התנועה. עכשיו מתעדכנות לפי הסוג
+// שנבחר (ר' onchange על #t_type) - נקרא גם פעם אחת עם 'expense' בטעינה הראשונית (ר' loadTransactions).
+async function loadCategoryDictionary(type) {
+  const isIncome = type === 'income';
+  const r = await api('GET', '/api/transactions/dictionary' + (isIncome ? '?type=income' : ''));
   const dl = document.getElementById('category-suggestions');
   if (!r.ok || !dl) return;
-  const staticOptions = ['מעשרות', 'צדקה', 'מזון', 'דיור', 'תחבורה', 'בריאות', 'חינוך'];
+  const staticOptions = isIncome
+    ? ['משכורת', 'ביטוח לאומי', 'חונכות', 'אחר']
+    : ['מעשרות', 'צדקה', 'מזון', 'דיור', 'תחבורה', 'בריאות', 'חינוך'];
   const merged = [...staticOptions, ...(r.data.phrases || []).filter(p => !staticOptions.includes(p))];
   dl.innerHTML = merged.map(p => `<option value="${p.replace(/"/g, '&quot;')}">`).join('');
 }
 async function loadTransactions() {
   loadTransactionsTrend();
-  loadCategoryDictionary();
+  loadCategoryDictionary(document.getElementById('t_type') ? document.getElementById('t_type').value : 'expense');
   const r = await api('GET', '/api/transactions');
   if (!r.ok) return;
   const s = r.data.summary;

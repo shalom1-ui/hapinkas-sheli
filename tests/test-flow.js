@@ -1741,6 +1741,27 @@ async function run() {
       "הקטגוריה המותאמת-אישית שהוכתבה בטלפון נכנסה ל'מילון' האישי, ותוצע גם באתר בפעם הבאה (datalist)"
     );
 
+    console.log("\n🏷️ תנועות: 'מילון' קטגוריות נפרד להכנסות (לא רק להוצאות) - משוב אמיתי מהאתר");
+    // תוקן (משוב אמיתי: "נכנסתי באתר כשאני לוחץ על הכנסה אין קטגוריה אם זה ביטוח לאומי או משכורת
+    // או חונכות ואחר") - קודם /api/transactions/dictionary החזיר תמיד רק קטגוריות הוצאה, גם כשמוסיפים
+    // הכנסה עם קטגוריה מותאמת-אישית (למשל "חונכות" כמקור הכנסה) - היא נשמרה ל-DB אבל לא הוצעה יותר.
+    const incomeWithCategory = await api("POST", "/api/transactions", { type: "income", amount: 500, category: "חונכות" }, token);
+    assert(incomeWithCategory.status === 201 && incomeWithCategory.data.transaction.category === "חונכות", "הוספת הכנסה עם קטגוריה מותאמת-אישית ('חונכות') דרך האתר הצליחה");
+    const incomeDictionary = await api("GET", "/api/transactions/dictionary?type=income", null, token);
+    assert(
+      incomeDictionary.data.phrases.includes("חונכות"),
+      "מילון ההכנסות (?type=income) כולל את הקטגוריה שהוזנה ('חונכות') - תוצע אוטומטית בפעם הבאה"
+    );
+    assert(
+      !incomeDictionary.data.phrases.includes("תרופות"),
+      "מילון ההכנסות לא מכיל קטגוריות הוצאה ('תרופות') - שני המילונים נפרדים לגמרי"
+    );
+    const expenseDictionaryStillDefault = await api("GET", "/api/transactions/dictionary", null, token);
+    assert(
+      !expenseDictionaryStillDefault.data.phrases.includes("חונכות"),
+      "בלי פרמטר type בכלל (תאימות לאחור), עדיין מוחזר מילון ההוצאה בלבד - לא מתערבב עם קטגוריות הכנסה"
+    );
+
     console.log("\n🏷️ תנועות: אם לא שומעים כלום בשלב הכתבת הקטגוריה החופשית, מבקשים שוב ולא נתקעים/קורסים");
     const emptyCustomCatCallSid = `${callSid}-custom-category-empty`;
     await ivrCall(emptyCustomCatCallSid, "+972500000001");

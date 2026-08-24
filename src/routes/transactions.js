@@ -55,19 +55,25 @@ function register(router) {
       .prepare("INSERT INTO transactions (user_id, type, amount, category, note, source) VALUES (?, ?, ?, ?, ?, ?)")
       .run(ctx.user.userId, type, numAmount, category || null, note || null, source === "phone" ? "phone" : "web");
 
-    // קטגוריית הוצאה שהוזנה (מהאתר או מהטלפון - ר' routes/ivr.js case "expense_confirm") נכנסת גם
-    // ל"מילון" הניסוחים האישי (kind=expense_category), בדיוק כמו note/trend/role_type בדוחות טיפוליים -
-    // כדי שקטגוריות מותאמות-אישית (למשל "תרופות") יוצעו אוטומטית בפעם הבאה, גם אם הוכתבו בטלפון.
-    if (type === "expense" && category) rememberPhrase(ctx.user.userId, "expense_category", category);
+    // קטגוריה שהוזנה (מהאתר או מהטלפון - ר' routes/ivr.js case "expense_confirm"/"income_confirm")
+    // נכנסת גם ל"מילון" הניסוחים האישי, בדיוק כמו note/trend/role_type בדוחות טיפוליים - כדי שקטגוריות
+    // מותאמות-אישית (למשל "תרופות" בהוצאה, או "חונכות" בהכנסה) יוצעו אוטומטית בפעם הבאה, גם אם
+    // הוכתבו בטלפון. תוקן (משוב אמיתי: "כשאני לוחץ על הכנסה אין קטגוריה אם זה ביטוח לאומי או משכורת
+    // או חונכות") - בעבר זה נשמר רק להוצאות (kind=expense_category); הכנסות עם קטגוריה מותאמת-אישית
+    // נעלמו בשקט בכל פעם, ולא הוצעו יותר לא באתר ולא בטלפון.
+    if (category) rememberPhrase(ctx.user.userId, type === "income" ? "income_category" : "expense_category", category);
 
     const row = db.prepare("SELECT * FROM transactions WHERE id = ?").get(info.lastInsertRowid);
     return json(ctx.res, 201, { transaction: row });
   }));
 
-  // "מילון" קטגוריות ההוצאה האישי של המשתמש המחובר - להצעת השלמה אוטומטית (באתר: datalist, ר'
-  // public/app.html; בטלפון: לא מוצג בקול, אבל אותה רשימה בדיוק נבנית ומוזנת גם משם).
+  // "מילון" קטגוריות אישי של המשתמש המחובר - להצעת השלמה אוטומטית (באתר: datalist, ר' public/app.html;
+  // בטלפון: לא מוצג בקול, אבל אותה רשימה בדיוק נבנית ומוזנת גם משם). ?type=income מחזיר את מילון
+  // ההכנסות (kind=income_category) - ברירת המחדל (גם עם type לא-מוכר) נשארת expense_category, לתאימות
+  // לאחור עם קריאות קיימות שלא שלחו type בכלל.
   router.get("/api/transactions/dictionary", requireAuth(async (ctx) => {
-    return json(ctx.res, 200, { phrases: getDictionary(ctx.user.userId, "expense_category") });
+    const kind = ctx.query.type === "income" ? "income_category" : "expense_category";
+    return json(ctx.res, 200, { phrases: getDictionary(ctx.user.userId, kind) });
   }));
 
   // מחיקת תנועה (למשל טעות בהזנה)
