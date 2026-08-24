@@ -22,7 +22,7 @@ const { hashPassword, isValidPin } = require("../utils/crypto");
 const { rememberPhrase, getDictionary } = require("../lib/dictionary");
 
 const MAIN_MENU_HINTS = [
-  "ניהול חשבונות", "חשבונות", "תנועות", "הכנסה", "הוצאה", "יתרה",
+  "ניהול חשבונות", "חשבונות", "תנועות", "הכנסה", "הוצאה", "יתרה", "מעשרות", "מעשר",
   "חונכות", "מטפלים", "דיווח", "הורה", "מפקח", "הערת מפקח", "הערה",
 ];
 
@@ -45,7 +45,7 @@ const DIGIT_ENTRY_STATES = new Set(["signup_pin", "signup_pin_confirm"]);
 // כבר, לא חלק מהמודל המשולש הזה. הרשמת מייל בטלפון (signup_email_*) הוסרה לגמרי - ר' משוב אמיתי
 // ליד case "signup_pin_confirm".
 const CONFIRM_MENU_STATES = new Set([
-  "expense_confirm", "income_confirm", "mentor_remove_confirm", "mentor_note_confirm",
+  "expense_confirm", "income_confirm", "tithe_confirm", "mentor_remove_confirm", "mentor_note_confirm",
   "therapist_confirm", "supervisor_confirm", "lesson_prep_confirm",
 ]);
 
@@ -239,7 +239,7 @@ function mainMenuPrompt(name, opts = {}) {
   // opts.menuVoiceOnly: true - כשזיהוי דיבור משודרג (Whisper) פעיל גם בתפריט הראשי (ר' routes/yemot.js),
   // התפריט עובר למצב "הקלטה" גולמי כדי לתמלל במדויק - ובמצב הזה הקשת מקלדת **לא נקלטת בכלל** תוך כדי
   // ההקלטה (בניגוד למצב הרגיל). לכן, במצב הזה בלבד, לא מזכירים למתקשר שאפשר להקיש - זה היה מטעה.
-  const digitNote = opts.digitConfirm && !opts.menuVoiceOnly ? " אפשר גם להקיש 1 עד 6." : "";
+  const digitNote = opts.digitConfirm && !opts.menuVoiceOnly ? " אפשר גם להקיש 1 עד 7." : "";
   return `${name ? `שלום ${name}, ` : "שלום, "}הגעתם לפנקס שלי. נא לציין קטגוריה: ${mainMenuCategoriesText()}${digitNote}`;
 }
 // תוקן (אבחון בפועל מול קו אמיתי): פסיקים בלבד בין הקטגוריות לא יצרו הפרדה קולית מספיקה אצל מנוע
@@ -248,7 +248,7 @@ function mainMenuPrompt(name, opts = {}) {
 // אוטומטית). הפתרון: מוסיפים את המילה "או" לפני **כל** קטגוריה (לא רק לפני האחרונה) - כך שיש תמיד
 // גבול מילה ברור בין קטגוריה לקטגוריה, בלי תלות בפרשנות של ימות לפיסוק.
 function mainMenuCategoriesText() {
-  return "ניהול חשבונות, או תנועות, או חונכות, או מטפלים, או הורה, או הערת מפקח.";
+  return "ניהול חשבונות, או תנועות, או חונכות, או מטפלים, או הורה, או הערת מפקח, או מעשרות.";
 }
 
 // אחרי כל פעולה שהושלמה (או הודעת מידע/שגיאה סופית כמו "אין מפגש פתוח") - במקום לנתק מיד את
@@ -287,6 +287,7 @@ const MAIN_MENU_DIGIT_KEYWORDS = {
   "4": "מטפלים",
   "5": "הורה",
   "6": "הערת מפקח",
+  "7": "מעשרות",
 };
 function mainMenuDigitKeyword(s) {
   const digits = singleDigitPress(s);
@@ -319,9 +320,12 @@ function looksLikeRawDigitsArtifact(s) {
   return /^digits[-\s]*\d*$/i.test(String(s || "").trim());
 }
 
-// הודעת "הכנסה או הוצאה" בתפריט תנועות - עם רמז הקשה (1/2) בערוצים שתומכים בזה
+// הודעת "הכנסה, הוצאה, או מעשרות" בתפריט תנועות - עם רמז הקשה (1/2/3) בערוצים שתומכים בזה.
+// משוב אמיתי ממשתמש: "חוץ מהכנסה והוצאה, קטגוריה של מעשרות - שאפשר לומר או להקיש, ואומר כמה
+// מעשרות נתן". מעשרות הוא בפועל תמיד הוצאה (category='מעשרות', ר' case "tithe_amount"/"tithe_confirm"
+// למטה) - אבל מקבל קיצור נפרד משלו כאן כדי שלא יצטרך לעבור קודם דרך "הוצאה" ואז לבחור קטגוריה.
 function transactionsTypePrompt(opts) {
-  return `הכנסה או הוצאה?${opts && opts.digitConfirm ? " (אפשר גם להקיש: 1 להכנסה, 2 להוצאה)" : ""}`;
+  return `הכנסה, הוצאה, או מעשרות?${opts && opts.digitConfirm ? " אפשר גם להקיש: 1 להכנסה, 2 להוצאה, 3 למעשרות." : ""}`;
 }
 // טקסט אפשרויות שלב בחירת הפעולה בחונכות (משותף לכל הצמתים שמגיעים לשלב הזה)
 // משתמשים במילים עבריות פשוטות ("כניסה"/"יציאה") ולא ב"צ'ק אין"/"צ'ק אאוט" (תעתיק אנגלית) - זה גם
@@ -380,6 +384,9 @@ function matchMainMenuCategory(es, opts, user) {
   if (includesAny(es, ["ניהול חשבונות", "חשבונות", "יתרה", "מצב חשבון"])) return doBalance(user);
   if (includesAny(es, ["הוצאה", "הוצאות"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
   if (includesAny(es, ["הכנסה", "הכנסות"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
+  // משוב אמיתי ממשתמש: "חוץ מהכנסה והוצאה, קטגוריה של מעשרות - שאפשר לומר או להקיש, ואומר כמה
+  // מעשרות נתן" - קיצור ישיר מכל מקום שמריץ את ההתאמה הזו, בדיוק כמו הכנסה/הוצאה. ר' case "tithe_amount".
+  if (includesAny(es, ["מעשרות", "מעשר"])) return { text: "כמה מעשר נתת? אפשר לומר סכום בשקלים.", nextState: "tithe_amount" };
   if (includesAny(es, ["תנועות", "תנועה"])) return { text: transactionsTypePrompt(opts), nextState: "transactions_pick_type" };
   if (includesAny(es, ["חונכות", "תלמיד"])) return startMentorFlow(user);
   if (includesAny(es, ["מטפלים", "מטפל", "דיווח", "ריפוי", "רגשי"])) return { text: "מה סוג הדיווח: ריפוי בעיסוק, טיפול רגשי, או אחר?", nextState: "therapist_role" };
@@ -440,7 +447,8 @@ async function advance(state, speech, draft, user, opts = {}) {
       const digit = singleDigitPress(s);
       if (digit === "2" || includesAny(s, ["הוצאה"])) return { text: "כמה עלה? אפשר לומר סכום בשקלים.", nextState: "expense_amount" };
       if (digit === "1" || includesAny(s, ["הכנסה"])) return { text: "מה סכום ההכנסה?", nextState: "income_amount" };
-      return { text: `לא הבנתי.${retryHint()} הכנסה או הוצאה?`, nextState: "transactions_pick_type" };
+      if (digit === "3" || includesAny(s, ["מעשרות", "מעשר"])) return { text: "כמה מעשר נתת? אפשר לומר סכום בשקלים.", nextState: "tithe_amount" };
+      return { text: `לא הבנתי.${retryHint()} ${transactionsTypePrompt(opts)}`, nextState: "transactions_pick_type" };
     }
 
     // ---------- הוצאה ----------
@@ -588,6 +596,43 @@ async function advance(state, speech, draft, user, opts = {}) {
         draft,
       };
     }
+    // ---------- מעשרות ----------
+    // משוב אמיתי ממשתמש: "חוץ מהכנסה והוצאה, קטגוריה של מעשרות - שאפשר לומר או להקיש מעשרות, ואומר
+    // כמה מעשרות הוא נתן". מעשרות הוא בפועל הוצאה עם category='מעשרות' (בדיוק כמו רישום דרך האתר,
+    // ר' טיפ ב-public/app.html "לרישום מעשר... בחרו קטגוריה מעשרות") - אבל בלי לעבור דרך שלב בחירת
+    // קטגוריה בכלל (הקטגוריה כבר ידועה מראש), ובלי תפריט "עוד/לעבור/לסיים" הכללי בסוף - במקום זה
+    // מדווחים ישר על סך המעשר שניתן עד כה, בדיוק כמו ששאלת "כמה מעשרות נתן" מבקשת במפורש.
+    case "tithe_amount": {
+      const amount = extractAmount(s);
+      if (!amount) return { text: `לא זיהיתי סכום.${retryHint()} כמה מעשר נתת, בשקלים?`, nextState: "tithe_amount" };
+      return {
+        text: `רשמתי ${amount} שקלים מעשר. לאשר? ${confirmMenuText(opts)}`,
+        nextState: "tithe_confirm",
+        draft: { amount },
+      };
+    }
+    case "tithe_confirm": {
+      if (isConfirmYes(s, opts)) {
+        db.prepare("INSERT INTO transactions (user_id, type, amount, category, source) VALUES (?, 'expense', ?, 'מעשרות', 'phone')")
+          .run(user.id, draft.amount);
+        const tithe = titheStatus(user.id);
+        const parts = [`נשמר. נתת ${draft.amount} שקלים מעשר.`, `סך הכל נתת עד כה ${tithe.paid} שקלים מעשר.`];
+        if (tithe.obligation > 0) {
+          parts.push(tithe.remaining > 0 ? `נותרו לך ${tithe.remaining} שקלים לתת.` : `כבר נתת את המעשר במלואו.`);
+        }
+        return askMoreOrFinish(parts.join(" "), "tithe_saved");
+      }
+      if (wantsMenuChange(s, opts)) return { text: "בסדר, נתחיל מחדש. כמה מעשר נתת, בשקלים?", nextState: "tithe_amount" };
+      if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
+        return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      }
+      return {
+        text: `לא הבנתי.${retryHint()} רשמתי ${draft.amount} שקלים מעשר. לאשר? ${confirmMenuText(opts)}`,
+        nextState: "tithe_confirm",
+        draft,
+      };
+    }
+
     case "transaction_saved_menu": {
       const digit = singleDigitPress(s);
       const savedType = draft.savedType;
@@ -1036,7 +1081,10 @@ function createPhoneUser(fullName, phone, email, pin) {
 // מעשרות") - קריאת היתרה כוללת עכשיו גם את סך ההכנסות, סך ההוצאות, וחובת המעשר (10% מההכנסות,
 // בדיוק כמו החישוב באתר ב-routes/transactions.js), כל אחד כמשפט קצר ונפרד משלו - לא רצף אחד עם
 // פסיקים, לפי ההנחיה המפורשת שהמאזינים לא תופסים הפסקות בפסיק בטלפון.
-function doBalance(user) {
+// חישוב חובת/יתרת המעשר - משותף בין doBalance (קריאת יתרה) ובין תפריט "מעשרות" הייעודי (ר' case
+// "tithe_confirm" למטה), כדי לא לשכפל את אותו חישוב (10% מסך ההכנסות, בניכוי כל מה שכבר נרשם כהוצאה
+// תחת הקטגוריה "מעשרות") בשני מקומות - בדיוק כמו החישוב באתר ב-routes/transactions.js.
+function titheStatus(userId) {
   const row = db
     .prepare(
       `SELECT
@@ -1045,19 +1093,24 @@ function doBalance(user) {
          COALESCE(SUM(CASE WHEN type = 'expense' AND category = 'מעשרות' THEN amount ELSE 0 END), 0) AS tithePaid
        FROM transactions WHERE user_id = ?`
     )
-    .get(user.id);
-  const balance = row.income - row.expense;
-  const titheObligation = Math.round(row.income * 0.1 * 100) / 100;
-  const titheRemaining = Math.round((titheObligation - row.tithePaid) * 100) / 100;
+    .get(userId);
+  const obligation = Math.round(row.income * 0.1 * 100) / 100;
+  const remaining = Math.round((obligation - row.tithePaid) * 100) / 100;
+  return { income: row.income, expense: row.expense, paid: row.tithePaid, obligation, remaining };
+}
+
+function doBalance(user) {
+  const tithe = titheStatus(user.id);
+  const balance = tithe.income - tithe.expense;
 
   const parts = [
     `היתרה הנוכחית שלך היא ${balance} שקלים.`,
-    `סך ההכנסות: ${row.income} שקלים.`,
-    `סך ההוצאות: ${row.expense} שקלים.`,
+    `סך ההכנסות: ${tithe.income} שקלים.`,
+    `סך ההוצאות: ${tithe.expense} שקלים.`,
   ];
-  if (titheObligation > 0) {
-    parts.push(`חובת המעשר שלך היא ${titheObligation} שקלים.`);
-    parts.push(titheRemaining > 0 ? `נותרו לך ${titheRemaining} שקלים לתת.` : `כבר נתת את המעשר במלואו.`);
+  if (tithe.obligation > 0) {
+    parts.push(`חובת המעשר שלך היא ${tithe.obligation} שקלים.`);
+    parts.push(tithe.remaining > 0 ? `נותרו לך ${tithe.remaining} שקלים לתת.` : `כבר נתת את המעשר במלואו.`);
   }
   parts.push("רוצים להוסיף הכנסה או הוצאה, או לסיים? אפשר גם להקיש: 1 להכנסה, 2 להוצאה.");
 

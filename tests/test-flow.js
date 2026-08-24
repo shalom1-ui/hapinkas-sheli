@@ -961,7 +961,7 @@ async function run() {
     const txCallSid = `${callSid}-transactions`;
     await ivrCall(txCallSid, "+972500000001");
     const txMenu = await ivrSay(txCallSid, "תנועות");
-    assert(txMenu.includes("הכנסה או הוצאה"), "קטגוריית 'תנועות' פותחת תת-תפריט הכנסה/הוצאה");
+    assert(txMenu.includes("הכנסה") && txMenu.includes("הוצאה") && txMenu.includes("מעשרות"), "קטגוריית 'תנועות' פותחת תת-תפריט הכנסה/הוצאה/מעשרות");
     await ivrSay(txCallSid, "הכנסה");
     const txIncomeCategory = await ivrSay(txCallSid, "300");
     assert(txIncomeCategory.includes("מאיזה מקור ההכנסה"), "אחרי סכום ההכנסה נשאלת קטגוריית מקור ההכנסה");
@@ -1060,7 +1060,7 @@ async function run() {
     assert(ymGreeting.startsWith("read=t-") && ymGreeting.includes("נא לציין"), "פתיחת שיחה בימות (מספר בפורמט מקומי) מזהה משתמש ומציגה תפריט קטגוריות");
     assert(ymGreeting.includes("שלום וברכה") && ymGreeting.includes("הגעתם לקו הפנקס שלי"), "מיד כשמתקשרים גם בימות המערכת פותחת בברכה 'שלום וברכה, הגעתם לקו הפנקס שלי' לפני שאר התפריט");
     assert(
-      ymGreeting.includes("1 עד 6") && !ymGreeting.includes("סולמית"),
+      ymGreeting.includes("1 עד 7") && !ymGreeting.includes("סולמית"),
       "כבר בברכת הפתיחה בימות מוזכר שאפשר להקיש ספרה (1-6) בלי לחכות, במקום לדבר - בקצרה, כדי לא להאריך את זמן ההשמעה. " +
         "לא מוזכרת כאן סולמית - בתפריט הראשי (בחירת קטגוריה) אין לה שום פעולה, וזה בעבר גרם למתקשרים לנסות להקיש אותה בלי שקרה כלום"
     );
@@ -1206,7 +1206,7 @@ async function run() {
     const ymDigitTxCallId = `${ymCallId}-digit-tx`;
     await yemotCall({ callId: ymDigitTxCallId, phone: "0500000001" });
     const ymDigitTxType = await yemotCall({ callId: ymDigitTxCallId, speech: "2" }); // 2 = תנועות
-    assert(ymDigitTxType.includes("הכנסה או הוצאה") && ymDigitTxType.includes("1 להכנסה"), "הקשת 2 בתפריט הראשי שקולה לאמירת 'תנועות', ומזכירה גם קיצורי הקשה לשלב הבא");
+    assert(ymDigitTxType.includes("מעשרות") && ymDigitTxType.includes("1 להכנסה"), "הקשת 2 בתפריט הראשי שקולה לאמירת 'תנועות', ומזכירה גם קיצורי הקשה לשלב הבא (כולל מעשרות)");
     const ymDigitIncome = await yemotCall({ callId: ymDigitTxCallId, speech: "1" }); // 1 = הכנסה
     assert(ymDigitIncome.includes("מה סכום ההכנסה"), "הקשת 1 בבחירת סוג תנועה שקולה לאמירת 'הכנסה'");
     const ymDigitIncomeCategoryPrompt = await yemotCall({ callId: ymDigitTxCallId, speech: "500" });
@@ -1359,6 +1359,47 @@ async function run() {
       afterIncomeCategoryOther.data.transactions.some(t => t.source === "phone" && t.amount === 250 && t.category === "מענק לימודים"),
       "התנועה נשמרה עם מקור ההכנסה המותאם-אישית שהוכתב ('מענק לימודים'), לא עם 'אחר'"
     );
+
+    console.log("\n🙏 מעשרות: קטגוריה נפרדת (חוץ מהכנסה/הוצאה) - אומרים/מקישים 'מעשרות' ומדווח כמה ניתן");
+    // משוב אמיתי ממשתמש: "חוץ מהכנסה והוצאה, קטגוריה של מעשרות - שאפשר לומר או להקיש מעשרות, ואומר
+    // כמה מעשרות הוא נתן". קיצור ישיר מהתפריט הראשי (כמו הכנסה/הוצאה), בלי לעבור דרך תפריט בחירת
+    // קטגוריה (היא כבר ידועה מראש) - ובסוף מדווח את סך המעשר שניתן עד כה, לא רק "רוצים עוד משהו" כללי.
+    const ymTitheCallId = `${ymCallId}-tithe`;
+    await yemotCall({ callId: ymTitheCallId, phone: "0500000001" });
+    const ymTitheAmountPrompt = await yemotCall({ callId: ymTitheCallId, speech: "מעשרות" });
+    assert(ymTitheAmountPrompt.includes("כמה מעשר נתת"), "אמירת 'מעשרות' מהתפריט הראשי עוברת ישר לשאלת הסכום, בלי לעבור דרך תפריט בחירת קטגוריה");
+    const ymTitheConfirmPrompt = await yemotCall({ callId: ymTitheCallId, speech: "180" });
+    assert(
+      ymTitheConfirmPrompt.includes("180") && ymTitheConfirmPrompt.includes("מעשר") && ymTitheConfirmPrompt.includes("הקישו 1"),
+      "הסכום נקרא בחזרה לאישור, עם קיצור הקשה מהיר (בימות - מצב הקשה טהור)"
+    );
+    const ymTitheDone = await yemotCall({ callId: ymTitheCallId, speech: "1" }); // מאשר
+    assert(
+      ymTitheDone.includes("נשמר") && ymTitheDone.includes("נתת 180") && ymTitheDone.includes("סך הכל נתת עד כה"),
+      "אחרי אישור, המערכת מדווחת כמה מעשר ניתן בפעולה הזו, וגם את הסך הכל שניתן עד כה - לא תפריט 'עוד משהו' כללי"
+    );
+    const afterTithe = await api("GET", "/api/transactions", null, token);
+    const titheTx = afterTithe.data.transactions.find(t => t.source === "phone" && t.amount === 180 && t.category === "מעשרות");
+    assert(titheTx && titheTx.type === "expense", "התנועה נשמרה כהוצאה עם קטגוריית 'מעשרות' בדיוק, בלי לעבור דרך תפריט בחירת קטגוריה בכלל");
+
+    console.log("\n🙏 מעשרות: גם דרך תת-תפריט 'תנועות' (הקשה 3, אחרי הכנסה/הוצאה), וגם דרך Twilio");
+    const ymTitheViaTxCallId = `${ymCallId}-tithe-via-tx`;
+    await yemotCall({ callId: ymTitheViaTxCallId, phone: "0500000001" });
+    await yemotCall({ callId: ymTitheViaTxCallId, speech: "תנועות" });
+    const ymTitheViaTxAmountPrompt = await yemotCall({ callId: ymTitheViaTxCallId, speech: "3" }); // 3 = מעשרות
+    assert(ymTitheViaTxAmountPrompt.includes("כמה מעשר נתת"), "הקשת 3 בתת-תפריט 'תנועות' (אחרי הכנסה/הוצאה) שקולה לאמירת 'מעשרות'");
+    await yemotCall({ callId: ymTitheViaTxCallId, speech: "50" });
+    const ymTitheViaTxDone = await yemotCall({ callId: ymTitheViaTxCallId, speech: "1" });
+    assert(ymTitheViaTxDone.includes("נשמר") && ymTitheViaTxDone.includes("נתת 50"), "תנועת מעשרות שנוספה דרך תת-תפריט 'תנועות' נשמרת ומדווחת כרגיל");
+
+    const titheCallSid = `${callSid}-tithe`;
+    await ivrCall(titheCallSid, "+972500000001");
+    const titheAmountPrompt = await ivrSay(titheCallSid, "מעשרות");
+    assert(titheAmountPrompt.includes("כמה מעשר נתת"), "אמירת 'מעשרות' דרך Twilio (בלי הקשות) גם היא עוברת ישר לשאלת הסכום");
+    const titheConfirmPrompt = await ivrSay(titheCallSid, "70");
+    assert(titheConfirmPrompt.includes("70") && titheConfirmPrompt.includes("לאשר"), "הסכום נקרא בחזרה לאישור גם ב-Twilio (זיהוי דיבור - 'אמרו כן')");
+    const titheDone = await ivrSay(titheCallSid, "כן");
+    assert(titheDone.includes("נשמר") && titheDone.includes("נתת 70"), "אישור בקול (Twilio) שומר את תנועת המעשר ומדווח את הסכום שניתן");
 
     console.log("\n🔀 תפריט המשך ממוקד אחרי שמירת תנועה: 1=עוד מאותו סוג, 2=לעבור לסוג השני, 3=לסיים");
     // משוב אמיתי ממשתמש: "אחרי שכבר כתבתי וסימנתי הכנסה... להוספה הכנסות הקישו 1 לעבור להוצאה הקישו 2 לסיים הקישו 3".

@@ -71,7 +71,7 @@ const debugLog = require("../debugLog");
 // (ר' DIGIT_MENU_STATES).
 const FREE_TEXT_STATES = new Set([
   "signup_name", "mentor_pick_student", "main_menu", "balance_next_action",
-  "expense_amount", "income_amount",
+  "expense_amount", "income_amount", "tithe_amount",
   "therapist_role", "therapist_student", "supervisor_pick_student",
   "guardian_pick_child", "therapist_note", "supervisor_readback", "mentor_note_speak",
   "expense_category_other", "income_category_other",
@@ -84,9 +84,9 @@ const FREE_TEXT_STATES = new Set([
 // באמת בשלב הזה. הכי משמעותי בתפריט הראשי, ששם יש רשימת מילים סגורה וידועה מראש (קטגוריות) -
 // זה בדיוק השלב שבו נצפתה "הזיה" של תמלול בכתב לא-עברי (לטיני/קירילי/ערבי) לגמרי חסר משמעות.
 function vocabularyHintFor(state) {
-  if (state === "main_menu" || state === "balance_next_action") return "ניהול חשבונות, תנועות, חונכות, מטפלים, הורה, הערת מפקח, הכנסה, הוצאה";
+  if (state === "main_menu" || state === "balance_next_action") return "ניהול חשבונות, תנועות, חונכות, מטפלים, הורה, הערת מפקח, מעשרות, הכנסה, הוצאה";
   if (state === "signup_name" || state === "mentor_pick_student") return "שם פרטי ושם משפחה בעברית, לדוגמה: שלום כהן, דוד לוי, רחל אברהם";
-  if (state === "expense_amount" || state === "income_amount") return "סכום כסף בשקלים, מספרים, לדוגמה: מאה שקלים, מאתיים וחמישים, חמישים שקל";
+  if (state === "expense_amount" || state === "income_amount" || state === "tithe_amount") return "סכום כסף בשקלים, מספרים, לדוגמה: מאה שקלים, מאתיים וחמישים, חמישים שקל";
   if (state === "expense_category_other") return "שם קטגוריית הוצאה מותאמת אישית, לדוגמה: תרופות, מתנות, תיקונים";
   if (state === "income_category_other") return "מקור הכנסה מותאם אישית, לדוגמה: מענק, תרומה, החזר מס";
   if (state === "therapist_role") return "סוג דיווח מקצועי: ריפוי בעיסוק, טיפול רגשי, או אחר";
