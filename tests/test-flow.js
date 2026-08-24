@@ -451,6 +451,25 @@ async function run() {
       "עמודת 'יום ערך' (גם היא תאריך, לא עמודת הסכום) לא נתפסה בטעות כעמודת סכום (הבאג המקורי - קריאת '2026' מתוך תאריך כסכום)"
     );
 
+    console.log("\n📥 ייבוא CSV של דף בנק - תיאור חלופי ('הפעולה') כשעמודת 'פרטים' ריקה בשורה הספציפית");
+    // תוקן בעקבות קובץ Excel אמיתי (מזרחי טפחות): עמודת "פרטים" היא התיאור הכי מדויק כשהיא מלאה
+    // ("לטובת: ..."), אבל ריקה בהרבה שורות (הוראות קבע/עמלות) - שם "הפעולה" (למשל "הו\"ק הלו' רבית")
+    // היא התיאור השימושי היחיד. ר' HEADER_KEYWORDS.descriptionFallback ב-importMapping.js.
+    const descFallbackCsv =
+      "תאריך,הפעולה,פרטים,חובה,זכות\n" +
+      "23/08/2026,העברה לאחר,לטובת: ראובן כהן,60,\n" +
+      "20/08/2026,הו\"ק הלו' רבית,,434.29,\n";
+    const descFallbackImport = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: Buffer.from(descFallbackCsv, "utf8").toString("base64"), filename: "mizrahi.csv", source_type: "bank" },
+      token
+    );
+    assert(descFallbackImport.status === 200 && descFallbackImport.data.transactions.length === 2, "ייבוא עם עמודת תיאור חלופית ('הפעולה') הצליח");
+    const filledDescRow = descFallbackImport.data.transactions.find(t => t.amount === 60);
+    assert(filledDescRow && filledDescRow.description === "לטובת: ראובן כהן", "כש'פרטים' מלא, הוא עדיין העדיפות הראשונה - לא מוחלף ב'הפעולה'");
+    const emptyDescRow = descFallbackImport.data.transactions.find(t => t.amount === 434.29);
+    assert(emptyDescRow && emptyDescRow.description === "הו\"ק הלו' רבית", "כש'פרטים' ריק בשורה הזו בלבד, נופלים ל'הפעולה' כתיאור, במקום להשאיר תיאור ריק");
+
     console.log("\n📥 ייבוא אקסל - טיפול בשגיאות (קובץ לא תקין / בלי עמודות מוכרות)");
     const badBase64Import = await api("POST", "/api/transactions/import/parse", { data_base64: "not-a-real-file!!", filename: "x.xlsx", source_type: "bank" }, token);
     assert(badBase64Import.status === 400, "קובץ xlsx לא תקין (לא ZIP אמיתי) מחזיר שגיאה ברורה, לא קורס");

@@ -10,6 +10,11 @@ const HEADER_KEYWORDS = {
   // "סוג תנועה"/"סוג פעולה" נוספו בעקבות קובץ בנק אמיתי (מרכנתיל-דיסקונט, ר' htmlTableParser.js) -
   // שם זו בפועל עמודת התיאור (למשל "זיכוי מידי-מרכנתיל", "משיכת מזומן ב'כספון'"), למרות השם.
   description: ["תיאור", "פרטים", "שם בית", "בית עסק", "סוג תנועה", "סוג פעולה", "detail", "description", "narration", "remarks"],
+  // תוקן (נבדק מול קובץ בנק אמיתי נוסף - מזרחי טפחות): "פרטים" הוא עמודת התיאור הכי מדויקת כשהיא
+  // מלאה (למשל "לטובת: ..."), אבל היא ריקה בהרבה שורות (הוראות קבע/עמלות וכו') - שם "הפעולה" (למשל
+  // "הו\"ק הלו' רבית", "זיכוי מהמזרחי") היא בפועל התיאור השימושי היחיד. לכן זו לא ברשימת description
+  // הראשית (שהייתה "מנצחת" לפי סדר עמודות) אלא רשימת גיבוי נפרדת - ר' descFallbackCol ב-rowsToTransactions.
+  descriptionFallback: ["הפעולה", "action", "operation"],
   credit: ["זכות", "credit", "הפקדה"], // "זכות"/הפקדה
   debit: ["חובה", "debit", "חיוב", "משיכה"],
   amount: ["סכום", "amount", "שקל"],
@@ -67,6 +72,7 @@ function detectColumns(headerRow) {
   return {
     dateCol: findColumn(headerRow, HEADER_KEYWORDS.date),
     descCol: findColumn(headerRow, HEADER_KEYWORDS.description),
+    descFallbackCol: findColumn(headerRow, HEADER_KEYWORDS.descriptionFallback),
     creditCol: findColumn(headerRow, HEADER_KEYWORDS.credit),
     debitCol: findColumn(headerRow, HEADER_KEYWORDS.debit),
     // מעדיפים "סכום חיוב" (הסכום שבפועל מחויב) על "סכום עסקה" (הסכום המקורי) אם שתיהן קיימות - ר' הערה ב-findColumnPreferred.
@@ -197,7 +203,12 @@ function rowsToTransactions(rows, sourceType) {
     }
     if (Number.isNaN(amount) || amount <= 0) { skipped.push({ rowIndex: i, reason: "סכום לא תקין" }); continue; }
 
-    const description = cols.descCol >= 0 ? String(row[cols.descCol] ?? "").trim() : "";
+    // ר' הערה ב-HEADER_KEYWORDS.descriptionFallback: "פרטים" עדיף כשהוא מלא, אבל לא בכל שורה - נופלים
+    // ל"הפעולה" (או דומה) רק כשעמודת התיאור הראשית ריקה עבור השורה הספציפית הזו.
+    let description = cols.descCol >= 0 ? String(row[cols.descCol] ?? "").trim() : "";
+    if (!description && cols.descFallbackCol >= 0) {
+      description = String(row[cols.descFallbackCol] ?? "").trim();
+    }
     transactions.push({ date, description, amount: Math.round(amount * 100) / 100, type, category: "" });
   }
 
