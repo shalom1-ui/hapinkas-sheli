@@ -110,6 +110,37 @@ function normalizeDateValue(raw) {
   return null; // לא זוהה כתאריך תקין - השורה תידלג (ר' rowsToTransactions)
 }
 
+// תוקן (נבדק מול קובץ Excel אמיתי - דף "עובר ושב"): חלק מהבנקים משאירים את כותרות עמודות הסכום/
+// היתרה *ריקות לגמרי* בייצוא (העמודות עצמן קיימות ומכילות מספרים אמיתיים לכל שורה - פשוט בלי
+// טקסט כותרת בכלל, כנראה כי הבנק סומך על מיקום/עיצוב ולא על טקסט). אם זיהוי לפי מילות-מפתח לא
+// מצא שום עמודת סכום, מנסים ניחוש לפי תוכן בפועל: סורקים כמה שורות נתונים ומחפשים עמודות (שעדיין
+// לא "תפוסות" ע"י dateCol/descCol) שרוב הערכים בהן הם מספריים. **בין העמודות המספריות שנמצאו
+// לוקחים את זו הראשונה** (אינדקס נמוך יותר) כעמודת "סכום" - בפריסה טיפוסית של דף בנק, עמודת הסכום
+// (שמשתנה בסימן/גודל בין שורה לשורה) מופיעה *לפני* עמודת היתרה הרצה (balance, שמצטברת בהדרגה) -
+// אם יש שתי עמודות מספריות ריקות-כותרת סמוכות, השנייה נשארת פשוט לא מזוהה (balanceCol), וזה בסדר
+// כי היא לא נחוצה לחישוב התנועה עצמה.
+function guessUnlabeledAmountColumn(rows, headerIndex, claimedCols) {
+  const sampleRows = rows.slice(headerIndex + 1, headerIndex + 11).filter(r => r && r.some(c => c !== "" && c !== undefined && c !== null));
+  if (!sampleRows.length) return -1;
+  const numCols = rows[headerIndex] ? rows[headerIndex].length : 0;
+  for (let c = 0; c < numCols; c++) {
+    if (claimedCols.has(c)) continue;
+    let numericCount = 0, dateLikeCount = 0, total = 0;
+    for (const row of sampleRows) {
+      const cell = row[c];
+      if (cell === "" || cell === undefined || cell === null) continue;
+      total++;
+      // תוקן (נבדק מול קובץ אמיתי): מחרוזת תאריך כמו "2026-08-21" "מצליחה" להיקרא כמספר (2026) לפי
+      // parseAmountValue (שמחפש רק את הטוקן המספרי הראשון) - בלי הבדיקה הזו, עמודת "תאריך ערך" נוספת
+      // (לא רק dateCol הרשמית) הייתה מזוהה בטעות כעמודת סכום, לפני שמגיעים בכלל לעמודה המספרית האמיתית.
+      if (normalizeDateValue(cell)) { dateLikeCount++; continue; }
+      if (!Number.isNaN(parseAmountValue(cell))) numericCount++;
+    }
+    if (total >= 2 && dateLikeCount / total < 0.5 && numericCount / total >= 0.8) return c; // העמודה המספרית (לא-תאריך) הראשונה שנמצאה
+  }
+  return -1;
+}
+
 // הופך מטריצת שורות גולמית לרשימת תנועות מוכנות לתצוגה מקדימה/ייבוא.
 // sourceType: 'bank' (עו"ש - ברירת מחדל להכנסה/הוצאה לפי סימן, אם אין עמודות זכות/חובה נפרדות)
 //             'card' (כרטיס אשראי - ברירת מחדל "הוצאה", כי רוב השורות הן חיובים; שורה עם סכום שלילי
@@ -125,7 +156,12 @@ function rowsToTransactions(rows, sourceType) {
     return { error: "לא נמצאה עמודת תאריך בקובץ - לא ניתן לייבא בלי תאריך לכל תנועה." };
   }
   if (cols.creditCol < 0 && cols.debitCol < 0 && cols.amountCol < 0) {
-    return { error: "לא נמצאה עמודת סכום (או זכות/חובה) בקובץ." };
+    // ר' הערה מפורטת ב-guessUnlabeledAmountColumn - חלק מהבנקים משאירים כותרת עמודת הסכום ריקה.
+    const claimed = new Set([cols.dateCol, cols.descCol, cols.balanceCol].filter(c => c >= 0));
+    cols.amountCol = guessUnlabeledAmountColumn(rows, headerIndex, claimed);
+    if (cols.amountCol < 0) {
+      return { error: "לא נמצאה עמודת סכום (או זכות/חובה) בקובץ." };
+    }
   }
 
   const transactions = [];

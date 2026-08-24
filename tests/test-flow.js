@@ -423,6 +423,34 @@ async function run() {
     );
     assert(cardImportCommit.data.imported === 2, "שתי תנועות הכרטיס נשמרו בהצלחה עם קטגוריה שנבחרה בתצוגה המקדימה");
 
+    console.log("\n📥 ייבוא CSV של דף בנק - עמודות סכום/יתרה בלי כותרת טקסט בכלל (נבדק מול קובץ אמיתי)");
+    // תוקן בעקבות קובץ Excel אמיתי (ייצוא "עובר ושב"): הבנק משאיר את כותרות עמודות הסכום/היתרה
+    // *ריקות לגמרי* בטקסט (העמודות עצמן קיימות עם מספרים אמיתיים - פשוט בלי כותרת). ר'
+    // guessUnlabeledAmountColumn ב-importMapping.js. גם בודקים שעמודת "יום ערך" (תאריך ערך נוסף,
+    // לא עמודת התאריך הראשית) לא נתפסת בטעות כעמודת הסכום - היא "מצליחה" להיקרא כמספר (למשל
+    // "2026" מתוך "2026-08-21") אם לא בודקים במפורש שזו מחרוזת תאריך ומדלגים עליה.
+    const noHeaderAmountCsv =
+      "תאריך,יום ערך,תיאור התנועה,,,אסמכתה\n" +
+      "2026-08-21,2026-08-21,תשלום שכירות,-2500,-1000,111\n" +
+      "2026-08-19,2026-08-20,משכורת,5000,2500,112\n";
+    const noHeaderAmountImport = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: Buffer.from(noHeaderAmountCsv, "utf8").toString("base64"), filename: "over-veshav.csv", source_type: "bank" },
+      token
+    );
+    assert(
+      noHeaderAmountImport.status === 200 && noHeaderAmountImport.data.transactions.length === 2,
+      `ייבוא הצליח למרות שעמודות הסכום/יתרה חסרות כותרת טקסט (${JSON.stringify(noHeaderAmountImport.data)})`
+    );
+    const rentRow = noHeaderAmountImport.data.transactions.find(t => t.amount === 2500 && t.description === "תשלום שכירות");
+    assert(rentRow && rentRow.type === "expense", "סכום שלילי (-2500) בעמודה ללא כותרת זוהה נכון כהוצאה, לא נתפס בטעות כתאריך/מספר אחר");
+    const salaryRow = noHeaderAmountImport.data.transactions.find(t => t.amount === 5000 && t.description === "משכורת");
+    assert(salaryRow && salaryRow.type === "income", "סכום חיובי (5000) בעמודה ללא כותרת זוהה נכון כהכנסה");
+    assert(
+      !noHeaderAmountImport.data.transactions.some(t => t.amount === 2026),
+      "עמודת 'יום ערך' (גם היא תאריך, לא עמודת הסכום) לא נתפסה בטעות כעמודת סכום (הבאג המקורי - קריאת '2026' מתוך תאריך כסכום)"
+    );
+
     console.log("\n📥 ייבוא אקסל - טיפול בשגיאות (קובץ לא תקין / בלי עמודות מוכרות)");
     const badBase64Import = await api("POST", "/api/transactions/import/parse", { data_base64: "not-a-real-file!!", filename: "x.xlsx", source_type: "bank" }, token);
     assert(badBase64Import.status === 400, "קובץ xlsx לא תקין (לא ZIP אמיתי) מחזיר שגיאה ברורה, לא קורס");
