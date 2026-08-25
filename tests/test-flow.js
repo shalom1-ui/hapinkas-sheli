@@ -491,6 +491,28 @@ async function run() {
     const emptyDescRow = descFallbackImport.data.transactions.find(t => t.amount === 434.29);
     assert(emptyDescRow && emptyDescRow.description === "הו\"ק הלו' רבית", "כש'פרטים' ריק בשורה הזו בלבד, נופלים ל'הפעולה' כתיאור, במקום להשאיר תיאור ריק");
 
+    console.log("\n📥 ייבוא CSV של דף בנק - תיאור מורחב ('תאור מורחב') עדיף כשהוא מלא (בנק לאומי)");
+    // תוקן בעקבות קובץ Excel אמיתי (בנק לאומי): עמודת "תיאור" שם כמעט תמיד גנרית ולא-ריקה ("כרטיס
+    // דביט" לעשרות שורות שונות) - ההפך מהמקרה של מזרחי טפחות: כאן העמודה השימושית ("תאור מורחב",
+    // למשל פרטי העברה מלאים) *עדיפה כשהיא כן מלאה*, לא רק גיבוי לכשהראשית ריקה. ר' HEADER_KEYWORDS.descriptionExtended.
+    const descExtendedCsv =
+      "תאריך,תיאור,חובה,זכות,תאור מורחב\n" +
+      "23/08/2026,כרטיס דביט,420,,\n" +
+      "24/08/2026,הע. אינטרנט,1000,,TRANSFER TO: MIZRAHI TEFAHOT BANK\n";
+    const descExtendedImport = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: Buffer.from(descExtendedCsv, "utf8").toString("base64"), filename: "leumi.csv", source_type: "bank" },
+      token
+    );
+    assert(descExtendedImport.status === 200 && descExtendedImport.data.transactions.length === 2, "ייבוא עם עמודת 'תאור מורחב' הצליח");
+    const noExtendedRow = descExtendedImport.data.transactions.find(t => t.amount === 420);
+    assert(noExtendedRow && noExtendedRow.description === "כרטיס דביט", "כש'תאור מורחב' ריק בשורה הזו, נשארים עם התיאור הראשי הרגיל ('כרטיס דביט')");
+    const hasExtendedRow = descExtendedImport.data.transactions.find(t => t.amount === 1000);
+    assert(
+      hasExtendedRow && hasExtendedRow.description === "TRANSFER TO: MIZRAHI TEFAHOT BANK",
+      "כש'תאור מורחב' מלא, הוא מחליף את התיאור הראשי הגנרי ('הע. אינטרנט') - לא רק גיבוי לכשהראשי ריק, אלא עדיפות כשהוא כן מלא"
+    );
+
     console.log("\n📥 ייבוא אקסל - טיפול בשגיאות (קובץ לא תקין / בלי עמודות מוכרות)");
     const badBase64Import = await api("POST", "/api/transactions/import/parse", { data_base64: "not-a-real-file!!", filename: "x.xlsx", source_type: "bank" }, token);
     assert(badBase64Import.status === 400, "קובץ xlsx לא תקין (לא ZIP אמיתי) מחזיר שגיאה ברורה, לא קורס");

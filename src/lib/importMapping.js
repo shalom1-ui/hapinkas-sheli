@@ -15,6 +15,12 @@ const HEADER_KEYWORDS = {
   // "הו\"ק הלו' רבית", "זיכוי מהמזרחי") היא בפועל התיאור השימושי היחיד. לכן זו לא ברשימת description
   // הראשית (שהייתה "מנצחת" לפי סדר עמודות) אלא רשימת גיבוי נפרדת - ר' descFallbackCol ב-rowsToTransactions.
   descriptionFallback: ["הפעולה", "action", "operation"],
+  // תוקן (נבדק מול קובץ בנק אמיתי נוסף - בנק לאומי): "תיאור" שם הוא כמעט תמיד עמודה גנרית ולא-ריקה
+  // ("כרטיס דביט" לעשרות שורות שונות לגמרי) - ההפך מ-descriptionFallback: כאן העמודה השימושית באמת
+  // ("תאור מורחב", למשל "TRANSFER TO: MIZRAHI TEFAHOT BANK...") היא זו שלפעמים ריקה, ו**עדיפה כשהיא
+  // כן מלאה** - לא רק גיבוי לכשהראשית ריקה. לכן זו רשימה שלישית נפרדת (descExtendedCol), עם כיוון
+  // עדיפות הפוך מ-descriptionFallback - ר' rowsToTransactions.
+  descriptionExtended: ["מורחב", "extended"],
   credit: ["זכות", "credit", "הפקדה"], // "זכות"/הפקדה
   debit: ["חובה", "debit", "חיוב", "משיכה"],
   amount: ["סכום", "amount", "שקל"],
@@ -73,6 +79,7 @@ function detectColumns(headerRow) {
     dateCol: findColumn(headerRow, HEADER_KEYWORDS.date),
     descCol: findColumn(headerRow, HEADER_KEYWORDS.description),
     descFallbackCol: findColumn(headerRow, HEADER_KEYWORDS.descriptionFallback),
+    descExtendedCol: findColumn(headerRow, HEADER_KEYWORDS.descriptionExtended),
     creditCol: findColumn(headerRow, HEADER_KEYWORDS.credit),
     debitCol: findColumn(headerRow, HEADER_KEYWORDS.debit),
     // מעדיפים "סכום חיוב" (הסכום שבפועל מחויב) על "סכום עסקה" (הסכום המקורי) אם שתיהן קיימות - ר' הערה ב-findColumnPreferred.
@@ -163,7 +170,7 @@ function rowsToTransactions(rows, sourceType) {
   }
   if (cols.creditCol < 0 && cols.debitCol < 0 && cols.amountCol < 0) {
     // ר' הערה מפורטת ב-guessUnlabeledAmountColumn - חלק מהבנקים משאירים כותרת עמודת הסכום ריקה.
-    const claimed = new Set([cols.dateCol, cols.descCol, cols.balanceCol].filter(c => c >= 0));
+    const claimed = new Set([cols.dateCol, cols.descCol, cols.descFallbackCol, cols.descExtendedCol, cols.balanceCol].filter(c => c >= 0));
     cols.amountCol = guessUnlabeledAmountColumn(rows, headerIndex, claimed);
     if (cols.amountCol < 0) {
       return { error: "לא נמצאה עמודת סכום (או זכות/חובה) בקובץ." };
@@ -203,9 +210,11 @@ function rowsToTransactions(rows, sourceType) {
     }
     if (Number.isNaN(amount) || amount <= 0) { skipped.push({ rowIndex: i, reason: "סכום לא תקין" }); continue; }
 
-    // ר' הערה ב-HEADER_KEYWORDS.descriptionFallback: "פרטים" עדיף כשהוא מלא, אבל לא בכל שורה - נופלים
-    // ל"הפעולה" (או דומה) רק כשעמודת התיאור הראשית ריקה עבור השורה הספציפית הזו.
-    let description = cols.descCol >= 0 ? String(row[cols.descCol] ?? "").trim() : "";
+    // סדר עדיפות לתיאור: (1) descExtendedCol - "מורחב"/"extended", עדיף *כל אימת שהוא מלא* (ר' הערה
+    // ב-HEADER_KEYWORDS.descriptionExtended - זו העמודה עם הפרטים השימושיים באמת, כשקיימים). (2)
+    // descCol הראשי. (3) descFallbackCol - "הפעולה" וכדומה, רק כש-descCol עצמו ריק לשורה הזו.
+    const extendedDescription = cols.descExtendedCol >= 0 ? String(row[cols.descExtendedCol] ?? "").trim() : "";
+    let description = extendedDescription || (cols.descCol >= 0 ? String(row[cols.descCol] ?? "").trim() : "");
     if (!description && cols.descFallbackCol >= 0) {
       description = String(row[cols.descFallbackCol] ?? "").trim();
     }
