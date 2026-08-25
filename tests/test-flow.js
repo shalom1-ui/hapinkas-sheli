@@ -334,6 +334,27 @@ async function run() {
     assert(listAfterTithe.data.tithe.remaining === 180, `'נותר לתת' חושב נכון: חובה 300 פחות 120 שכבר ניתנו = 180 (${listAfterTithe.data.tithe.remaining} === 180)`);
     assert(listAfterTithe.data.byCategory["צדקה"] === 50, "הוצאת הצדקה מופיעה בפילוח הוצאות לפי קטגוריה בנפרד");
 
+    console.log("\n🗑️ מחיקת תנועה - משוב אמיתי: 'אני לא רואה שיש אפשרות למחוק נתונים'");
+    // הנתיב עצמו (DELETE /api/transactions/:id) כבר היה קיים בשרת - המשוב היה שאין לו כפתור בממשק
+    // בכלל (ר' תיקון ב-public/app.html, deleteTransaction). כאן בודקים את ה-API עצמו מקצה לקצה.
+    const txToDelete = await api("POST", "/api/transactions", { type: "expense", amount: 33, category: "למחיקה" }, token);
+    assert(txToDelete.status === 201, "יצירת תנועה זמנית לצורך בדיקת המחיקה הצליחה");
+    const txToDeleteId = txToDelete.data.transaction.id;
+    const otherUserSignup = await api("POST", "/api/auth/signup", {
+      full_name: "משתמש זר למחיקה", username: `stranger_delete_${Date.now()}`, password: "1234", phone: `+97250${Date.now().toString().slice(-7)}`,
+    });
+    const otherUserToken = otherUserSignup.data.token;
+    const strangerDeleteAttempt = await api("DELETE", `/api/transactions/${txToDeleteId}`, null, otherUserToken);
+    assert(strangerDeleteAttempt.status === 404, "משתמש אחר לא יכול למחוק תנועה שאינה שלו (404, לא חושף מידע)");
+    const stillThere = await api("GET", "/api/transactions", null, token);
+    assert(stillThere.data.transactions.some(t => t.id === txToDeleteId), "התנועה עדיין קיימת אחרי ניסיון המחיקה הזר שנחסם");
+    const realDelete = await api("DELETE", `/api/transactions/${txToDeleteId}`, null, token);
+    assert(realDelete.status === 200, "הבעלים האמיתי כן יכול למחוק את התנועה שלו");
+    const afterRealDelete = await api("GET", "/api/transactions", null, token);
+    assert(!afterRealDelete.data.transactions.some(t => t.id === txToDeleteId), "התנועה אכן נעלמה מהרשימה אחרי המחיקה");
+    const deleteAgain = await api("DELETE", `/api/transactions/${txToDeleteId}`, null, token);
+    assert(deleteAgain.status === 404, "ניסיון למחוק תנועה שכבר נמחקה מחזיר 404, לא קורס");
+
     console.log("\n📥 ייבוא אקסל/CSV של דף בנק - זיהוי עמודות זכות/חובה אוטומטי");
     // משוב אמיתי ממשתמש: "רוצה להכניס אקסל של דפי בנק או דפי כרטיס אשראי, שיוכל להוריד אותו
     // והמערכת תכניס את זה להכנסות והוצאות". ר' src/lib/xlsxParser.js, src/lib/importMapping.js,

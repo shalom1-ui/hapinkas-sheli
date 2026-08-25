@@ -686,10 +686,28 @@ const CATEGORY_COLORS = ['#2a78d6', '#1baf7a', '#eda100', '#4a3aa7', '#eb6834'];
 async function addTransaction() {
   const type = document.getElementById('t_type').value;
   const amount = Number(document.getElementById('t_amount').value);
-  const category = document.getElementById('t_category').value;
+  let category = document.getElementById('t_category').value.trim();
   if (!amount) { toast('יש להזין סכום', 'error'); return; }
+  // תוקן (משוב אמיתי: "כשאני לוחץ על אחר אמור להיפתח קוביה לטקסט חופשי ולהשאיר קטגוריות למילון") -
+  // "אחר" הוא ערך placeholder ברשימת ההצעות (category-suggestions), לא קטגוריה אמיתית - בדיוק כמו
+  // "אחר" בתפריט הקטגוריות בטלפון (ר' case "expense_category_other"/"income_category_other" ב-
+  // routes/ivr.js), כשבוחרים אותו מבקשים תיאור חופשי בפועל. הערך החופשי הזה משמש כקטגוריה בפועל,
+  // ונכנס למילון האישי כרגיל (rememberPhrase ב-routes/transactions.js כבר שומר כל קטגוריה שמגיעה).
+  if (category === 'אחר') {
+    const custom = prompt('איזו קטגוריה? (למשל: תרופות, מתנות)');
+    if (!custom || !custom.trim()) { toast('לא הוזנה קטגוריה - התנועה לא נוספה', 'error'); return; }
+    category = custom.trim();
+  }
   const r = await api('POST', '/api/transactions', { type, amount, category: category || undefined });
   if (r.ok) { toast('התנועה נוספה בהצלחה', 'success'); document.getElementById('t_amount').value = ''; document.getElementById('t_category').value = ''; loadTransactions(); }
+}
+
+// תוקן (משוב אמיתי: "אני לא רואה שיש אפשרות למחוק נתונים") - נתיב DELETE /api/transactions/:id
+// כבר קיים בשרת (למשל לתיקון טעות הזנה) - רק לא היה חשוף בממשק בכלל. ר' כפתור "מחיקה" ב-loadTransactions.
+async function deleteTransaction(id, label, amount) {
+  if (!confirm(`למחוק את התנועה "${label}" (₪${amount})? לא ניתן לשחזר אחרי המחיקה.`)) return;
+  const r = await api('DELETE', `/api/transactions/${id}`);
+  if (r.ok) { toast('התנועה נמחקה', 'success'); loadTransactions(); }
 }
 
 // ---------- ייבוא תנועות מאקסל/CSV (דף בנק/כרטיס אשראי) ----------
@@ -967,10 +985,15 @@ async function loadTransactions() {
   document.getElementById('ov-tithe-remaining').textContent = `₪${tithe.remaining}`;
 
   const txs = r.data.transactions;
+  // תוקן (משוב אמיתי: "אני לא רואה שיש אפשרות למחוק נתונים") - נתיב המחיקה (DELETE /api/transactions/:id)
+  // כבר היה קיים בשרת (למשל לתיקון טעות הזנה), פשוט לא היה לו כפתור בממשק בכלל - נוסף כאן.
   const listHtml = txs.length ? txs.map(t => `
     <div class="list-item">
       <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}</div></div>
-      <div style="text-align:left"><span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span></div>
+      <div style="display:flex; align-items:center; gap:10px">
+        <span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span>
+        <button class="btn secondary sm" onclick="deleteTransaction(${t.id}, '${(t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')).replace(/'/g, "\\'")}', ${t.amount})">מחיקה</button>
+      </div>
     </div>`).join('') : '<div class="empty-state">אין עדיין תנועות</div>';
   document.getElementById('tx-list').innerHTML = listHtml;
   document.getElementById('ov-recent').innerHTML = txs.slice(0, 5).length
