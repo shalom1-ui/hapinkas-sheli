@@ -229,25 +229,28 @@ function register(router) {
 // וזה בדיוק מה שגורם לתחושת "לא מזהה מיד כשמתחילים לדבר" - ככל שהברכת פתיחה קצרה יותר, ההאזנה
 // בפועל מתחילה מוקדם יותר. הרשימה המלאה של מספר<->קטגוריה נשארת ב-README, לא מוקראת כל שיחה.
 function mainMenuPrompt(name, opts = {}) {
-  // digitConfirm בערוצים שתומכים בהקשה תוך כדי זיהוי דיבור (כרגע: ימות בלבד) - מזכירים כבר בפתיחה
-  // שאפשר להקיש ספרה במקום לדבר, ובלי לחכות שהמערכת תסיים להקריא את כל התפריט (ימות לא חוסם הקשה
-  // במהלך ההשמעה - ר' services/yemot.js). בכוונה לא חוזרים כאן על כל רשימת הספרות (זה כבר ארוך
-  // מספיק בגלל רשימת הקטגוריות עצמה) - מספיק לדעת שאפשר להקיש בכלל.
   // חשוב: כאן לא מזכירים "סולמית לאישור מהיר" - זה תפריט בחירת קטגוריה, לא שאלת כן/לא, ולסולמית
   // אין כאן שום פעולה. הזכרה שגויה שלה כאן גרמה בעבר לכך שמתקשרים ניסו להקיש סולמית במסך הזה ולא
   // קרה כלום חוץ מ"לא זוהה דיבור" אחרי המתנה - ר' isConfirmYes/confirmSuffix למקומות שבהם סולמית כן פעילה.
-  // opts.menuVoiceOnly: true - כשזיהוי דיבור משודרג (Whisper) פעיל גם בתפריט הראשי (ר' routes/yemot.js),
-  // התפריט עובר למצב "הקלטה" גולמי כדי לתמלל במדויק - ובמצב הזה הקשת מקלדת **לא נקלטת בכלל** תוך כדי
-  // ההקלטה (בניגוד למצב הרגיל). לכן, במצב הזה בלבד, לא מזכירים למתקשר שאפשר להקיש - זה היה מטעה.
-  const digitNote = opts.digitConfirm && !opts.menuVoiceOnly ? " אפשר גם להקיש 1 עד 7." : "";
-  return `${name ? `שלום ${name}, ` : "שלום, "}הגעתם לפנקס שלי. נא לציין קטגוריה: ${mainMenuCategoriesText()}${digitNote}`;
+  return `${name ? `שלום ${name}, ` : "שלום, "}הגעתם לפנקס שלי. נא לציין קטגוריה: ${mainMenuCategoriesText(opts)}`;
 }
 // תוקן (אבחון בפועל מול קו אמיתי): פסיקים בלבד בין הקטגוריות לא יצרו הפרדה קולית מספיקה אצל מנוע
 // ה-TTS של ימות - "תנועות, חונכות" נשמע כמו ביטוי אחד מחובר ("תנועות חונכות"), לא כשתי קטגוריות
 // נפרדות. אי אפשר לתקן את זה עם נקודות (תווי בקרה בפרוטוקול של ימות - ר' sanitizeForYemot, נמחקים
 // אוטומטית). הפתרון: מוסיפים את המילה "או" לפני **כל** קטגוריה (לא רק לפני האחרונה) - כך שיש תמיד
 // גבול מילה ברור בין קטגוריה לקטגוריה, בלי תלות בפרשנות של ימות לפיסוק.
-function mainMenuCategoriesText() {
+//
+// תוקן שוב (משוב אמיתי ממשתמש: "המערכת שואלת מה אתם רוצים... או להקיש 1 עד 7 - זה לא טוב, צריך
+// לומר אפשר גם להקיש ניהול חשבונות 1, תנועות הקישו 2, וכן הלאה") - הערה כללית בסוף ("אפשר גם להקיש
+// 1 עד 7") לא עוזרת בלי לדעת איזו ספרה שייכת לאיזו קטגוריה. עכשיו (בימות בלבד - digitConfirm), כל
+// קטגוריה מקבלת את מספר ההקשה שלה מיד אחריה ("X הקישו N") - לא רשימה כללית נפרדת בסוף. opts.menuVoiceOnly:
+// true כשזיהוי דיבור משודרג (Whisper) פעיל היה עובר למצב "הקלטה" שחוסם הקשות - כרגע לא רלוונטי בפועל
+// (main_menu לעולם לא עובר למצב הזה, ר' MENU_DIGIT_FREE_TEXT_STATES ב-routes/yemot.js), אבל נשאר כאן
+// כהגנה: אם זה אי-פעם ישתנה בחזרה, לא נזכיר הקשה שלא באמת זמינה.
+function mainMenuCategoriesText(opts) {
+  if (opts && opts.digitConfirm && !opts.menuVoiceOnly) {
+    return "ניהול חשבונות הקישו 1. תנועות הקישו 2. חונכות הקישו 3. מטפלים הקישו 4. הורה הקישו 5. הערת מפקח הקישו 6. מעשרות הקישו 7.";
+  }
   return "ניהול חשבונות, או תנועות, או חונכות, או מטפלים, או הורה, או הערת מפקח, או מעשרות.";
 }
 
@@ -409,7 +412,7 @@ async function advance(state, speech, draft, user, opts = {}) {
   // לא רלוונטי בשלבי טקסט חופשי מוקלט (ר' FREE_TEXT_STATES ב-routes/yemot.js) - שם ימות ממילא
   // חוסמת הקשה כלשהי תוך כדי ההקלטה עצמה (מגבלת ימות, לא קשור לתכונה הזו).
   if (opts.digitConfirm && s === "*" && state !== "main_menu") {
-    return { text: `חוזרים לתפריט הראשי. ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+    return { text: `חוזרים לתפריט הראשי. ${mainMenuCategoriesText(opts)}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
   }
 
   switch (state) {
@@ -419,7 +422,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       const es = mainMenuDigitKeyword(s) || s;
       const match = matchMainMenuCategory(es, opts, user);
       if (match) return match;
-      return { text: `לא הבנתי.${retryHint()} אפשר לומר: ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      return { text: `לא הבנתי.${retryHint()} אפשר לומר: ${mainMenuCategoriesText(opts)}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
     }
 
     // ---------- אחרי קריאת יתרה (ר' doBalance): הצעה להוסיף הכנסה/הוצאה ----------
@@ -523,7 +526,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       // ביטול מוחלט - משוב אמיתי ממשתמש שרצה דרך לתקן טעות בלי לחזור לתפריט הראשי ולהתחיל מאפס.
       if (wantsMenuChange(s, opts)) return { text: "בסדר, נתחיל מחדש. כמה עלה, בשקלים?", nextState: "expense_amount" };
       if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
-        return { text: `בוטל. אפשר להתחיל שוב, מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+        return { text: `בוטל. אפשר להתחיל שוב, מה תרצו לעשות? ${mainMenuCategoriesText(opts)}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       }
       return {
         text: `לא הבנתי.${retryHint()} לאשר: הוצאה של ${draft.amount} שקלים בקטגוריית ${draft.category}? ${confirmMenuText(opts)}`,
@@ -588,7 +591,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       }
       if (wantsMenuChange(s, opts)) return { text: "בסדר, נתחיל מחדש. מה סכום ההכנסה?", nextState: "income_amount" };
       if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
-        return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+        return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText(opts)}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       }
       return {
         text: `לא הבנתי.${retryHint()} לאשר: הכנסה של ${draft.amount} שקלים מ${draft.category}? ${confirmMenuText(opts)}`,
@@ -624,7 +627,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       }
       if (wantsMenuChange(s, opts)) return { text: "בסדר, נתחיל מחדש. כמה מעשר נתת, בשקלים?", nextState: "tithe_amount" };
       if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
-        return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+        return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText(opts)}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       }
       return {
         text: `לא הבנתי.${retryHint()} רשמתי ${draft.amount} שקלים מעשר. לאשר? ${confirmMenuText(opts)}`,
@@ -728,7 +731,7 @@ async function advance(state, speech, draft, user, opts = {}) {
         };
       }
       if (wantsCancel) {
-        return { text: `בסדר, לא הוספנו. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+        return { text: `בסדר, לא הוספנו. מה תרצו לעשות? ${mainMenuCategoriesText(opts)}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       }
       // תוקן (אותו באג אמיתי שהוזכר למעלה - ר' singleDigitPress): שארית הקשה גולמית לא-מזוהה (למשל
       // הקשה בת 2 ספרות שונות, לא נתמכת) **לא** אמורה להיחשב "ניסיון לומר שם" ולהיווצר כתלמיד בפועל -
@@ -783,7 +786,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       // "שינוי" כאן = אולי התכוונתם לתלמיד אחר - חוזרים לבחירת תלמיד מחדש, לא רק מבטלים לגמרי.
       if (wantsMenuChange(s, opts)) return { text: "בסדר, מה שם התלמיד?", nextState: "mentor_pick_student" };
       if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
-        return { text: `בסדר, לא הסרנו. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+        return { text: `בסדר, לא הסרנו. מה תרצו לעשות? ${mainMenuCategoriesText(opts)}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       }
       return {
         text: `לא הבנתי.${retryHint()} לאשר: להסיר את ${draft.studentName} מרשימת התלמידים שלך? התלמיד לא יימחק לצמיתות, רק לא יופיע יותר ברשימה הפעילה - כל ההיסטוריה שלו נשארת בתיק. ${confirmMenuText(opts)}`,
@@ -929,7 +932,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       }
       if (wantsMenuChange(s, opts)) return { text: "בסדר, אפשר לתאר שוב את תוכן הדיווח?", nextState: "therapist_note", draft };
       if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
-        return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+        return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText(opts)}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       }
       return {
         text: `לא הבנתי.${retryHint()} לאשר דיווח על ${draft.studentName}: ${draft.note}. ${confirmMenuText(opts)}`,
@@ -969,7 +972,7 @@ async function advance(state, speech, draft, user, opts = {}) {
       }
       if (wantsMenuChange(s, opts)) return { text: "בסדר, אפשר לתאר שוב את תוכן ההערה?", nextState: "supervisor_readback", draft };
       if (isConfirmNo(s, opts) || wantsMenuCancel(s, opts)) {
-        return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+        return { text: `בוטל. מה תרצו לעשות? ${mainMenuCategoriesText(opts)}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
       }
       return {
         text: `לא הבנתי.${retryHint()} לאשר הערה על ${draft.studentName}: ${draft.text}. ${confirmMenuText(opts)}`,
@@ -979,7 +982,7 @@ async function advance(state, speech, draft, user, opts = {}) {
     }
 
     default:
-      return { text: `מתחילים מחדש. מה תרצו לעשות? ${mainMenuCategoriesText()}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
+      return { text: `מתחילים מחדש. מה תרצו לעשות? ${mainMenuCategoriesText(opts)}`, nextState: "main_menu", hints: MAIN_MENU_HINTS };
   }
 }
 
