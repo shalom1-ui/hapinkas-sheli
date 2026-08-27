@@ -153,13 +153,101 @@ function decodeShowTextOperand(token, cmap) {
 }
 
 // ---------- שכבה 4: הרצת אופרטורי זרם התוכן - שולפים ריצות טקסט עם מיקום (x,y) ----------
-const TEXT_TOKEN_RE = /\((?:[^()\\]|\\.)*\)|\[(?:[^\[\]]|\[[^\]]*\])*\]|<[0-9a-fA-F\s]*>|[-\d.]+|\/[A-Za-z0-9.]+|[A-Za-z]+/g;
+// תוקן (נבדק מול קובץ אמיתי - מזרחי טפחות, ר' README "PDF עם טקסט בתוך Form XObject מקונן"): שמות
+// משאבים (גופנים/XObjects) בקובץ הזה מכילים "+"/"-" (למשל "/IWNTIR+f10sodrn-ge8-f65-...", טיפוסי
+// לשמות גופן-משנה מוטמע) - הביטוי הרגולרי הישן ל-Name (`[A-Za-z0-9.]+`) קטע את השם באמצע, מה שגרם
+// לשארית התו (למשל "+f10sodrn-ge8...") להתפרש בטעות כאופרטורים/מספרים חסרי-משמעות. הורחב לכלול גם
+// "+"/"-"/"_".
+const TEXT_TOKEN_RE = /\((?:[^()\\]|\\.)*\)|\[(?:[^\[\]]|\[[^\]]*\])*\]|<[0-9a-fA-F\s]*>|[-\d.]+|\/[A-Za-z0-9+\-_.]+|[A-Za-z]+/g;
 
-function extractTextRuns(contentText, cmap) {
-  const runs = [];
+// ---------- מטריצות 2D (a b c d e f) - נדרש כדי לתמוך ב-PDF שמצייר את הטקסט האמיתי בתוך Form
+// XObject מקונן (לא ישירות בזרם התוכן של העמוד) עם קנה-מידה/הזזה דרך cm - ר' walkContentStream. ----------
+const MAT_IDENTITY = [1, 0, 0, 1, 0, 0];
+// מכפלת מטריצות בסדר השרשור התקני של PDF/PostScript: מחילים קודם את m1 (הקרובה יותר לטקסט/לצייר
+// הפנימי) ואז את m2 (ה-CTM החיצוני/הקודם) - "cm" חדש הופך ל-m1, וה-CTM הקיים עד כה ל-m2.
+function matMultiply(m1, m2) {
+  const [a1, b1, c1, d1, e1, f1] = m1;
+  const [a2, b2, c2, d2, e2, f2] = m2;
+  return [
+    a1 * a2 + b1 * c2,
+    a1 * b2 + b1 * d2,
+    c1 * a2 + d1 * c2,
+    c1 * b2 + d1 * d2,
+    e1 * a2 + f1 * c2 + e2,
+    e1 * b2 + f1 * d2 + f2,
+  ];
+}
+function matApply(m, x, y) {
+  const [a, b, c, d, e, f] = m;
+  return [a * x + c * y + e, b * x + d * y + f];
+}
+
+// ---------- פענוח "/Resources << ... >>" (של עמוד או של Form XObject) לשתי מפות שם->מספר אובייקט:
+// /Font ו-/XObject. משתמש בסריקת "<<"/">>" מאוזנת (לא regex לא-חמדן פשוט) כי /Resources מכיל בלוקים
+// מקוננים (/Font << ... >>, /XObject << ... >>) שהיו "שוברים" regex מהסוג `<<([\s\S]*?)>>`. ----------
+function extractBalancedDict(text, ltStartIdx) {
+  let depth = 0, i = ltStartIdx;
+  while (i < text.length) {
+    if (text[i] === "<" && text[i + 1] === "<") { depth++; i += 2; continue; }
+    if (text[i] === ">" && text[i + 1] === ">") {
+      depth--; i += 2;
+      if (depth === 0) return text.slice(ltStartIdx + 2, i - 2);
+      continue;
+    }
+    i++;
+  }
+  return text.slice(ltStartIdx + 2);
+}
+function findSubDict(text, key) {
+  const m = new RegExp(`/${key}\\s*<<`).exec(text);
+  if (!m) return null;
+  return extractBalancedDict(text, text.indexOf("<<", m.index));
+}
+function parseNameToObjNum(dictText) {
+  const map = new Map();
+  if (!dictText) return map;
+  for (const m of dictText.matchAll(/\/([^\s/<>[\]()]+)\s+(\d+)\s+0\s+R/g)) map.set("/" + m[1], m[2]);
+  return map;
+}
+function parseResourcesFromDict(dictText) {
+  const resBlock = findSubDict(dictText, "Resources");
+  if (!resBlock) return { fontMap: new Map(), xobjectMap: new Map() };
+  return {
+    fontMap: parseNameToObjNum(findSubDict(resBlock, "Font")),
+    xobjectMap: parseNameToObjNum(findSubDict(resBlock, "XObject")),
+  };
+}
+
+// מטמון גופן->ToUnicode CMap, לפי מספר אובייקט (נדרש כי לקובץ יכולים להיות כמה גופנים אמיתיים -
+// למשל אחד לכותרות ואחד לנתוני הטבלה - שכל אחד מהם נבחר בפועל דרך אופרטור Tf, לא "ניחוש גלובלי" יחיד).
+function getFontCMap(buffer, pdfText, fontObjNum, cache) {
+  if (cache.has(fontObjNum)) return cache.get(fontObjNum);
+  let result = null;
+  const o = getObjectRaw(pdfText, fontObjNum);
+  if (o) {
+    const m = /\/ToUnicode\s+(\d+)\s+0\s+R/.exec(o.raw.split("stream")[0]);
+    if (m) {
+      const bytes = getStreamBytes(buffer, pdfText, m[1]);
+      if (bytes) result = parseToUnicodeCMap(bytes.toString("latin1"));
+    }
+  }
+  cache.set(fontObjNum, result);
+  return result;
+}
+
+// מריץ זרם תוכן (של עמוד, או של Form XObject מקונן - ר' טיפול ב-Do למטה) ואוסף ריצות טקסט עם מיקום
+// (x,y) *אחרי* טרנספורמציה למרחב-העמוד המלא (matApply עם ה-CTM המצטבר). תוקן (נבדק מול קובץ אמיתי -
+// מזרחי טפחות): שם, בניגוד לקובץ כאל הקודם, הטקסט לא מצויר ישירות בזרם התוכן של העמוד אלא בתוך Form
+// XObject מקונן (מוזמן דרך "/Name Do", אחרי "cm" שקובע קנה-מידה/הזזה) - בלי מעקב CTM אמיתי (q/cm/Q)
+// ורזולוציית Do רקורסיבית, כל הטקסט היה "נעלם" (או ממוקם לא נכון, שובר את קיבוץ השורות/העמודות).
+const MAX_XOBJECT_DEPTH = 8;
+function walkContentStream(ctx, contentText, ctm, resources, depth, visited) {
+  if (depth > MAX_XOBJECT_DEPTH) return;
   let x = 0, y = 0;
+  let curCmap = ctx.fallbackCmap;
   const tokens = contentText.match(TEXT_TOKEN_RE) || [];
   let stack = [];
+  const gsStack = []; // שומר [ctm, curCmap] יחד - שניהם חלק ממצב הגרפיקה שנשמר/משוחזר ע"י q/Q
   for (const tok of tokens) {
     if (/^[A-Za-z]+$/.test(tok) && tok !== "true" && tok !== "false") {
       if (tok === "Td" || tok === "TD") {
@@ -168,28 +256,61 @@ function extractTextRuns(contentText, cmap) {
       } else if (tok === "Tm") {
         x = parseFloat(stack[stack.length - 2]) || 0;
         y = parseFloat(stack[stack.length - 1]) || 0;
+      } else if (tok === "Tf") {
+        const fontName = stack[stack.length - 2];
+        const fontObjNum = fontName && resources.fontMap.get(fontName);
+        if (fontObjNum) {
+          const found = getFontCMap(ctx.buffer, ctx.pdfText, fontObjNum, ctx.fontCache);
+          if (found) curCmap = found;
+        }
       } else if (tok === "Tj") {
         const s = stack[stack.length - 1];
-        if (s) {
-          const txt = decodeShowTextOperand(s, cmap);
-          if (txt) runs.push({ x, y, text: txt });
+        if (s && curCmap) {
+          const txt = decodeShowTextOperand(s, curCmap);
+          if (txt) { const [px, py] = matApply(ctm, x, y); ctx.runsOut.push({ x: px, y: py, text: txt }); }
         }
       } else if (tok === "TJ") {
         const arr = stack[stack.length - 1];
-        if (arr && arr.startsWith("[")) {
+        if (arr && arr.startsWith("[") && curCmap) {
           const parts = arr.slice(1, -1).match(/\((?:[^()\\]|\\.)*\)|<[0-9a-fA-F\s]*>/g) || [];
-          const combined = parts.map(p => decodeShowTextOperand(p, cmap)).join("");
-          if (combined) runs.push({ x, y, text: combined });
+          const combined = parts.map(p => decodeShowTextOperand(p, curCmap)).join("");
+          if (combined) { const [px, py] = matApply(ctm, x, y); ctx.runsOut.push({ x: px, y: py, text: combined }); }
         }
       } else if (tok === "BT") {
         x = 0; y = 0;
+      } else if (tok === "cm") {
+        const nums = stack.slice(-6).map(v => parseFloat(v) || 0);
+        if (nums.length === 6) ctm = matMultiply(nums, ctm);
+      } else if (tok === "q") {
+        gsStack.push([ctm, curCmap]);
+      } else if (tok === "Q") {
+        if (gsStack.length) [ctm, curCmap] = gsStack.pop();
+      } else if (tok === "Do") {
+        const name = stack[stack.length - 1];
+        const objNum = name && resources.xobjectMap.get(name);
+        if (objNum && !visited.has(objNum)) {
+          const childRaw = getObjectRaw(ctx.pdfText, objNum);
+          if (childRaw) {
+            const childDict = childRaw.raw.split("stream")[0];
+            if (!/\/Subtype\s*\/Image/.test(childDict)) {
+              const childBytes = getStreamBytes(ctx.buffer, ctx.pdfText, objNum);
+              if (childBytes) {
+                const childResources = parseResourcesFromDict(childDict);
+                // אם ל-XObject אין /Resources משלו (נדיר) - יורשים את אלה של ההורה, במקום להישאר בלי כלום.
+                const effectiveResources = (childResources.fontMap.size || childResources.xobjectMap.size) ? childResources : resources;
+                const nextVisited = new Set(visited);
+                nextVisited.add(objNum);
+                walkContentStream(ctx, childBytes.toString("latin1"), ctm, effectiveResources, depth + 1, nextVisited);
+              }
+            }
+          }
+        }
       }
       stack = [];
     } else {
       stack.push(tok);
     }
   }
-  return runs;
 }
 
 // ---------- שכבה 5: שחזור סדר קריאה נכון (bidi פשוט) בתוך כל תא/עמודה ----------
@@ -198,16 +319,25 @@ function extractTextRuns(contentText, cmap) {
 // כמה ריצות-תו בודדות שמסודרות "הפוך" (כאילו גם הן נכתבו ימין-לשמאל) - צריך להחזיר אותן לסדר הרגיל.
 function reorderRunsForReading(runsSortedByXDesc) {
   const isHebrew = t => /[֐-׿]/.test(t);
+  // תוקן (נבדק מול קובץ אמיתי - מזרחי טפחות): בקובץ הזה כל *מחרוזת* עברית שלמה (מילה/צירוף מילים
+  // באותה ריצת-Tj, לא תו-אחר-תו כמו בקובץ כאל) מגיעה הפוכה-פנימית - למשל "תידוהיו םולש גרבנייטש"
+  // במקום "שטיינברג שלום ויהודית". הופכים כל ריצה עברית *בתוך עצמה* (תו-אחר-תו) קודם - עבור ריצה
+  // בת-תו-אחד (המקרה של כאל) זה no-op (מחרוזת באורך 1 הפוכה = עצמה), כך שהתיקון לא שובר את הקובץ הקודם.
+  // סוגריים/מרכאות-זוויתיות לא "מתהפכים" אוטומטית עם היפוך תווים (למשל "(" הופך ל-"(" גם הוא, לא
+  // ל-")") - צריך למפות כל תו-סוגר לבן-זוגו כדי ש-"(ע\"ר)" לא ייצא "‎)ע\"ר(‎" הפוך.
+  const MIRROR_CHARS = { "(": ")", ")": "(", "[": "]", "]": "[", "{": "}", "}": "{" };
+  const reverseHebrew = t => [...t].reverse().map(c => MIRROR_CHARS[c] || c).join("");
+  const runs = runsSortedByXDesc.map(r => isHebrew(r.text) ? { ...r, text: reverseHebrew(r.text) } : r);
   const result = [];
   let i = 0;
-  while (i < runsSortedByXDesc.length) {
-    if (!isHebrew(runsSortedByXDesc[i].text)) {
+  while (i < runs.length) {
+    if (!isHebrew(runs[i].text)) {
       let j = i;
-      while (j < runsSortedByXDesc.length && !isHebrew(runsSortedByXDesc[j].text)) j++;
-      result.push(...runsSortedByXDesc.slice(i, j).reverse());
+      while (j < runs.length && !isHebrew(runs[j].text)) j++;
+      result.push(...runs.slice(i, j).reverse());
       i = j;
     } else {
-      result.push(runsSortedByXDesc[i]);
+      result.push(runs[i]);
       i++;
     }
   }
@@ -233,7 +363,10 @@ function groupIntoRows(runs) {
 
 // מזהה שורת כותרות לפי מילות מפתח (בדיוק כמו importMapping.findHeaderRowIndex, אבל כאן על בסיס
 // ריצות טקסט + מיקום x - כדי לגזור מכך את גבולות העמודות בפועל, לא רק את מספר השורה).
-const HEADER_HINTS = ["תאריך", "שם בית", "עסק", "ענף", "פירוט", "סכום", "תיאור", "date", "amount"];
+// "זכות"/"חובה"/"יתרה"/"אסמכתה"/"סוג תנועה" נוספו בעקבות קובץ בנק אמיתי (מזרחי טפחות, עו"ש) שבו
+// עמודת הסכום היא "זכות/חובה" משולבת ולא "סכום" - בלעדיהן שורת הכותרות של הקובץ הזה לא הגיעה לסף
+// 3 ההתאמות הנדרש (רק "תאריך" תאם), והעמוד כולו דולג כאילו לא זוהו בו כותרות בכלל.
+const HEADER_HINTS = ["תאריך", "שם בית", "עסק", "ענף", "פירוט", "סכום", "תיאור", "זכות", "חובה", "יתרה", "אסמכתה", "סוג תנועה", "date", "amount"];
 // מחזיר את *האינדקס* של שורת הכותרות בתוך rows (לא רק את השורה עצמה) - כדי שהקורא יוכל גם לבדוק
 // את השורה שמיד אחריה (ר' הערה ב-buildColumnBoundaries על כותרת דו-שורתית).
 function findHeaderRowIndex(rows) {
@@ -325,47 +458,75 @@ function parsePdf(buffer) {
 
   // כל אובייקטי ה-/Contents (זרמי תוכן של עמודים) - לא תלויים במבנה /Pages פורמלי, רק בקיום
   // /Type/Page עם /Contents שמצביע לאובייקט stream. גישה סלחנית שעובדת גם אם עץ העמודים מורכב.
-  const pageContentNums = [];
+  // תוקן (נבדק מול קובץ אמיתי - מזרחי טפחות): "/Contents" יכול להיות גם *מערך* של הפניות
+  // ("/Contents [8 0 R]", אפילו עם איבר יחיד) ולא רק הפניה בודדת ("/Contents 8 0 R") - בלי הטיפול
+  // במערך, הקובץ הזה לא זוהה כמכיל עמודים בכלל. שומרים גם את /Resources של כל עמוד (לא רק את
+  // מספרי זרמי התוכן) - נדרש כדי לפענח שמות גופנים/XObjects שנפתחים בתוך התוכן (ר' walkContentStream).
+  const pages = [];
   for (const n of findAllObjectNumbers(pdfText)) {
     const o = getObjectRaw(pdfText, n);
     if (!o) continue;
     const dictOnly = o.raw.split("stream")[0];
-    if (/\/Type\s*\/Page(?!s)\b/.test(dictOnly)) {
-      const m = /\/Contents\s+(\d+)\s+0\s+R/.exec(dictOnly);
-      if (m) pageContentNums.push(m[1]);
+    if (!/\/Type\s*\/Page(?!s)\b/.test(dictOnly)) continue;
+    const contentNums = [];
+    const arrM = /\/Contents\s*\[([^\]]*)\]/.exec(dictOnly);
+    if (arrM) {
+      for (const rm of arrM[1].matchAll(/(\d+)\s+0\s+R/g)) contentNums.push(rm[1]);
+    } else {
+      const singleM = /\/Contents\s+(\d+)\s+0\s+R/.exec(dictOnly);
+      if (singleM) contentNums.push(singleM[1]);
     }
+    if (contentNums.length) pages.push({ contentNums, resources: parseResourcesFromDict(dictOnly) });
   }
-  if (!pageContentNums.length) {
+  if (!pages.length) {
     throw new Error("לא נמצאו עמודים תקינים בקובץ ה-PDF");
   }
 
   let headerColumns = null;
   const allRows = [];
-  for (const contentNum of pageContentNums) {
-    const bytes = getStreamBytes(buffer, pdfText, contentNum);
-    if (!bytes) continue;
-    const runs = extractTextRuns(bytes.toString("latin1"), cmap);
+  const fontCache = new Map();
+  for (const page of pages) {
+    const runs = [];
+    const ctx = { buffer, pdfText, fontCache, runsOut: runs, fallbackCmap: cmap };
+    for (const contentNum of page.contentNums) {
+      const bytes = getStreamBytes(buffer, pdfText, contentNum);
+      if (!bytes) continue;
+      // תוקן (נבדק מול קובץ אמיתי - מזרחי טפחות): בקובץ הזה הטקסט האמיתי לא מצויר ישירות בזרם התוכן
+      // של העמוד - הוא רק קובע חיתוך (clip) וטרנספורמציה (cm) ואז "מזמין" Form XObject מקונן שבו
+      // נמצא כל הטקסט בפועל (129 קריאות Tj, בשני גופנים שונים דרך Tf). walkContentStream עוקבת אחרי
+      // q/cm/Q (CTM מצטבר) ופותרת קריאות Do רקורסיבית - בלי זה כל הטקסט "נעלם" (0 ריצות, 0 שורות).
+      walkContentStream(ctx, bytes.toString("latin1"), MAT_IDENTITY, page.resources, 0, new Set());
+    }
     const rows = groupIntoRows(runs);
 
-    if (!headerColumns) {
-      const headerIdx = findHeaderRowIndex(rows);
-      if (headerIdx >= 0) {
-        // השורה שמיד אחרי הכותרת: אם היא לא שורת נתונים אמיתית (בלי תאריך תקין בעמודה הראשונה
-        // שהכותרת מצביעה אליה) - מתייחסים אליה כהמשך-כותרת דו-שורתי (ר' הערה ב-buildColumnBoundaries).
-        // בודקים רק את הריצה הימנית ביותר (x הכי גבוה) - בשורת נתונים אמיתית זו תמיד תחילת התאריך
-        // (ספרה), ובשורת המשך-כותרת זו אות עברית (למשל תחילת "העסקה"). בדיקה ממוקדת יותר מסתם
-        // ספירת ריצות - כי גם שורת המשך יכולה להכיל הרבה ריצות בודדות (תו-תו, כמו כל טקסט עברי כאן).
-        const maybeContinuation = rows[headerIdx + 1];
-        const rightmostRun = maybeContinuation && maybeContinuation.runs.length
-          ? [...maybeContinuation.runs].sort((a, b) => b.x - a.x)[0]
-          : null;
-        const looksLikeContinuation = maybeContinuation && rightmostRun && !/\d/.test(rightmostRun.text);
-        headerColumns = buildColumnBoundaries(rows[headerIdx], looksLikeContinuation ? maybeContinuation : null);
+    // מזהים את שורת הכותרות *של העמוד הזה* בנפרד, בכל עמוד (לא רק בעמוד הראשון) - שני שימושים:
+    // (1) אם עדיין אין headerColumns גלובלי, בונים אותו מכאן. (2) יודעים איפה בעמוד הזה מתחיל התוכן
+    // האמיתי, כדי לדלג על שורות "פתיח" (שם בנק/בעל חשבון/כותרת דוח/"יתרה קודמת" וכו'). תוקן (נבדק
+    // מול קובץ אמיתי - מזרחי טפחות): בלי הדילוג הזה, שורות הפתיח נכנסות ל-allRows ו"מזהמות" את חלון
+    // הדגימה של guessUnlabeledAmountColumn (ר' importMapping.js) - מספיק כדי להפיל את יחס הצפיפות
+    // המספרית הנדרש מתחת לסף, וכל הקובץ נכשל בלי ולו תנועה אחת שזוהתה.
+    const pageHeaderIdx = findHeaderRowIndex(rows);
+    let dataStartIdx = 0;
+    if (pageHeaderIdx >= 0) {
+      // השורה שמיד אחרי הכותרת: אם היא לא שורת נתונים אמיתית - מתייחסים אליה כהמשך-כותרת דו-שורתי
+      // (ר' הערה ב-buildColumnBoundaries). תוקן (נבדק מול קובץ אמיתי - מזרחי טפחות): הבדיקה הישנה
+      // התבססה רק על הריצה הימנית-ביותר בשורה ("אם אין בה ספרה - זו המשך כותרת") - זה תפס בטעות גם
+      // שורת "יתרה קודמת נכון ל-31/07/2026 : ₪-9,368.32" (שורת סיכום לפני הנתונים בפועל, לא המשך-
+      // כותרת) כי *הריצה הימנית* שלה ("יתרה קודמת נכון ל-") לא מכילה ספרה, למרות שהשורה כולה כן
+      // מכילה ספרות (בריצות אחרות). הבדיקה החדשה: המשך-כותרת אמיתי (כמו "עסקה"/"חיוב" מתחת ל"סכום")
+      // לא מכיל אף ספרה *באף ריצה שבו*, לא רק בריצה הימנית ביותר.
+      const maybeContinuation = rows[pageHeaderIdx + 1];
+      const looksLikeContinuation = maybeContinuation && maybeContinuation.runs.length > 0
+        && !maybeContinuation.runs.some(r => /\d/.test(r.text));
+      if (!headerColumns) {
+        headerColumns = buildColumnBoundaries(rows[pageHeaderIdx], looksLikeContinuation ? maybeContinuation : null);
       }
+      dataStartIdx = pageHeaderIdx + (looksLikeContinuation ? 2 : 1);
     }
     if (!headerColumns) continue; // עמוד בלי כותרות זוהות עדיין - מדלגים (למשל עמוד ראשון תקציר)
 
-    for (const row of rows) {
+    for (let ri = dataStartIdx; ri < rows.length; ri++) {
+      const row = rows[ri];
       const cells = new Array(headerColumns.length).fill("");
       const byColumn = new Map();
       for (const r of row.runs) {

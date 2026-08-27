@@ -6,9 +6,22 @@
 "use strict";
 const zlib = require("zlib");
 
+// PDF תמיד שומר טקסט ב"סדר תצוגה" (visual order) - עבור RTL זה אומר שהיוצר *כבר* הפך את הריצה לפני
+// כתיבתה ל-Tj (זה בעצם התפקיד של pdfParser.js/reorderRunsForReading: להחזיר את זה בחזרה לסדר קריאה
+// לוגי). תוקן (נבדק מול קובץ אמיתי - מזרחי טפחות, ר' pdfParser.js): גרסה קודמת של buildTestPdf כתבה
+// מחרוזות עבריות בסדר לוגי-כבר-נכון (לא ריאליסטי) - "עבד" רק כי pdfParser.js הישן לא ניסה בכלל להפוך
+// ריצה עברית רב-תווית בתוך עצמה. עכשיו שזה תוקן (כדי לתמוך בקובץ אמיתי שכן כותב כך), הבדיקות היו
+// נשברות בלי התיקון המקביל כאן - הופכים כל מחרוזת עברית (עם מיפוי סוגריים) לפני הקידוד, בדיוק כמו
+// מפיק PDF אמיתי, כדי שה"סבב" קידוד+פענוח יישאר עקבי (ומכסה בפועל את קוד ההיפוך, לא רק "עוקף" אותו).
+const MIRROR_CHARS = { "(": ")", ")": "(", "[": "]", "]": "[", "{": "}", "}": "{" };
+function toVisualOrder(str) {
+  if (!/[֐-׿]/.test(str)) return str;
+  return [...str].reverse().map(c => MIRROR_CHARS[c] || c).join("");
+}
 function textToHex(str) {
+  const visual = toVisualOrder(str);
   let hex = "";
-  for (const ch of str) {
+  for (const ch of visual) {
     const code = ch.codePointAt(0);
     hex += code.toString(16).padStart(4, "0");
   }

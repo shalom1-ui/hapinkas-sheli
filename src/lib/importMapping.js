@@ -165,6 +165,17 @@ function rowsToTransactions(rows, sourceType) {
   }
   const headerRow = rows[headerIndex];
   const cols = detectColumns(headerRow);
+  // תוקן (נבדק מול קובץ בנק אמיתי - מזרחי טפחות, ייצוא PDF): לבנק הזה עמודת סכום *אחת* משולבת
+  // בשם "זכות/חובה" (ולא שתי עמודות נפרדות) - "זכות" ו"חובה" שתיהן תואמות למילות המפתח שלהן, כך
+  // ש-creditCol ו-debitCol מצביעות בטעות על *אותה* עמודה. בלי התיקון, נתיב הזכות/חובה למטה קורא את
+  // אותו ערך פעמיים (unicode ל-credit וגם ל-debit) - ערך שלילי (למשל "הלוואה- פרעון" -305.05) לא
+  // עובר אף אחד מהתנאים (לא credit>0 ולא debit>0) ונופל בשקט, כך שכל שורות ההוצאה נעלמות מהייבוא.
+  // מבטלים את שני הזיהויים הכוזבים כדי שהעמודה תיפול לניחוש guessUnlabeledAmountColumn (לפי תוכן,
+  // סימן שלילי=הוצאה) - בדיוק כמו עמודת סכום בודדת רגילה.
+  if (cols.creditCol >= 0 && cols.creditCol === cols.debitCol) {
+    cols.creditCol = -1;
+    cols.debitCol = -1;
+  }
   if (cols.dateCol < 0) {
     return { error: "לא נמצאה עמודת תאריך בקובץ - לא ניתן לייבא בלי תאריך לכל תנועה." };
   }

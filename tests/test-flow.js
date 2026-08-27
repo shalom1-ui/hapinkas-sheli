@@ -692,6 +692,41 @@ async function run() {
       "PDF בלי גופן/ToUnicode הניתן לחילוץ (מדמה מסמך סרוק) מקבל הודעת שגיאה ברורה, לא קורס"
     );
 
+    console.log("\n📥 ייבוא PDF - עמודת 'זכות/חובה' משולבת + שורת פתיח לפני הנתונים (בנק אמיתי - מזרחי טפחות עו\"ש)");
+    // משוב אמיתי (המשתמש שלח קובץ PDF אמיתי, "tnuot.pdf", שנכשל לגמרי - "לא נמצאו עמודות תקינות
+    // בקובץ"): גילינו שלוש בעיות אמיתיות ביחד: (1) הטקסט לא מצויר ישירות בזרם התוכן של העמוד אלא
+    // בתוך Form XObject מקונן דרך cm+Do (נדרש מעקב CTM/q/Q ופתרון Do רקורסיבי - ר' walkContentStream
+    // ב-pdfParser.js). (2) בניגוד לקובץ כאל הקודם, כאן כל *ביטוי* עברי שלם (לא תו-תו) מגיע הפוך-פנימית
+    // ב-Tj אחד (ר' התיקון ב-reorderRunsForReading). (3) עמודת הסכום נקראת "זכות/חובה" (לא "סכום") -
+    // ערך אחד עם סימן, לא שתי עמודות זכות/חובה נפרדות - "זכות" ו"חובה" תואמות בטעות לאותה עמודה
+    // (ר' התיקון ב-importMapping.js). בנוסף שורת "יתרה קודמת נכון ל-..." שמופיעה מיד אחרי הכותרת
+    // (לא שורת נתונים אמיתית) הייתה "מזהמת" את חלון הדגימה של guessUnlabeledAmountColumn.
+    const mizrahiPdf = buildTestPdf([
+      { text: "תאריך", x: 500, y: 700 }, { text: "סוג תנועה", x: 350, y: 700 }, { text: "זכות/חובה", x: 150, y: 700 },
+      { text: "יתרה קודמת נכון ל- 31/07/2026", x: 300, y: 685 }, { text: "-9,368.32", x: 150, y: 685 },
+      { text: "02/08/2026", x: 500, y: 670 }, { text: "ניוד כספים ממשפחה", x: 350, y: 670 }, { text: "200.00", x: 150, y: 670 },
+      { text: "02/08/2026", x: 500, y: 655 }, { text: "הלוואה- פרעון", x: 350, y: 655 }, { text: "-305.05", x: 150, y: 655 },
+    ]);
+    const mizrahiPreview = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: mizrahiPdf.toString("base64"), filename: "מזרחי-טפחות.pdf", source_type: "bank" },
+      token
+    );
+    assert(
+      mizrahiPreview.status === 200 && mizrahiPreview.data.transactions.length === 2,
+      `ייבוא PDF עם עמודת 'זכות/חובה' משולבת הצליח וזיהה 2 תנועות, לא נכשל עם 'לא נמצאה עמודת סכום' (${JSON.stringify(mizrahiPreview.data)})`
+    );
+    const mizrahiIncome = mizrahiPreview.data.transactions.find(t => t.amount === 200);
+    assert(
+      mizrahiIncome && mizrahiIncome.type === "income" && mizrahiIncome.description === "ניוד כספים ממשפחה" && mizrahiIncome.date === "2026-08-02",
+      `שורה עם סכום חיובי ב'זכות/חובה' זוהתה נכון כהכנסה, כולל תיאור עברי רב-מילי שהוחזר לסדר קריאה נכון (${JSON.stringify(mizrahiIncome)})`
+    );
+    const mizrahiExpense = mizrahiPreview.data.transactions.find(t => t.amount === 305.05);
+    assert(
+      mizrahiExpense && mizrahiExpense.type === "expense" && mizrahiExpense.description === "הלוואה- פרעון",
+      `שורה עם סכום שלילי ב'זכות/חובה' זוהתה נכון כהוצאה (${JSON.stringify(mizrahiExpense)})`
+    );
+
     console.log("\n💍 תקציב חתונה - אזור נפרד לגמרי מהתנועות הרגילות");
     // משוב אמיתי: "שיהיה קטגוריה נפרדת להוצאות חתונה, הכנסות מתרומות... אזור נפרד לגמרי בשם 'חתונה'".
     // ר' src/routes/weddingTransactions.js.
@@ -702,6 +737,11 @@ async function run() {
       weddingCategories.data.expense.includes("אולם חתונה") &&
       weddingCategories.data.expense.includes("שמלת כלה"),
       `רשימת קטגוריות החתונה הקבועה כוללת את הפריטים שהמשתמש ביקש (${JSON.stringify(weddingCategories.data)})`
+    );
+    // תוקן (משוב אמיתי: "אין קטגוריות בתנועות של הלוואות גם בחתונה צריך שיהיה")
+    assert(
+      weddingCategories.data.income.includes("הלוואות") && weddingCategories.data.expense.includes("הלוואות"),
+      "'הלוואות' נוספה גם כהכנסה וגם כהוצאה בקטגוריות החתונה"
     );
     assert(
       ["שבע ברכות - יום 1", "שבע ברכות - יום 2", "שבע ברכות - יום 3", "שבע ברכות - יום 4", "שבע ברכות - יום 5", "שבע ברכות - יום 6"]

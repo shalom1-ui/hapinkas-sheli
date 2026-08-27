@@ -52,6 +52,7 @@
   .topbar{position:fixed; top:0; right:0; left:0; height:64px; background:var(--surface); border-bottom:1px solid var(--border); display:flex; align-items:center; justify-content:space-between; padding:0 22px; z-index:20;}
   .topbar-brand{font-size:17px; font-weight:800; display:flex; align-items:center; gap:8px;}
   .topbar-user{display:flex; align-items:center; gap:12px; font-size:13.5px; color:var(--text-secondary);}
+  .topbar-date{font-size:13.5px; color:var(--text-secondary); font-weight:600;}
   .topbar-user b{color:var(--text-primary);}
   .avatar{width:34px; height:34px; border-radius:50%; background:var(--brand-soft); color:var(--brand); display:flex; align-items:center; justify-content:center; font-weight:800; font-size:14px;}
 
@@ -220,6 +221,11 @@
 <div id="app-shell">
   <div class="topbar">
     <div class="topbar-brand">📒💰 הפנקס שלי</div>
+    <!-- משוב אמיתי: "כל חודש כשאני מגיע לפנקס שיהיה תאריך מכוון כך אני יודע באיזה חודש אנחנו נמצאים" -
+         תאריך היום מוצג תמיד בראש המסך, בעברית, ולא רק בעמוד אחד ספציפי. ר' updateTopbarDate() -
+         נקרא פעם אחת בטעינה (ר' תחתית הקובץ), אין צורך ברענון תוך-כדי-שימוש (תאריך היום לא משתנה
+         באמצע ביקור באתר).-->
+    <div class="topbar-date" id="topbar-date"></div>
     <div class="topbar-user">
       <span>שלום, <b id="user-greeting">-</b></span>
       <div class="avatar" id="user-avatar">?</div>
@@ -286,6 +292,7 @@
               <option value="תחבורה">
               <option value="בריאות">
               <option value="חינוך">
+              <option value="הלוואות">
             </datalist>
             <button class="btn" onclick="addTransaction()">הוספה</button>
           </div>
@@ -696,6 +703,14 @@ async function doSignup() {
   });
   if (r.ok) onAuthSuccess(r.data);
 }
+// משוב אמיתי: "כל חודש כשאני מגיע לפנקס שיהיה תאריך מכוון כך אני יודע באיזה חודש אנחנו נמצאים" -
+// תאריך היום (יום+חודש+שנה בעברית) בראש המסך, תמיד גלוי, בכל עמוד - לא רק בדוח החודשי הקיים.
+function updateTopbarDate() {
+  const el = document.getElementById('topbar-date');
+  if (!el) return;
+  el.textContent = new Date().toLocaleDateString('he-IL', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
 function onAuthSuccess(data) {
   token = data.token;
   currentUser = data.user;
@@ -703,6 +718,7 @@ function onAuthSuccess(data) {
   document.getElementById('app-shell').classList.add('visible');
   document.getElementById('user-greeting').textContent = currentUser.full_name;
   document.getElementById('user-avatar').textContent = (currentUser.full_name || '?').trim()[0] || '?';
+  updateTopbarDate();
   toast(`ברוכים הבאים, ${currentUser.full_name}!`, 'success');
   refreshAll();
 }
@@ -833,7 +849,7 @@ function renderTxList() {
     <div class="list-item">
       <div style="display:flex; align-items:center; gap:10px">
         <input type="checkbox" ${selectedTxIds.has(t.id) ? 'checked' : ''} onchange="this.checked ? selectedTxIds.add(${t.id}) : selectedTxIds.delete(${t.id}); renderTxList()">
-        <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}</div></div>
+        <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div></div>
       </div>
       <div style="display:flex; align-items:center; gap:10px">
         <span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span>
@@ -1427,9 +1443,11 @@ async function loadCategoryDictionary(type) {
   const r = await api('GET', '/api/transactions/dictionary' + (isIncome ? '?type=income' : ''));
   const dl = document.getElementById('category-suggestions');
   if (!r.ok || !dl) return;
+  // תוקן (משוב אמיתי: "אין קטגוריות בתנועות של הלוואות") - "הלוואות" רלוונטית גם כהכנסה (לקיחת הלוואה)
+  // וגם כהוצאה (החזר הלוואה), לכן נוספה לשתי הרשימות.
   const staticOptions = isIncome
-    ? ['משכורת', 'ביטוח לאומי', 'חונכות', 'אחר']
-    : ['מעשרות', 'צדקה', 'מזון', 'דיור', 'תחבורה', 'בריאות', 'חינוך'];
+    ? ['משכורת', 'ביטוח לאומי', 'חונכות', 'הלוואות', 'אחר']
+    : ['מעשרות', 'צדקה', 'מזון', 'דיור', 'תחבורה', 'בריאות', 'חינוך', 'הלוואות'];
   const merged = [...staticOptions, ...(r.data.phrases || []).filter(p => !staticOptions.includes(p))];
   dl.innerHTML = merged.map(p => `<option value="${p.replace(/"/g, '&quot;')}">`).join('');
 }
@@ -1457,7 +1475,7 @@ async function loadTransactions() {
   document.getElementById('ov-recent').innerHTML = txs.slice(0, 5).length
     ? txs.slice(0, 5).map(t => `
       <div class="list-item">
-        <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}</div></div>
+        <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div></div>
         <div><span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span></div>
       </div>`).join('')
     : '<div class="empty-state">אין עדיין תנועות</div>';
