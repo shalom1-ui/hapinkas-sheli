@@ -103,16 +103,21 @@ function register(router) {
     });
   }));
 
-  // שלב 2: שמירה בפועל של תנועות שהמשתמש אישר/ערך בתצוגה המקדימה.
+  // שלב 2: שמירה בפועל של תנועות שהמשתמש אישר/ערך בתצוגה המקדימה. מסמנים את כל התנועות שנשמרות כאן
+  // באותו import_batch_id + אותו שם קובץ מקורי, כדי שאפשר יהיה למחוק את כל הקובץ בבת אחת אח"כ
+  // (ר' /api/transactions/import/batches למטה - משוב אמיתי: "אם הבאתי דפי בנק ואני רוצה למחוק את
+  // הקבצים שהועלו שיהיה אופציה לבחור למחוק מהמערכת").
   router.post("/api/transactions/import/commit", requireAuth(async (ctx) => {
     const list = Array.isArray(ctx.body.transactions) ? ctx.body.transactions : null;
     if (!list || !list.length) return json(ctx.res, 400, { error: "לא התקבלה רשימת תנועות לייבוא" });
     if (list.length > MAX_ROWS_PER_IMPORT) {
       return json(ctx.res, 400, { error: `יותר מדי תנועות בבקשה אחת (הגבלה של ${MAX_ROWS_PER_IMPORT})` });
     }
+    const filename = ctx.body.filename ? String(ctx.body.filename).trim().slice(0, 255) : null;
+    const batchId = crypto.randomUUID();
 
     const insert = db.prepare(
-      "INSERT INTO transactions (user_id, type, amount, category, note, source, import_hash, occurred_at) VALUES (?, ?, ?, ?, ?, 'import', ?, ?)"
+      "INSERT INTO transactions (user_id, type, amount, category, note, source, import_hash, import_batch_id, import_filename, occurred_at) VALUES (?, ?, ?, ?, ?, 'import', ?, ?, ?, ?)"
     );
     let imported = 0;
     let skippedDuplicates = 0;
@@ -133,7 +138,7 @@ function register(router) {
       if (exists) { skippedDuplicates++; continue; }
 
       try {
-        insert.run(ctx.user.userId, type, t.amount, category, description || null, hash, `${date} 12:00:00`);
+        insert.run(ctx.user.userId, type, t.amount, category, description || null, hash, batchId, filename, `${date} 12:00:00`);
         imported++;
       } catch (e) {
         // התנגשות באינדקס הייחודי (idx_transactions_import_hash, ר' db.js) - מרוץ תזמון נדיר בין
@@ -143,7 +148,31 @@ function register(router) {
       }
     }
 
-    return json(ctx.res, 201, { imported, skippedDuplicates, skippedInvalid });
+    return json(ctx.res, 201, { imported, skippedDuplicates, skippedInvalid, batchId: imported ? batchId : null });
+  }));
+
+  // רשימת קבצי ייבוא (אצוות) שנשמרו בפועל - קובץ אחד שהועלה = שורה אחת כאן, גם אם הוא הכיל עשרות
+  // תנועות. מוצג ב"תנועות" כדי לאפשר מחיקה של קובץ שלם בלחיצה אחת (ר' /import/batches/:id DELETE למטה).
+  router.get("/api/transactions/import/batches", requireAuth(async (ctx) => {
+    const rows = db.prepare(
+      `SELECT import_batch_id AS batchId, import_filename AS filename, COUNT(*) AS count,
+              MIN(occurred_at) AS minDate, MAX(occurred_at) AS maxDate,
+              SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) AS income,
+              SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) AS expense,
+              MAX(id) AS lastId
+       FROM transactions WHERE user_id = ? AND import_batch_id IS NOT NULL
+       GROUP BY import_batch_id ORDER BY lastId DESC`
+    ).all(ctx.user.userId);
+    return json(ctx.res, 200, { batches: rows });
+  }));
+
+  // מחיקת קובץ ייבוא שלם - כל התנועות שנשמרו יחד תחת אותו import_batch_id, בבת אחת. משוב אמיתי:
+  // "אם הבאתי דפי בנק ואני רוצה למחוק את הקבצים שהועלו שיהיה אופציה לבחור למחוק מהמערכת" - עד כה
+  // אפשר היה למחוק רק תנועה-תנועה (DELETE /api/transactions/:id), מה שלא מעשי לקובץ עם עשרות שורות.
+  router.delete("/api/transactions/import/batches/:batchId", requireAuth(async (ctx) => {
+    const info = db.prepare("DELETE FROM transactions WHERE user_id = ? AND import_batch_id = ?").run(ctx.user.userId, ctx.params.batchId);
+    if (!info.changes) return json(ctx.res, 404, { error: "קובץ ייבוא לא נמצא" });
+    return json(ctx.res, 200, { deleted: info.changes });
   }));
 }
 

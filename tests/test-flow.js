@@ -614,8 +614,40 @@ async function run() {
     );
     const pdfRow2 = pdfImportPreview.data.transactions.find(t => t.amount === 45.5);
     assert(pdfRow2 && pdfRow2.date === "2026-02-02" && pdfRow2.description === "בית קפה", "שורה שנייה מה-PDF זוהתה נכון");
-    const pdfImportCommit = await api("POST", "/api/transactions/import/commit", { transactions: pdfImportPreview.data.transactions }, token);
+    const pdfImportCommit = await api("POST", "/api/transactions/import/commit", { transactions: pdfImportPreview.data.transactions, filename: "cal-statement.pdf" }, token);
     assert(pdfImportCommit.data.imported === 2, "שתי התנועות מה-PDF נשמרו בהצלחה");
+    assert(typeof pdfImportCommit.data.batchId === "string" && pdfImportCommit.data.batchId.length > 0, "ה-commit מחזיר batchId (מזהה אצווה) לתנועות שנשמרו בפועל");
+
+    console.log("\n📥 ייבוא - מחיקת קובץ ייבוא שלם בבת אחת (משוב אמיתי: 'אם הבאתי דפי בנק ואני רוצה למחוק את הקבצים שהועלו')");
+    const batchesBeforeDelete = await api("GET", "/api/transactions/import/batches", null, token);
+    assert(batchesBeforeDelete.status === 200, `רשימת קבצי ייבוא הצליחה (סטטוס ${batchesBeforeDelete.status})`);
+    const calBatch = batchesBeforeDelete.data.batches.find(b => b.batchId === pdfImportCommit.data.batchId);
+    assert(
+      calBatch && calBatch.filename === "cal-statement.pdf" && calBatch.count === 2 && calBatch.expense === 195.5,
+      `הקובץ שיובא (PDF) מופיע ברשימת האצוות עם שם הקובץ, מספר התנועות והסכום הנכונים (${JSON.stringify(calBatch)})`
+    );
+    const otherUserBatchSignup = await api("POST", "/api/auth/signup", {
+      full_name: "משתמש זר למחיקת אצווה", username: `stranger_batch_${Date.now()}`, password: "1234", phone: `+97250${Date.now().toString().slice(-7)}`,
+    });
+    const otherUserBatchDelete = await api("DELETE", `/api/transactions/import/batches/${pdfImportCommit.data.batchId}`, null, otherUserBatchSignup.data.token);
+    assert(otherUserBatchDelete.status === 404, "משתמש אחר לא יכול למחוק אצוות ייבוא ששייכות למשתמש הזה");
+    const batchDelete = await api("DELETE", `/api/transactions/import/batches/${pdfImportCommit.data.batchId}`, null, token);
+    assert(
+      batchDelete.status === 200 && batchDelete.data.deleted === 2,
+      `מחיקת קובץ הייבוא כולו מחקה בדיוק את שתי התנועות שהגיעו ממנו (${JSON.stringify(batchDelete.data)})`
+    );
+    const afterBatchDelete = await api("GET", "/api/transactions", null, token);
+    assert(
+      !afterBatchDelete.data.transactions.some(t => t.import_batch_id === pdfImportCommit.data.batchId),
+      "אחרי מחיקת האצווה, אף תנועה מהקובץ שנמחק לא נשארה ברשימת התנועות"
+    );
+    const batchesAfterDelete = await api("GET", "/api/transactions/import/batches", null, token);
+    assert(
+      !batchesAfterDelete.data.batches.some(b => b.batchId === pdfImportCommit.data.batchId),
+      "האצווה שנמחקה כבר לא מופיעה ברשימת קבצי הייבוא"
+    );
+    const batchDeleteAgain = await api("DELETE", `/api/transactions/import/batches/${pdfImportCommit.data.batchId}`, null, token);
+    assert(batchDeleteAgain.status === 404, "ניסיון למחוק אצווה שכבר נמחקה מחזיר 404, לא קורס");
 
     console.log("\n📥 ייבוא PDF - שחזור סדר קריאה נכון (bidi) בתוך שורה שבה כל תו הוא ריצת-טקסט נפרדת");
     // משוב אמיתי מבדיקה מול קובץ כאל אמיתי: PDF מצייר שם כל תו (גם בעברית וגם במספרים) כ-Tj נפרד,
@@ -659,6 +691,73 @@ async function run() {
       noCmapImport.status === 400 && /טקסט|סרוק/.test(noCmapImport.data.error),
       "PDF בלי גופן/ToUnicode הניתן לחילוץ (מדמה מסמך סרוק) מקבל הודעת שגיאה ברורה, לא קורס"
     );
+
+    console.log("\n💍 תקציב חתונה - אזור נפרד לגמרי מהתנועות הרגילות");
+    // משוב אמיתי: "שיהיה קטגוריה נפרדת להוצאות חתונה, הכנסות מתרומות... אזור נפרד לגמרי בשם 'חתונה'".
+    // ר' src/routes/weddingTransactions.js.
+    const weddingCategories = await api("GET", "/api/wedding/categories", null, token);
+    assert(
+      weddingCategories.status === 200 &&
+      weddingCategories.data.income.includes("תרומות") &&
+      weddingCategories.data.expense.includes("אולם חתונה") &&
+      weddingCategories.data.expense.includes("שמלת כלה"),
+      `רשימת קטגוריות החתונה הקבועה כוללת את הפריטים שהמשתמש ביקש (${JSON.stringify(weddingCategories.data)})`
+    );
+    assert(
+      ["שבע ברכות - יום 1", "שבע ברכות - יום 2", "שבע ברכות - יום 3", "שבע ברכות - יום 4", "שבע ברכות - יום 5", "שבע ברכות - יום 6"]
+        .every(c => weddingCategories.data.expense.includes(c)) && weddingCategories.data.expense.includes("שבת ברכות"),
+      "שבע ברכות מפורטות ל-6 ימים בנפרד + 'שבת ברכות' כפריט נפרד, בדיוק כמו שהמשתמש ביקש"
+    );
+
+    const weddingDonation = await api("POST", "/api/wedding/transactions", { type: "income", amount: 3000, category: "תרומות", note: "דודה רחל" }, token);
+    assert(weddingDonation.status === 201, "רישום תרומה לחתונה הצליח");
+    const weddingHall = await api("POST", "/api/wedding/transactions", { type: "expense", amount: 20000, category: "אולם חתונה" }, token);
+    assert(weddingHall.status === 201, "רישום הוצאת אולם חתונה הצליח");
+    const weddingDress = await api("POST", "/api/wedding/transactions", { type: "expense", amount: 4000, category: "שמלת כלה" }, token);
+    assert(weddingDress.status === 201, "רישום הוצאת שמלת כלה הצליח");
+
+    const weddingList = await api("GET", "/api/wedding/transactions", null, token);
+    assert(
+      weddingList.data.summary.income === 3000 && weddingList.data.summary.expense === 24000 && weddingList.data.summary.balance === -21000,
+      `הסיכום (תרומות מול הוצאות) חושב נכון (${JSON.stringify(weddingList.data.summary)})`
+    );
+    assert(weddingList.data.byCategory["אולם חתונה"] === 20000 && weddingList.data.byCategory["שמלת כלה"] === 4000, "פילוח הוצאות לפי קטגוריה נכון");
+
+    const regularBalanceBefore = await api("GET", "/api/transactions", null, token);
+    assert(
+      !regularBalanceBefore.data.transactions.some(t => t.category === "אולם חתונה" || t.category === "תרומות"),
+      "תנועות החתונה לא מופיעות בכלל בתנועות הרגילות (/api/transactions) - אזור נפרד לחלוטין, כמו שהתבקש"
+    );
+
+    console.log("\n💍 תקציב חתונה - קטגוריית 'אחר' חופשית נשמרת למילון נפרד");
+    const weddingOtherExpense = await api("POST", "/api/wedding/transactions", { type: "expense", amount: 800, category: "צילום" }, token);
+    assert(weddingOtherExpense.status === 201, "רישום הוצאת חתונה עם קטגוריה חופשית ('צילום', לא ברשימה הקבועה) הצליח");
+    const weddingOtherDict = await api("GET", "/api/wedding/dictionary?type=expense", null, token);
+    assert(weddingOtherDict.data.phrases.includes("צילום"), "קטגוריה חופשית שהוזנה בחתונה נשמרה למילון הנפרד שלה, תוצע שוב בפעם הבאה");
+    const regularExpenseDict = await api("GET", "/api/transactions/dictionary?type=expense", null, token);
+    assert(!regularExpenseDict.data.phrases.includes("צילום"), "המילון של החתונה נפרד לגמרי מהמילון של התנועות הרגילות - לא מתערבב");
+
+    console.log("\n💍 תקציב חתונה - עריכת תנועה קיימת (לא רק מחיקה) - משוב אמיתי: 'שאוכל לערוך ולשנות'");
+    const weddingEdit = await api("PUT", `/api/wedding/transactions/${weddingHall.data.transaction.id}`, { amount: 22000, note: "אולם + תוספת קייטרינג" }, token);
+    assert(
+      weddingEdit.status === 200 && weddingEdit.data.transaction.amount === 22000 && weddingEdit.data.transaction.category === "אולם חתונה",
+      `עריכת סכום/הערה בתנועת חתונה קיימת הצליחה, בלי לאבד את הקטגוריה שלא נשלחה מחדש (${JSON.stringify(weddingEdit.data.transaction)})`
+    );
+    const weddingListAfterEdit = await api("GET", "/api/wedding/transactions", null, token);
+    assert(weddingListAfterEdit.data.summary.expense === 26800, `הסיכום מתעדכן אחרי העריכה (20000→22000 + 4000 + 800 = 26800) (${weddingListAfterEdit.data.summary.expense})`);
+
+    const otherUserWeddingSignup = await api("POST", "/api/auth/signup", {
+      full_name: "משתמש זר לחתונה", username: `stranger_wedding_${Date.now()}`, password: "1234", phone: `+97250${Date.now().toString().slice(-7)}`,
+    });
+    const strangerWeddingEdit = await api("PUT", `/api/wedding/transactions/${weddingHall.data.transaction.id}`, { amount: 1 }, otherUserWeddingSignup.data.token);
+    assert(strangerWeddingEdit.status === 404, "משתמש אחר לא יכול לערוך תנועת חתונה ששייכת למשתמש הזה");
+    const strangerWeddingDelete = await api("DELETE", `/api/wedding/transactions/${weddingHall.data.transaction.id}`, null, otherUserWeddingSignup.data.token);
+    assert(strangerWeddingDelete.status === 404, "משתמש אחר לא יכול למחוק תנועת חתונה ששייכת למשתמש הזה");
+
+    const weddingDelete = await api("DELETE", `/api/wedding/transactions/${weddingDress.data.transaction.id}`, null, token);
+    assert(weddingDelete.status === 200, "מחיקת תנועת חתונה (הבעלים האמיתי) הצליחה");
+    const weddingListAfterDelete = await api("GET", "/api/wedding/transactions", null, token);
+    assert(!weddingListAfterDelete.data.transactions.some(t => t.id === weddingDress.data.transaction.id), "התנועה שנמחקה אכן נעלמה מרשימת תנועות החתונה");
 
     console.log("\n🎓 חונכות ותלמידים");
     const student = await api("POST", "/api/students", { name: "תלמיד בדיקה" }, token);

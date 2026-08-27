@@ -231,6 +231,7 @@
     <div class="sidenav" id="sidenav">
       <button class="nav-item active" data-view="overview" onclick="showView('overview')"><span class="ic">🏠</span> סקירה כללית</button>
       <button class="nav-item" data-view="transactions" onclick="showView('transactions')"><span class="ic">💳</span> תנועות</button>
+      <button class="nav-item" data-view="wedding" onclick="showView('wedding')"><span class="ic">💍</span> חתונה</button>
       <button class="nav-item" data-view="mentoring" onclick="showView('mentoring')"><span class="ic">🎓</span> חונכות</button>
       <button class="nav-item" data-view="therapy" onclick="showView('therapy')"><span class="ic">🩺</span> מעגל מטפלים</button>
       <button class="nav-item" data-view="parents" onclick="showView('parents')"><span class="ic">👪</span> אזור הורים</button>
@@ -309,6 +310,11 @@
             <div id="import-preview-table" style="overflow-x:auto"></div>
             <button class="btn" style="margin-top:10px" onclick="commitImport()">ייבוא השורות המסומנות</button>
           </div>
+          <div style="margin-top:16px">
+            <h4 style="margin-bottom:8px">קבצים שיובאו</h4>
+            <div class="hint" style="margin-bottom:8px">מחיקת קובץ מוחקת בבת אחת את כל התנועות שיובאו ממנו (לא רק שורה אחת).</div>
+            <div id="import-batches-list"><div class="empty-state">עדיין לא יובא אף קובץ</div></div>
+          </div>
         </div>
         <div class="card">
           <h3>דוח חודשי: הכנסות מול הוצאות</h3>
@@ -323,6 +329,41 @@
         <div class="card">
           <h3>כל התנועות</h3>
           <div id="tx-list"><div class="empty-state">אין עדיין תנועות</div></div>
+        </div>
+      </div>
+
+      <!-- ---------- WEDDING ---------- -->
+      <!-- אזור נפרד לגמרי מ"תנועות" הרגילות - משוב אמיתי: "שיהיה קטגוריה נפרדת להוצאות חתונה,
+           הכנסות מתרומות... אזור נפרד לגמרי בשם 'חתונה'". ר' src/routes/weddingTransactions.js. -->
+      <div class="view" id="view-wedding">
+        <div class="view-header"><h1>חתונה</h1><p>תקציב חתונה נפרד - תרומות מול הוצאות, בלי להתערבב עם התקציב הרגיל</p></div>
+        <div class="grid-3" style="margin-bottom:18px">
+          <div class="stat-tile income"><div class="label">תרומות והכנסות</div><div class="value" id="wed-income">₪0</div></div>
+          <div class="stat-tile expense"><div class="label">הוצאות</div><div class="value" id="wed-expense">₪0</div></div>
+          <div class="stat-tile balance"><div class="label">יתרה</div><div class="value" id="wed-balance">₪0</div></div>
+        </div>
+        <div class="card">
+          <h3>הוספת תנועה</h3>
+          <div class="row">
+            <select id="wed_type" class="plain" onchange="onWeddingTypeChange()">
+              <option value="expense">הוצאה</option>
+              <option value="income">הכנסה</option>
+            </select>
+            <select id="wed_category" class="plain" onchange="onWeddingCategoryChange()"></select>
+            <input id="wed_category_other" class="plain" list="wedding-category-suggestions" placeholder="פירוט הקטגוריה" style="display:none">
+            <datalist id="wedding-category-suggestions"></datalist>
+            <input id="wed_amount" class="plain" type="number" placeholder="סכום בש״ח">
+            <input id="wed_note" class="plain" placeholder="הערה (לא חובה)">
+            <button class="btn" onclick="addWeddingTransaction()">הוספה</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>הוצאות לפי קטגוריה</h3>
+          <div id="wed-categories"><div class="empty-state">אין עדיין הוצאות להצגה</div></div>
+        </div>
+        <div class="card">
+          <h3>כל תנועות החתונה</h3>
+          <div id="wed-list"><div class="empty-state">אין עדיין תנועות</div></div>
         </div>
       </div>
 
@@ -673,6 +714,7 @@ function showView(name) {
   document.getElementById('view-' + name).classList.add('active');
   if (name === 'mentoring') { loadLessonDictionaries(); autofillLessonFormFromProfile(); }
   if (name === 'settings') loadProfile();
+  if (name === 'wedding') loadWedding();
 }
 
 async function refreshAll() {
@@ -714,6 +756,7 @@ async function deleteTransaction(id, label, amount) {
 // משוב אמיתי ממשתמש: "רוצה להכניס אקסל של דפי בנק או דפי כרטיס אשראי, שיוכל להוריד אותו והמערכת
 // תכניס את זה להכנסות והוצאות". שני שלבים בכוונה (תצוגה מקדימה -> ייבוא) - ר' src/routes/importTransactions.js.
 let importPreviewRows = []; // הרשימה האחרונה שהתקבלה מהשרת בתצוגה המקדימה, כולל עריכות המשתמש (סוג/קטגוריה/סימון)
+let importPreviewFilename = ''; // שם הקובץ שמוצג כרגע בתצוגה המקדימה - נשלח שוב ב-commit כדי לתייג את האצווה (ר' loadImportBatches)
 
 async function previewImport() {
   const fileInput = document.getElementById('imp_file');
@@ -728,6 +771,7 @@ async function previewImport() {
   });
   const r = await api('POST', '/api/transactions/import/parse', { data_base64: dataUrl, filename: file.name, source_type: sourceType });
   if (!r.ok) return;
+  importPreviewFilename = file.name;
   // שורה "מסומנת" כברירת מחדל רק אם עוד לא יובאה בעבר (alreadyImported) - כדי לא לעודד ייבוא כפול בטעות.
   importPreviewRows = r.data.transactions.map(t => ({ ...t, included: !t.alreadyImported }));
   renderImportPreview(r.data.skippedRowsCount);
@@ -779,7 +823,7 @@ function applyBulkCategory() {
 async function commitImport() {
   const selected = importPreviewRows.filter(t => t.included);
   if (!selected.length) { toast('לא סומנה אף שורה לייבוא', 'error'); return; }
-  const r = await api('POST', '/api/transactions/import/commit', { transactions: selected });
+  const r = await api('POST', '/api/transactions/import/commit', { transactions: selected, filename: importPreviewFilename });
   if (!r.ok) return;
   const { imported, skippedDuplicates, skippedInvalid } = r.data;
   toast(`יובאו ${imported} תנועות` + (skippedDuplicates ? ` · ${skippedDuplicates} דולגו ככבר-קיימות` : '') + (skippedInvalid ? ` · ${skippedInvalid} דולגו (לא תקינות)` : ''), 'success');
@@ -788,6 +832,175 @@ async function commitImport() {
   importPreviewRows = [];
   loadTransactions();
 }
+
+// רשימת קבצי ייבוא (אצוות) עם אפשרות מחיקה שלמה - משוב אמיתי: "אם הבאתי דפי בנק ואני רוצה למחוק
+// את הקבצים שהועלו שיהיה אופציה לבחור למחוק מהמערכת". ר' src/routes/importTransactions.js.
+async function loadImportBatches() {
+  const el = document.getElementById('import-batches-list');
+  if (!el) return;
+  const r = await api('GET', '/api/transactions/import/batches');
+  if (!r.ok) return;
+  const batches = r.data.batches || [];
+  el.innerHTML = batches.length ? batches.map(b => `
+    <div class="list-item">
+      <div>
+        <div class="li-main">${(b.filename || 'קובץ ללא שם').replace(/</g, '&lt;')}</div>
+        <div class="li-sub">${b.count} תנועות · ${b.minDate === b.maxDate ? b.minDate : `${b.minDate} עד ${b.maxDate}`} · הכנסות ₪${b.income} · הוצאות ₪${b.expense}</div>
+      </div>
+      <button class="btn secondary sm" onclick="deleteImportBatch('${b.batchId}', '${(b.filename || 'קובץ ללא שם').replace(/'/g, "\\'")}', ${b.count})">מחיקת הקובץ</button>
+    </div>`).join('') : '<div class="empty-state">עדיין לא יובא אף קובץ</div>';
+}
+
+async function deleteImportBatch(batchId, filename, count) {
+  if (!confirm(`למחוק את כל ${count} התנועות שיובאו מהקובץ "${filename}"? לא ניתן לשחזר אחרי המחיקה.`)) return;
+  const r = await api('DELETE', `/api/transactions/import/batches/${batchId}`);
+  if (r.ok) { toast(`נמחקו ${r.data.deleted} תנועות מהקובץ`, 'success'); loadTransactions(); }
+}
+
+// ---------- חתונה (אזור נפרד לגמרי מ"תנועות" הרגילות) ----------
+// משוב אמיתי: "שיהיה קטגוריה נפרדת להוצאות חתונה, הכנסות מתרומות... אזור נפרד לגמרי בשם 'חתונה'".
+// ר' src/routes/weddingTransactions.js. בניגוד לתנועות הרגילות - כאן אפשר גם *לערוך* תנועה קיימת
+// (לא רק למחוק), לפי משוב מפורש: "שאוכל לערוך ולשנות" מתייחס לעריכת תנועה שכבר הוזנה.
+let weddingCategories = { expense: [], income: [] };
+let weddingEditingId = null; // אם לא null - השורה הזו מוצגת כרגע במצב עריכה ברשימה (ר' renderWeddingList)
+
+function weddingCategoryOptionsHtml(type) {
+  const fixed = (type === 'income' ? weddingCategories.income : weddingCategories.expense) || [];
+  return fixed.map(c => `<option value="${c}">${c}</option>`).join('') + '<option value="__other__">אחר...</option>';
+}
+
+async function loadWeddingCategories() {
+  const r = await api('GET', '/api/wedding/categories');
+  if (r.ok) weddingCategories = r.data;
+}
+
+function onWeddingTypeChange() {
+  const type = document.getElementById('wed_type').value;
+  document.getElementById('wed_category').innerHTML = weddingCategoryOptionsHtml(type);
+  document.getElementById('wed_category_other').style.display = 'none';
+  document.getElementById('wed_category_other').value = '';
+  loadWeddingCategoryDictionary(type);
+}
+
+// הצעות השלמה אוטומטית לקטגוריית "אחר" חופשית בחתונה (מילון נפרד לגמרי מ-category-suggestions
+// הרגיל של התנועות, ר' kind='wedding_income_category_other'/'wedding_expense_category_other' בשרת).
+async function loadWeddingCategoryDictionary(type) {
+  const r = await api('GET', '/api/wedding/dictionary' + (type === 'income' ? '?type=income' : '?type=expense'));
+  const dl = document.getElementById('wedding-category-suggestions');
+  if (!r.ok || !dl) return;
+  dl.innerHTML = (r.data.phrases || []).map(p => `<option value="${p.replace(/"/g, '&quot;')}">`).join('');
+}
+
+function onWeddingCategoryChange() {
+  const isOther = document.getElementById('wed_category').value === '__other__';
+  document.getElementById('wed_category_other').style.display = isOther ? '' : 'none';
+}
+
+async function addWeddingTransaction() {
+  const type = document.getElementById('wed_type').value;
+  const amount = Number(document.getElementById('wed_amount').value);
+  const catSelect = document.getElementById('wed_category').value;
+  const category = catSelect === '__other__' ? document.getElementById('wed_category_other').value.trim() : catSelect;
+  const note = document.getElementById('wed_note').value.trim();
+  if (!amount) { toast('יש להזין סכום', 'error'); return; }
+  if (catSelect === '__other__' && !category) { toast('יש להזין פירוט קטגוריה', 'error'); return; }
+  const r = await api('POST', '/api/wedding/transactions', { type, amount, category: category || undefined, note: note || undefined });
+  if (r.ok) {
+    toast('התנועה נוספה בהצלחה', 'success');
+    document.getElementById('wed_amount').value = '';
+    document.getElementById('wed_note').value = '';
+    document.getElementById('wed_category_other').value = '';
+    document.getElementById('wed_category_other').style.display = 'none';
+    loadWedding();
+  }
+}
+
+async function loadWedding() {
+  if (!weddingCategories.expense.length) await loadWeddingCategories();
+  if (document.getElementById('wed_category') && !document.getElementById('wed_category').options.length) onWeddingTypeChange();
+
+  const r = await api('GET', '/api/wedding/transactions');
+  if (!r.ok) return;
+  const s = r.data.summary;
+  document.getElementById('wed-income').textContent = `₪${s.income}`;
+  document.getElementById('wed-expense').textContent = `₪${s.expense}`;
+  document.getElementById('wed-balance').textContent = `₪${s.balance}`;
+  renderCategoryDonut(r.data.byCategory, 'wed-categories');
+  renderWeddingList(r.data.transactions);
+}
+
+function renderWeddingList(txs) {
+  const el = document.getElementById('wed-list');
+  if (!txs.length) { el.innerHTML = '<div class="empty-state">אין עדיין תנועות</div>'; return; }
+  el.innerHTML = txs.map(t => {
+    if (t.id === weddingEditingId) {
+      return `
+        <div class="list-item" style="flex-wrap:wrap; gap:8px">
+          <select id="wed-edit-type-${t.id}" class="plain" onchange="onWeddingEditTypeChange(${t.id})">
+            <option value="expense" ${t.type === 'expense' ? 'selected' : ''}>הוצאה</option>
+            <option value="income" ${t.type === 'income' ? 'selected' : ''}>הכנסה</option>
+          </select>
+          <select id="wed-edit-category-${t.id}" class="plain"></select>
+          <input id="wed-edit-category-other-${t.id}" class="plain" list="wedding-category-suggestions" placeholder="פירוט הקטגוריה" style="display:none">
+          <input id="wed-edit-amount-${t.id}" class="plain" type="number" value="${t.amount}" style="max-width:110px">
+          <input id="wed-edit-note-${t.id}" class="plain" value="${(t.note || '').replace(/"/g, '&quot;')}" placeholder="הערה">
+          <button class="btn secondary sm" onclick="saveWeddingEdit(${t.id})">שמירה</button>
+          <button class="btn secondary sm" onclick="cancelWeddingEdit()">ביטול</button>
+        </div>`;
+    }
+    return `
+    <div class="list-item">
+      <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div></div>
+      <div style="display:flex; align-items:center; gap:10px">
+        <span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span>
+        <button class="btn secondary sm" onclick="startWeddingEdit(${t.id})">עריכה</button>
+        <button class="btn secondary sm" onclick="deleteWeddingTransaction(${t.id}, '${(t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')).replace(/'/g, "\\'")}', ${t.amount})">מחיקה</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  // אחרי בניית ה-HTML, ממלאים את ה-select של הקטגוריה בשורה שבעריכה (לא אפשר להטמיע את הרשימה
+  // הדינמית הזו בתוך תבנית מחרוזת פשוטה כי היא תלויה ב-type הנוכחי שנבחר).
+  if (weddingEditingId != null) {
+    const editedTx = txs.find(t => t.id === weddingEditingId);
+    if (editedTx) {
+      const isFixed = weddingCategoryOptionsHtml(editedTx.type).includes(`value="${editedTx.category}"`);
+      document.getElementById(`wed-edit-category-${editedTx.id}`).innerHTML = weddingCategoryOptionsHtml(editedTx.type);
+      document.getElementById(`wed-edit-category-${editedTx.id}`).value = isFixed ? editedTx.category : '__other__';
+      if (!isFixed && editedTx.category) {
+        document.getElementById(`wed-edit-category-other-${editedTx.id}`).style.display = '';
+        document.getElementById(`wed-edit-category-other-${editedTx.id}`).value = editedTx.category;
+      }
+    }
+  }
+}
+
+function startWeddingEdit(id) { weddingEditingId = id; loadWedding(); }
+function cancelWeddingEdit() { weddingEditingId = null; loadWedding(); }
+
+function onWeddingEditTypeChange(id) {
+  const type = document.getElementById(`wed-edit-type-${id}`).value;
+  document.getElementById(`wed-edit-category-${id}`).innerHTML = weddingCategoryOptionsHtml(type);
+  document.getElementById(`wed-edit-category-other-${id}`).style.display = 'none';
+}
+
+async function saveWeddingEdit(id) {
+  const type = document.getElementById(`wed-edit-type-${id}`).value;
+  const amount = Number(document.getElementById(`wed-edit-amount-${id}`).value);
+  const catSelect = document.getElementById(`wed-edit-category-${id}`).value;
+  const category = catSelect === '__other__' ? document.getElementById(`wed-edit-category-other-${id}`).value.trim() : catSelect;
+  const note = document.getElementById(`wed-edit-note-${id}`).value.trim();
+  if (!amount) { toast('יש להזין סכום', 'error'); return; }
+  const r = await api('PUT', `/api/wedding/transactions/${id}`, { type, amount, category: category || undefined, note: note || undefined });
+  if (r.ok) { toast('התנועה עודכנה', 'success'); weddingEditingId = null; loadWedding(); }
+}
+
+async function deleteWeddingTransaction(id, label, amount) {
+  if (!confirm(`למחוק את התנועה "${label}" (₪${amount})? לא ניתן לשחזר אחרי המחיקה.`)) return;
+  const r = await api('DELETE', `/api/wedding/transactions/${id}`);
+  if (r.ok) { toast('התנועה נמחקה', 'success'); loadWedding(); }
+}
+
 // דוח חודשי מסודר: הכנסות מול הוצאות (בנוסף לרשימת התנועות הגולמית) - מבוסס על /api/transactions/trend,
 // שכבר מחשב בשרת סכומי הכנסה/הוצאה לכל אחד מ-12 החודשים האחרונים.
 async function loadTransactionsTrend() {
@@ -900,8 +1113,8 @@ function renderTrendChart(rows) {
 
 // עיגול (donut) עם ה"חור" באמצע נושא את סה"כ ההוצאות - ר' בקשת המשתמש "עיגול עם צבעים". מעל 6
 // קטגוריות מקפלים את השאר ל"אחר" (המלצת מיומנות dataviz - יותר מ-6 פרוסות נהיה קשה לקרוא בעין).
-function renderCategoryDonut(byCategory) {
-  const el = document.getElementById('tx-category-donut');
+function renderCategoryDonut(byCategory, elId) {
+  const el = document.getElementById(elId || 'tx-category-donut');
   if (!el) return;
   const sorted = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
   if (!sorted.length) { el.innerHTML = '<div class="empty-state">אין עדיין הוצאות להצגה</div>'; return; }
@@ -971,6 +1184,7 @@ async function loadCategoryDictionary(type) {
 }
 async function loadTransactions() {
   loadTransactionsTrend();
+  loadImportBatches();
   loadCategoryDictionary(document.getElementById('t_type') ? document.getElementById('t_type').value : 'expense');
   const r = await api('GET', '/api/transactions');
   if (!r.ok) return;

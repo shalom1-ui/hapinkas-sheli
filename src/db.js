@@ -74,6 +74,26 @@ db.exec(`
     -- לזהות ולדלג על תנועות שכבר יובאו בעבר אם אותו קובץ (או קובץ חופף) מועלה שוב. NULL לתנועות
     -- רגילות (טלפון/אתר) שלא הגיעו מייבוא.
     import_hash TEXT,
+    -- מזהה "אצווה" (batch) - כל התנועות שנשמרו יחד מאותה קריאת /import/commit (כלומר מאותה העלאת
+    -- קובץ) מקבלות אותו מזהה. מאפשר למחוק בבת אחת "את כל מה שהובא מהקובץ הזה" (ר' משוב אמיתי:
+    -- "אם הבאתי דפי בנק ואני רוצה למחוק את הקבצים שהועלו"), במקום למחוק תנועה-תנועה. NULL לתנועות
+    -- רגילות (טלפון/אתר) שלא הגיעו מייבוא.
+    import_batch_id TEXT,
+    import_filename TEXT,
+    occurred_at TEXT DEFAULT (datetime('now'))
+  );
+
+  -- תקציב חתונה - אזור נפרד לגמרי מהתנועות הרגילות (לא מעורבב עם income/expense של transactions),
+  -- לפי משוב אמיתי: "שתהיה קטגוריה נפרדת להוצאות חתונה, הכנסות מתרומות" + בקשה מפורשת ל"אזור נפרד
+  -- לגמרי". קטגוריות ההוצאה קבועות מראש (ר' WEDDING_EXPENSE_CATEGORIES ב-routes/weddingTransactions.js)
+  -- כולל פירוט לפי יום עבור שבע ברכות. אפשר גם לערוך תנועה קיימת (לא רק למחוק) - ר' PUT באותו קובץ.
+  CREATE TABLE IF NOT EXISTS wedding_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    type TEXT NOT NULL,                -- income | expense
+    amount REAL NOT NULL,
+    category TEXT,
+    note TEXT,
     occurred_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -235,6 +255,9 @@ for (const alterSql of [
   "ALTER TABLE admin_claim_requests ADD COLUMN verify_via TEXT",
   // "ייבוא אקסל" (ר' routes/importTransactions.js) - זיהוי כפילויות בין ייבוא לייבוא.
   "ALTER TABLE transactions ADD COLUMN import_hash TEXT",
+  // מחיקת קובץ ייבוא שלם בבת אחת (ר' routes/importTransactions.js) - ר' הערה מפורטת ב-CREATE TABLE למעלה.
+  "ALTER TABLE transactions ADD COLUMN import_batch_id TEXT",
+  "ALTER TABLE transactions ADD COLUMN import_filename TEXT",
 ]) {
   try {
     db.exec(alterSql);
