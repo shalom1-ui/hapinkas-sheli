@@ -97,6 +97,18 @@ db.exec(`
     occurred_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- תקציב דירה - אזור נפרד לגמרי, באותו דגם בדיוק כמו wedding_transactions (ר' שם). משוב אמיתי:
+  -- "אני צריך שיהיה שני קטגוריות נפרדות: 1 חתונה, 2 דירה. בתוך דירה יש שני אפשרויות רגיל, תבע משותף".
+  CREATE TABLE IF NOT EXISTS apartment_transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    type TEXT NOT NULL,                -- income | expense
+    amount REAL NOT NULL,
+    category TEXT,
+    note TEXT,
+    occurred_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_user_id INTEGER NOT NULL REFERENCES users(id), -- מי יצר/מנהל את התלמיד (חונך/מטפל ראשי)

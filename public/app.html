@@ -232,6 +232,7 @@
       <button class="nav-item active" data-view="overview" onclick="showView('overview')"><span class="ic">🏠</span> סקירה כללית</button>
       <button class="nav-item" data-view="transactions" onclick="showView('transactions')"><span class="ic">💳</span> תנועות</button>
       <button class="nav-item" data-view="wedding" onclick="showView('wedding')"><span class="ic">💍</span> חתונה</button>
+      <button class="nav-item" data-view="apartment" onclick="showView('apartment')"><span class="ic">🏠</span> דירה</button>
       <button class="nav-item" data-view="mentoring" onclick="showView('mentoring')"><span class="ic">🎓</span> חונכות</button>
       <button class="nav-item" data-view="therapy" onclick="showView('therapy')"><span class="ic">🩺</span> מעגל מטפלים</button>
       <button class="nav-item" data-view="parents" onclick="showView('parents')"><span class="ic">👪</span> אזור הורים</button>
@@ -328,6 +329,10 @@
         </div>
         <div class="card">
           <h3>כל התנועות</h3>
+          <div class="row" style="margin-bottom:10px; align-items:center">
+            <label style="display:flex; align-items:center; gap:6px; font-size:14px"><input type="checkbox" id="tx-select-all" onchange="toggleSelectAll(selectedTxIds, txListIds, this.checked); renderTxList()"> בחר הכל</label>
+            <button class="btn secondary sm" onclick="bulkDeleteTransactions(selectedTxIds, '/api/transactions', loadTransactions)">מחיקת המסומנות</button>
+          </div>
           <div id="tx-list"><div class="empty-state">אין עדיין תנועות</div></div>
         </div>
       </div>
@@ -363,7 +368,50 @@
         </div>
         <div class="card">
           <h3>כל תנועות החתונה</h3>
+          <div class="row" style="margin-bottom:10px; align-items:center">
+            <label style="display:flex; align-items:center; gap:6px; font-size:14px"><input type="checkbox" id="wed-select-all" onchange="toggleSelectAll(selectedWeddingIds, weddingListIds, this.checked); renderWeddingList(lastWeddingList)"> בחר הכל</label>
+            <button class="btn secondary sm" onclick="bulkDeleteTransactions(selectedWeddingIds, '/api/wedding/transactions', loadWedding)">מחיקת המסומנות</button>
+          </div>
           <div id="wed-list"><div class="empty-state">אין עדיין תנועות</div></div>
+        </div>
+      </div>
+
+      <!-- ---------- APARTMENT ---------- -->
+      <!-- אזור נפרד לגמרי, גם מהתנועות הרגילות וגם מ"חתונה" - משוב אמיתי: "אני צריך שיהיה שני
+           קטגוריות נפרדות: 1 חתונה, 2 דירה". ר' src/routes/apartmentTransactions.js. -->
+      <div class="view" id="view-apartment">
+        <div class="view-header"><h1>דירה</h1><p>תקציב דירה נפרד - רכישה רגילה או תב"ע משותף, בלי להתערבב עם תקציבים אחרים</p></div>
+        <div class="grid-3" style="margin-bottom:18px">
+          <div class="stat-tile income"><div class="label">הכנסות</div><div class="value" id="apt-income">₪0</div></div>
+          <div class="stat-tile expense"><div class="label">הוצאות</div><div class="value" id="apt-expense">₪0</div></div>
+          <div class="stat-tile balance"><div class="label">יתרה</div><div class="value" id="apt-balance">₪0</div></div>
+        </div>
+        <div class="card">
+          <h3>הוספת תנועה</h3>
+          <div class="row">
+            <select id="apt_type" class="plain" onchange="onApartmentTypeChange()">
+              <option value="expense">הוצאה</option>
+              <option value="income">הכנסה</option>
+            </select>
+            <select id="apt_category" class="plain" onchange="onApartmentCategoryChange()"></select>
+            <input id="apt_category_other" class="plain" list="apartment-category-suggestions" placeholder="פירוט הקטגוריה" style="display:none">
+            <datalist id="apartment-category-suggestions"></datalist>
+            <input id="apt_amount" class="plain" type="number" placeholder="סכום בש״ח">
+            <input id="apt_note" class="plain" placeholder="הערה (לא חובה)">
+            <button class="btn" onclick="addApartmentTransaction()">הוספה</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>הוצאות לפי קטגוריה</h3>
+          <div id="apt-categories"><div class="empty-state">אין עדיין הוצאות להצגה</div></div>
+        </div>
+        <div class="card">
+          <h3>כל תנועות הדירה</h3>
+          <div class="row" style="margin-bottom:10px; align-items:center">
+            <label style="display:flex; align-items:center; gap:6px; font-size:14px"><input type="checkbox" id="apt-select-all" onchange="toggleSelectAll(selectedApartmentIds, apartmentListIds, this.checked); renderApartmentList(lastApartmentList)"> בחר הכל</label>
+            <button class="btn secondary sm" onclick="bulkDeleteTransactions(selectedApartmentIds, '/api/apartment/transactions', loadApartment)">מחיקת המסומנות</button>
+          </div>
+          <div id="apt-list"><div class="empty-state">אין עדיין תנועות</div></div>
         </div>
       </div>
 
@@ -715,6 +763,7 @@ function showView(name) {
   if (name === 'mentoring') { loadLessonDictionaries(); autofillLessonFormFromProfile(); }
   if (name === 'settings') loadProfile();
   if (name === 'wedding') loadWedding();
+  if (name === 'apartment') loadApartment();
 }
 
 async function refreshAll() {
@@ -750,6 +799,47 @@ async function deleteTransaction(id, label, amount) {
   if (!confirm(`למחוק את התנועה "${label}" (₪${amount})? לא ניתן לשחזר אחרי המחיקה.`)) return;
   const r = await api('DELETE', `/api/transactions/${id}`);
   if (r.ok) { toast('התנועה נמחקה', 'success'); loadTransactions(); }
+}
+
+// "סמן הכל" למחיקה מרובה - משוב אמיתי: "במחיקות של התנועות שיהיה סמן הכל כדי שאני לא יצטרך למחוק
+// 1 1 1". משותף לשלוש רשימות התנועות (רגילות/חתונה/דירה) - כל אחת עם Set נפרד לסימון (ר' selectedTxIds
+// למטה), אבל אותה לוגיקת "בחר הכל"/מחיקה מרובה בדיוק, כדי לא לשכפל אותה שלוש פעמים.
+function toggleSelectAll(selectedSet, allIds, checked) {
+  selectedSet.clear();
+  if (checked) allIds.forEach(id => selectedSet.add(id));
+}
+
+async function bulkDeleteTransactions(selectedSet, endpointPrefix, reloadFn) {
+  if (!selectedSet.size) { toast('לא סומנה אף תנועה', 'error'); return; }
+  const ids = [...selectedSet];
+  if (!confirm(`למחוק ${ids.length} תנועות מסומנות? לא ניתן לשחזר אחרי המחיקה.`)) return;
+  const results = await Promise.all(ids.map(id => api('DELETE', `${endpointPrefix}/${id}`)));
+  const failed = results.filter(r => !r.ok).length;
+  selectedSet.clear();
+  toast(failed ? `נמחקו ${ids.length - failed} מתוך ${ids.length} (${failed} נכשלו)` : `נמחקו ${ids.length} תנועות`, failed ? 'error' : 'success');
+  reloadFn();
+}
+
+let selectedTxIds = new Set();
+let lastTxList = [];
+let txListIds = [];
+
+function renderTxList() {
+  const el = document.getElementById('tx-list');
+  const selectAllBox = document.getElementById('tx-select-all');
+  if (selectAllBox) selectAllBox.checked = txListIds.length > 0 && selectedTxIds.size === txListIds.length;
+  if (!el) return;
+  el.innerHTML = lastTxList.length ? lastTxList.map(t => `
+    <div class="list-item">
+      <div style="display:flex; align-items:center; gap:10px">
+        <input type="checkbox" ${selectedTxIds.has(t.id) ? 'checked' : ''} onchange="this.checked ? selectedTxIds.add(${t.id}) : selectedTxIds.delete(${t.id}); renderTxList()">
+        <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}</div></div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px">
+        <span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span>
+        <button class="btn secondary sm" onclick="deleteTransaction(${t.id}, '${(t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')).replace(/'/g, "\\'")}', ${t.amount})">מחיקה</button>
+      </div>
+    </div>`).join('') : '<div class="empty-state">אין עדיין תנועות</div>';
 }
 
 // ---------- ייבוא תנועות מאקסל/CSV (דף בנק/כרטיס אשראי) ----------
@@ -863,6 +953,9 @@ async function deleteImportBatch(batchId, filename, count) {
 // (לא רק למחוק), לפי משוב מפורש: "שאוכל לערוך ולשנות" מתייחס לעריכת תנועה שכבר הוזנה.
 let weddingCategories = { expense: [], income: [] };
 let weddingEditingId = null; // אם לא null - השורה הזו מוצגת כרגע במצב עריכה ברשימה (ר' renderWeddingList)
+let selectedWeddingIds = new Set(); // "בחר הכל" למחיקה מרובה - ר' toggleSelectAll/bulkDeleteTransactions למעלה
+let lastWeddingList = [];
+let weddingListIds = [];
 
 function weddingCategoryOptionsHtml(type) {
   const fixed = (type === 'income' ? weddingCategories.income : weddingCategories.expense) || [];
@@ -926,11 +1019,16 @@ async function loadWedding() {
   document.getElementById('wed-expense').textContent = `₪${s.expense}`;
   document.getElementById('wed-balance').textContent = `₪${s.balance}`;
   renderCategoryDonut(r.data.byCategory, 'wed-categories');
-  renderWeddingList(r.data.transactions);
+  lastWeddingList = r.data.transactions;
+  weddingListIds = lastWeddingList.map(t => t.id);
+  selectedWeddingIds = new Set([...selectedWeddingIds].filter(id => weddingListIds.includes(id)));
+  renderWeddingList(lastWeddingList);
 }
 
 function renderWeddingList(txs) {
   const el = document.getElementById('wed-list');
+  const selectAllBox = document.getElementById('wed-select-all');
+  if (selectAllBox) selectAllBox.checked = weddingListIds.length > 0 && selectedWeddingIds.size === weddingListIds.length;
   if (!txs.length) { el.innerHTML = '<div class="empty-state">אין עדיין תנועות</div>'; return; }
   el.innerHTML = txs.map(t => {
     if (t.id === weddingEditingId) {
@@ -950,7 +1048,10 @@ function renderWeddingList(txs) {
     }
     return `
     <div class="list-item">
-      <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div></div>
+      <div style="display:flex; align-items:center; gap:10px">
+        <input type="checkbox" ${selectedWeddingIds.has(t.id) ? 'checked' : ''} onchange="this.checked ? selectedWeddingIds.add(${t.id}) : selectedWeddingIds.delete(${t.id}); renderWeddingList(lastWeddingList)">
+        <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div></div>
+      </div>
       <div style="display:flex; align-items:center; gap:10px">
         <span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span>
         <button class="btn secondary sm" onclick="startWeddingEdit(${t.id})">עריכה</button>
@@ -999,6 +1100,156 @@ async function deleteWeddingTransaction(id, label, amount) {
   if (!confirm(`למחוק את התנועה "${label}" (₪${amount})? לא ניתן לשחזר אחרי המחיקה.`)) return;
   const r = await api('DELETE', `/api/wedding/transactions/${id}`);
   if (r.ok) { toast('התנועה נמחקה', 'success'); loadWedding(); }
+}
+
+// ---------- דירה (אזור נפרד לגמרי, גם מ"תנועות" הרגילות וגם מ"חתונה") ----------
+// משוב אמיתי: "אני צריך שיהיה שני קטגוריות נפרדות: 1 חתונה, 2 דירה. בתוך דירה יש שני אפשרויות
+// רגיל, תבע משותף". אותו דגם בדיוק כמו "חתונה" למעלה - ר' src/routes/apartmentTransactions.js.
+let apartmentCategories = { expense: [], income: [] };
+let apartmentEditingId = null;
+let selectedApartmentIds = new Set(); // "בחר הכל" למחיקה מרובה - ר' toggleSelectAll/bulkDeleteTransactions למעלה
+let lastApartmentList = [];
+let apartmentListIds = [];
+
+function apartmentCategoryOptionsHtml(type) {
+  const fixed = (type === 'income' ? apartmentCategories.income : apartmentCategories.expense) || [];
+  return fixed.map(c => `<option value="${c}">${c}</option>`).join('') + '<option value="__other__">אחר...</option>';
+}
+
+async function loadApartmentCategories() {
+  const r = await api('GET', '/api/apartment/categories');
+  if (r.ok) apartmentCategories = r.data;
+}
+
+function onApartmentTypeChange() {
+  const type = document.getElementById('apt_type').value;
+  document.getElementById('apt_category').innerHTML = apartmentCategoryOptionsHtml(type);
+  document.getElementById('apt_category_other').style.display = 'none';
+  document.getElementById('apt_category_other').value = '';
+  loadApartmentCategoryDictionary(type);
+}
+
+async function loadApartmentCategoryDictionary(type) {
+  const r = await api('GET', '/api/apartment/dictionary' + (type === 'income' ? '?type=income' : '?type=expense'));
+  const dl = document.getElementById('apartment-category-suggestions');
+  if (!r.ok || !dl) return;
+  dl.innerHTML = (r.data.phrases || []).map(p => `<option value="${p.replace(/"/g, '&quot;')}">`).join('');
+}
+
+function onApartmentCategoryChange() {
+  const isOther = document.getElementById('apt_category').value === '__other__';
+  document.getElementById('apt_category_other').style.display = isOther ? '' : 'none';
+}
+
+async function addApartmentTransaction() {
+  const type = document.getElementById('apt_type').value;
+  const amount = Number(document.getElementById('apt_amount').value);
+  const catSelect = document.getElementById('apt_category').value;
+  const category = catSelect === '__other__' ? document.getElementById('apt_category_other').value.trim() : catSelect;
+  const note = document.getElementById('apt_note').value.trim();
+  if (!amount) { toast('יש להזין סכום', 'error'); return; }
+  if (catSelect === '__other__' && !category) { toast('יש להזין פירוט קטגוריה', 'error'); return; }
+  const r = await api('POST', '/api/apartment/transactions', { type, amount, category: category || undefined, note: note || undefined });
+  if (r.ok) {
+    toast('התנועה נוספה בהצלחה', 'success');
+    document.getElementById('apt_amount').value = '';
+    document.getElementById('apt_note').value = '';
+    document.getElementById('apt_category_other').value = '';
+    document.getElementById('apt_category_other').style.display = 'none';
+    loadApartment();
+  }
+}
+
+async function loadApartment() {
+  if (!apartmentCategories.expense.length) await loadApartmentCategories();
+  if (document.getElementById('apt_category') && !document.getElementById('apt_category').options.length) onApartmentTypeChange();
+
+  const r = await api('GET', '/api/apartment/transactions');
+  if (!r.ok) return;
+  const s = r.data.summary;
+  document.getElementById('apt-income').textContent = `₪${s.income}`;
+  document.getElementById('apt-expense').textContent = `₪${s.expense}`;
+  document.getElementById('apt-balance').textContent = `₪${s.balance}`;
+  renderCategoryDonut(r.data.byCategory, 'apt-categories');
+  lastApartmentList = r.data.transactions;
+  apartmentListIds = lastApartmentList.map(t => t.id);
+  selectedApartmentIds = new Set([...selectedApartmentIds].filter(id => apartmentListIds.includes(id)));
+  renderApartmentList(lastApartmentList);
+}
+
+function renderApartmentList(txs) {
+  const el = document.getElementById('apt-list');
+  const selectAllBox = document.getElementById('apt-select-all');
+  if (selectAllBox) selectAllBox.checked = apartmentListIds.length > 0 && selectedApartmentIds.size === apartmentListIds.length;
+  if (!txs.length) { el.innerHTML = '<div class="empty-state">אין עדיין תנועות</div>'; return; }
+  el.innerHTML = txs.map(t => {
+    if (t.id === apartmentEditingId) {
+      return `
+        <div class="list-item" style="flex-wrap:wrap; gap:8px">
+          <select id="apt-edit-type-${t.id}" class="plain" onchange="onApartmentEditTypeChange(${t.id})">
+            <option value="expense" ${t.type === 'expense' ? 'selected' : ''}>הוצאה</option>
+            <option value="income" ${t.type === 'income' ? 'selected' : ''}>הכנסה</option>
+          </select>
+          <select id="apt-edit-category-${t.id}" class="plain"></select>
+          <input id="apt-edit-category-other-${t.id}" class="plain" placeholder="פירוט הקטגוריה" style="display:none">
+          <input id="apt-edit-amount-${t.id}" class="plain" type="number" value="${t.amount}" style="max-width:110px">
+          <input id="apt-edit-note-${t.id}" class="plain" value="${(t.note || '').replace(/"/g, '&quot;')}" placeholder="הערה">
+          <button class="btn secondary sm" onclick="saveApartmentEdit(${t.id})">שמירה</button>
+          <button class="btn secondary sm" onclick="cancelApartmentEdit()">ביטול</button>
+        </div>`;
+    }
+    return `
+    <div class="list-item">
+      <div style="display:flex; align-items:center; gap:10px">
+        <input type="checkbox" ${selectedApartmentIds.has(t.id) ? 'checked' : ''} onchange="this.checked ? selectedApartmentIds.add(${t.id}) : selectedApartmentIds.delete(${t.id}); renderApartmentList(lastApartmentList)">
+        <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div></div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px">
+        <span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span>
+        <button class="btn secondary sm" onclick="startApartmentEdit(${t.id})">עריכה</button>
+        <button class="btn secondary sm" onclick="deleteApartmentTransaction(${t.id}, '${(t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')).replace(/'/g, "\\'")}', ${t.amount})">מחיקה</button>
+      </div>
+    </div>`;
+  }).join('');
+
+  if (apartmentEditingId != null) {
+    const editedTx = txs.find(t => t.id === apartmentEditingId);
+    if (editedTx) {
+      const isFixed = apartmentCategoryOptionsHtml(editedTx.type).includes(`value="${editedTx.category}"`);
+      document.getElementById(`apt-edit-category-${editedTx.id}`).innerHTML = apartmentCategoryOptionsHtml(editedTx.type);
+      document.getElementById(`apt-edit-category-${editedTx.id}`).value = isFixed ? editedTx.category : '__other__';
+      if (!isFixed && editedTx.category) {
+        document.getElementById(`apt-edit-category-other-${editedTx.id}`).style.display = '';
+        document.getElementById(`apt-edit-category-other-${editedTx.id}`).value = editedTx.category;
+      }
+    }
+  }
+}
+
+function startApartmentEdit(id) { apartmentEditingId = id; loadApartment(); }
+function cancelApartmentEdit() { apartmentEditingId = null; loadApartment(); }
+
+function onApartmentEditTypeChange(id) {
+  const type = document.getElementById(`apt-edit-type-${id}`).value;
+  document.getElementById(`apt-edit-category-${id}`).innerHTML = apartmentCategoryOptionsHtml(type);
+  document.getElementById(`apt-edit-category-other-${id}`).style.display = 'none';
+}
+
+async function saveApartmentEdit(id) {
+  const type = document.getElementById(`apt-edit-type-${id}`).value;
+  const amount = Number(document.getElementById(`apt-edit-amount-${id}`).value);
+  const catSelect = document.getElementById(`apt-edit-category-${id}`).value;
+  const category = catSelect === '__other__' ? document.getElementById(`apt-edit-category-other-${id}`).value.trim() : catSelect;
+  const note = document.getElementById(`apt-edit-note-${id}`).value.trim();
+  if (!amount) { toast('יש להזין סכום', 'error'); return; }
+  const r = await api('PUT', `/api/apartment/transactions/${id}`, { type, amount, category: category || undefined, note: note || undefined });
+  if (r.ok) { toast('התנועה עודכנה', 'success'); apartmentEditingId = null; loadApartment(); }
+}
+
+async function deleteApartmentTransaction(id, label, amount) {
+  if (!confirm(`למחוק את התנועה "${label}" (₪${amount})? לא ניתן לשחזר אחרי המחיקה.`)) return;
+  const r = await api('DELETE', `/api/apartment/transactions/${id}`);
+  if (r.ok) { toast('התנועה נמחקה', 'success'); loadApartment(); }
 }
 
 // דוח חודשי מסודר: הכנסות מול הוצאות (בנוסף לרשימת התנועות הגולמית) - מבוסס על /api/transactions/trend,
@@ -1199,17 +1450,10 @@ async function loadTransactions() {
   document.getElementById('ov-tithe-remaining').textContent = `₪${tithe.remaining}`;
 
   const txs = r.data.transactions;
-  // תוקן (משוב אמיתי: "אני לא רואה שיש אפשרות למחוק נתונים") - נתיב המחיקה (DELETE /api/transactions/:id)
-  // כבר היה קיים בשרת (למשל לתיקון טעות הזנה), פשוט לא היה לו כפתור בממשק בכלל - נוסף כאן.
-  const listHtml = txs.length ? txs.map(t => `
-    <div class="list-item">
-      <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}</div></div>
-      <div style="display:flex; align-items:center; gap:10px">
-        <span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span>
-        <button class="btn secondary sm" onclick="deleteTransaction(${t.id}, '${(t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')).replace(/'/g, "\\'")}', ${t.amount})">מחיקה</button>
-      </div>
-    </div>`).join('') : '<div class="empty-state">אין עדיין תנועות</div>';
-  document.getElementById('tx-list').innerHTML = listHtml;
+  lastTxList = txs;
+  txListIds = txs.map(t => t.id);
+  selectedTxIds = new Set([...selectedTxIds].filter(id => txListIds.includes(id))); // מנקים סימונים של תנועות שכבר לא ברשימה (למשל נמחקו)
+  renderTxList();
   document.getElementById('ov-recent').innerHTML = txs.slice(0, 5).length
     ? txs.slice(0, 5).map(t => `
       <div class="list-item">

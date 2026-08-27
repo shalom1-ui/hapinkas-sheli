@@ -759,6 +759,48 @@ async function run() {
     const weddingListAfterDelete = await api("GET", "/api/wedding/transactions", null, token);
     assert(!weddingListAfterDelete.data.transactions.some(t => t.id === weddingDress.data.transaction.id), "התנועה שנמחקה אכן נעלמה מרשימת תנועות החתונה");
 
+    console.log("\n🏠 תקציב דירה - אזור נפרד לגמרי (גם מהתנועות הרגילות וגם מ'חתונה')");
+    // משוב אמיתי: "אני צריך שיהיה שני קטגוריות נפרדות: 1 חתונה, 2 דירה. בתוך דירה יש שני אפשרויות
+    // רגיל, תבע משותף". ר' src/routes/apartmentTransactions.js - אותו דגם בדיוק כמו 'חתונה' למעלה.
+    const apartmentCategories = await api("GET", "/api/apartment/categories", null, token);
+    assert(
+      apartmentCategories.status === 200 &&
+      apartmentCategories.data.expense.includes("רגיל") &&
+      apartmentCategories.data.expense.some(c => c.includes("תבע משותף") && c.includes("בנייה")) &&
+      apartmentCategories.data.expense.some(c => c.includes("תבע משותף") && c.includes("מיסים")),
+      `רשימת קטגוריות הדירה הקבועה כוללת 'רגיל' ואת תת-העלויות של 'תבע משותף' שהמשתמש ביקש (${JSON.stringify(apartmentCategories.data)})`
+    );
+
+    const apartmentRegular = await api("POST", "/api/apartment/transactions", { type: "expense", amount: 5000, category: "רגיל" }, token);
+    assert(apartmentRegular.status === 201, "רישום הוצאת דירה 'רגיל' הצליח");
+    const apartmentTama = await api("POST", "/api/apartment/transactions", { type: "expense", amount: 15000, category: "תבע משותף - עלות בנייה" }, token);
+    assert(apartmentTama.status === 201, "רישום הוצאת דירה תחת 'תבע משותף' הצליח");
+
+    const apartmentList = await api("GET", "/api/apartment/transactions", null, token);
+    assert(
+      apartmentList.data.summary.expense === 20000 && apartmentList.data.byCategory["רגיל"] === 5000 && apartmentList.data.byCategory["תבע משותף - עלות בנייה"] === 15000,
+      `הסיכום ופילוח הקטגוריות של הדירה חושבו נכון (${JSON.stringify(apartmentList.data.summary)}, ${JSON.stringify(apartmentList.data.byCategory)})`
+    );
+
+    const regularAfterApartment = await api("GET", "/api/transactions", null, token);
+    const weddingAfterApartment = await api("GET", "/api/wedding/transactions", null, token);
+    assert(
+      !regularAfterApartment.data.transactions.some(t => t.category === "רגיל" && t.amount === 5000) &&
+      !weddingAfterApartment.data.transactions.some(t => t.category === "רגיל"),
+      "תנועות הדירה לא מופיעות לא בתנועות הרגילות ולא בחתונה - שלושה אזורים נפרדים לגמרי"
+    );
+
+    const apartmentEdit = await api("PUT", `/api/apartment/transactions/${apartmentRegular.data.transaction.id}`, { amount: 5500 }, token);
+    assert(apartmentEdit.status === 200 && apartmentEdit.data.transaction.amount === 5500, "עריכת תנועת דירה קיימת הצליחה (כמו בחתונה)");
+
+    const otherUserApartmentSignup = await api("POST", "/api/auth/signup", {
+      full_name: "משתמש זר לדירה", username: `stranger_apartment_${Date.now()}`, password: "1234", phone: `+97250${Date.now().toString().slice(-7)}`,
+    });
+    const strangerApartmentDelete = await api("DELETE", `/api/apartment/transactions/${apartmentTama.data.transaction.id}`, null, otherUserApartmentSignup.data.token);
+    assert(strangerApartmentDelete.status === 404, "משתמש אחר לא יכול למחוק תנועת דירה ששייכת למשתמש הזה");
+    const apartmentDelete = await api("DELETE", `/api/apartment/transactions/${apartmentTama.data.transaction.id}`, null, token);
+    assert(apartmentDelete.status === 200, "מחיקת תנועת דירה (הבעלים האמיתי) הצליחה");
+
     console.log("\n🎓 חונכות ותלמידים");
     const student = await api("POST", "/api/students", { name: "תלמיד בדיקה" }, token);
     assert(student.status === 201, "הוספת תלמיד הצליחה");

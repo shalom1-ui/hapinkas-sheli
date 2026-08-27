@@ -41,6 +41,7 @@ require("./routes/auth").register(router);
 require("./routes/transactions").register(router);
 require("./routes/importTransactions").register(router);
 require("./routes/weddingTransactions").register(router);
+require("./routes/apartmentTransactions").register(router);
 require("./routes/students").register(router);
 require("./routes/reports").register(router);
 require("./routes/lessonReports").register(router);
