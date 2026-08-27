@@ -87,6 +87,9 @@ db.exec(`
   -- לפי משוב אמיתי: "שתהיה קטגוריה נפרדת להוצאות חתונה, הכנסות מתרומות" + בקשה מפורשת ל"אזור נפרד
   -- לגמרי". קטגוריות ההוצאה קבועות מראש (ר' WEDDING_EXPENSE_CATEGORIES ב-routes/weddingTransactions.js)
   -- כולל פירוט לפי יום עבור שבע ברכות. אפשר גם לערוך תנועה קיימת (לא רק למחוק) - ר' PUT באותו קובץ.
+  -- import_hash/import_batch_id/import_filename: משוב אמיתי "גם בקטגוריה דירה וגם בחתונה אין
+  -- אופציה של יבוא קבצים" - אותו מנגנון ייבוא/דדופ/מחיקת-קובץ-שלם בדיוק כמו transactions הרגילה
+  -- (ר' src/routes/importTransactions.js, שהורחב לתמוך ב-target=wedding|apartment).
   CREATE TABLE IF NOT EXISTS wedding_transactions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER NOT NULL REFERENCES users(id),
@@ -94,6 +97,9 @@ db.exec(`
     amount REAL NOT NULL,
     category TEXT,
     note TEXT,
+    import_hash TEXT,
+    import_batch_id TEXT,
+    import_filename TEXT,
     occurred_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -106,6 +112,9 @@ db.exec(`
     amount REAL NOT NULL,
     category TEXT,
     note TEXT,
+    import_hash TEXT,
+    import_batch_id TEXT,
+    import_filename TEXT,
     occurred_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -270,6 +279,14 @@ for (const alterSql of [
   // מחיקת קובץ ייבוא שלם בבת אחת (ר' routes/importTransactions.js) - ר' הערה מפורטת ב-CREATE TABLE למעלה.
   "ALTER TABLE transactions ADD COLUMN import_batch_id TEXT",
   "ALTER TABLE transactions ADD COLUMN import_filename TEXT",
+  // ייבוא קבצים בחתונה/דירה (משוב אמיתי: "גם בקטגוריה דירה וגם בחתונה אין אופציה של יבוא קבצים") -
+  // אותן שלוש עמודות בדיוק, על הטבלאות הנפרדות (ר' routes/importTransactions.js, target=wedding|apartment).
+  "ALTER TABLE wedding_transactions ADD COLUMN import_hash TEXT",
+  "ALTER TABLE wedding_transactions ADD COLUMN import_batch_id TEXT",
+  "ALTER TABLE wedding_transactions ADD COLUMN import_filename TEXT",
+  "ALTER TABLE apartment_transactions ADD COLUMN import_hash TEXT",
+  "ALTER TABLE apartment_transactions ADD COLUMN import_batch_id TEXT",
+  "ALTER TABLE apartment_transactions ADD COLUMN import_filename TEXT",
 ]) {
   try {
     db.exec(alterSql);
@@ -281,10 +298,16 @@ for (const alterSql of [
 // אינדקס ייחודי חלקי (רק על שורות עם import_hash) - חוסם כפילויות מייבוא באופן אמין גם אם שתי
 // בקשות /api/transactions/import/commit רצות בו-זמנית (בדיקת "האם כבר קיים" באפליקציה לבדה לא
 // מספיקה נגד מרוץ תזמון - ר' routes/importTransactions.js).
-try {
-  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_import_hash ON transactions(user_id, import_hash) WHERE import_hash IS NOT NULL");
-} catch (e) {
-  console.error("שגיאה ביצירת אינדקס import_hash (לא קריטי - בדיקת הכפילות באפליקציה עדיין פעילה):", e.message);
+for (const [table, indexName] of [
+  ["transactions", "idx_transactions_import_hash"],
+  ["wedding_transactions", "idx_wedding_transactions_import_hash"],
+  ["apartment_transactions", "idx_apartment_transactions_import_hash"],
+]) {
+  try {
+    db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS ${indexName} ON ${table}(user_id, import_hash) WHERE import_hash IS NOT NULL`);
+  } catch (e) {
+    console.error(`שגיאה ביצירת אינדקס import_hash על ${table} (לא קריטי - בדיקת הכפילות באפליקציה עדיין פעילה):`, e.message);
+  }
 }
 
 // זריעת תוכניות ברירת מחדל אם עדיין לא קיימות

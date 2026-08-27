@@ -370,6 +370,29 @@
           </div>
         </div>
         <div class="card">
+          <h3>ייבוא תנועות מאקסל / CSV</h3>
+          <!-- משוב אמיתי: "גם בקטגוריה דירה וגם בחתונה אין אופציה של יבוא קבצים" - אותו מנוע ייבוא
+               בדיוק כמו בעמוד "תנועות" הרגיל (target=wedding), ר' giPreview/giCommit למטה. -->
+          <div class="hint" style="margin-bottom:10px">מעלים קובץ שהורדתם מהבנק או מחברת כרטיס האשראי (xlsx / xls / csv / pdf) - התנועות ייובאו ישירות לתקציב החתונה, לא לתנועות הרגילות.</div>
+          <div class="row">
+            <input id="wedding-imp-file" class="plain" type="file" accept=".xlsx,.xls,.csv,.pdf">
+            <select id="wedding-imp-source_type" class="plain">
+              <option value="bank">דף בנק (עו״ש)</option>
+              <option value="card">דף כרטיס אשראי</option>
+            </select>
+            <button class="btn secondary" onclick="giPreview('wedding')">תצוגה מקדימה</button>
+          </div>
+          <div id="wedding-imp-preview-area" style="display:none; margin-top:14px">
+            <div class="row" style="margin-bottom:10px"><span class="hint" id="wedding-imp-preview-summary"></span></div>
+            <div id="wedding-imp-preview-table" style="overflow-x:auto"></div>
+            <button class="btn" style="margin-top:10px" onclick="giCommit('wedding')">ייבוא השורות המסומנות</button>
+          </div>
+          <div style="margin-top:16px">
+            <h4 style="margin-bottom:8px">קבצים שיובאו</h4>
+            <div id="wedding-imp-batches-list"><div class="empty-state">עדיין לא יובא אף קובץ</div></div>
+          </div>
+        </div>
+        <div class="card">
           <h3>הוצאות לפי קטגוריה</h3>
           <div id="wed-categories"><div class="empty-state">אין עדיין הוצאות להצגה</div></div>
         </div>
@@ -406,6 +429,27 @@
             <input id="apt_amount" class="plain" type="number" placeholder="סכום בש״ח">
             <input id="apt_note" class="plain" placeholder="הערה (לא חובה)">
             <button class="btn" onclick="addApartmentTransaction()">הוספה</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>ייבוא תנועות מאקסל / CSV</h3>
+          <div class="hint" style="margin-bottom:10px">מעלים קובץ שהורדתם מהבנק או מחברת כרטיס האשראי (xlsx / xls / csv / pdf) - התנועות ייובאו ישירות לתקציב הדירה, לא לתנועות הרגילות.</div>
+          <div class="row">
+            <input id="apartment-imp-file" class="plain" type="file" accept=".xlsx,.xls,.csv,.pdf">
+            <select id="apartment-imp-source_type" class="plain">
+              <option value="bank">דף בנק (עו״ש)</option>
+              <option value="card">דף כרטיס אשראי</option>
+            </select>
+            <button class="btn secondary" onclick="giPreview('apartment')">תצוגה מקדימה</button>
+          </div>
+          <div id="apartment-imp-preview-area" style="display:none; margin-top:14px">
+            <div class="row" style="margin-bottom:10px"><span class="hint" id="apartment-imp-preview-summary"></span></div>
+            <div id="apartment-imp-preview-table" style="overflow-x:auto"></div>
+            <button class="btn" style="margin-top:10px" onclick="giCommit('apartment')">ייבוא השורות המסומנות</button>
+          </div>
+          <div style="margin-top:16px">
+            <h4 style="margin-bottom:8px">קבצים שיובאו</h4>
+            <div id="apartment-imp-batches-list"><div class="empty-state">עדיין לא יובא אף קובץ</div></div>
           </div>
         </div>
         <div class="card">
@@ -1027,6 +1071,7 @@ async function addWeddingTransaction() {
 async function loadWedding() {
   if (!weddingCategories.expense.length) await loadWeddingCategories();
   if (document.getElementById('wed_category') && !document.getElementById('wed_category').options.length) onWeddingTypeChange();
+  giLoadBatches('wedding');
 
   const r = await api('GET', '/api/wedding/transactions');
   if (!r.ok) return;
@@ -1179,6 +1224,7 @@ async function addApartmentTransaction() {
 async function loadApartment() {
   if (!apartmentCategories.expense.length) await loadApartmentCategories();
   if (document.getElementById('apt_category') && !document.getElementById('apt_category').options.length) onApartmentTypeChange();
+  giLoadBatches('apartment');
 
   const r = await api('GET', '/api/apartment/transactions');
   if (!r.ok) return;
@@ -1266,6 +1312,104 @@ async function deleteApartmentTransaction(id, label, amount) {
   if (!confirm(`למחוק את התנועה "${label}" (₪${amount})? לא ניתן לשחזר אחרי המחיקה.`)) return;
   const r = await api('DELETE', `/api/apartment/transactions/${id}`);
   if (r.ok) { toast('התנועה נמחקה', 'success'); loadApartment(); }
+}
+
+// ---------- ייבוא קבצים גנרי לחתונה/דירה (target: 'wedding' | 'apartment') ----------
+// משוב אמיתי: "גם בקטגוריה דירה וגם בחתונה אין אופציה של יבוא קבצים". מנוע משותף אחד (לא כפילות
+// שלישית של קוד הייבוא) - התנועות הרגילות ממשיכות להשתמש בקוד הייעודי שלהן למעלה (previewImport/
+// commitImport/loadImportBatches וכו') בלי שינוי, כדי לא לסכן פיצ'ר קיים ובדוק. אלמנטים לפי מוסכמת
+// שם `${target}-imp-<suffix>` (ר' ה-HTML של view-wedding/view-apartment).
+const genericImportState = {}; // target -> { rows, filename }
+function giEl(target, suffix) { return document.getElementById(`${target}-imp-${suffix}`); }
+
+async function giPreview(target) {
+  const fileInput = giEl(target, 'file');
+  if (!fileInput.files.length) { toast('יש לבחור קובץ קודם', 'error'); return; }
+  const file = fileInput.files[0];
+  const sourceType = giEl(target, 'source_type').value;
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const r = await api('POST', '/api/transactions/import/parse', { data_base64: dataUrl, filename: file.name, source_type: sourceType, target });
+  if (!r.ok) return;
+  genericImportState[target] = { filename: file.name, rows: r.data.transactions.map(t => ({ ...t, included: !t.alreadyImported })) };
+  giRenderPreview(target, r.data.skippedRowsCount);
+}
+
+function giRenderPreview(target, skippedRowsCount) {
+  const state = genericImportState[target];
+  const area = giEl(target, 'preview-area');
+  const summary = giEl(target, 'preview-summary');
+  const tableEl = giEl(target, 'preview-table');
+  area.style.display = 'block';
+  const alreadyCount = state.rows.filter(t => t.alreadyImported).length;
+  summary.textContent = `זוהו ${state.rows.length} תנועות` +
+    (alreadyCount ? ` (${alreadyCount} מהן כבר יובאו בעבר ולא מסומנות)` : '') +
+    (skippedRowsCount ? ` · ${skippedRowsCount} שורות בקובץ דולגו (לא זוהו כתנועה תקינה)` : '');
+
+  if (!state.rows.length) { tableEl.innerHTML = '<div class="empty-state">לא נמצאו תנועות בקובץ</div>'; return; }
+  tableEl.innerHTML = `
+    <table class="report-table">
+      <thead><tr><th></th><th>תאריך</th><th>תיאור</th><th>סכום</th><th>סוג</th><th>קטגוריה</th></tr></thead>
+      <tbody>
+        ${state.rows.map((t, i) => `
+          <tr style="${t.alreadyImported ? 'opacity:.55' : ''}">
+            <td><input type="checkbox" ${t.included ? 'checked' : ''} onchange="genericImportState['${target}'].rows[${i}].included = this.checked"></td>
+            <td>${t.date}</td>
+            <td>${(t.description || '').replace(/</g, '&lt;')}</td>
+            <td class="num ${t.type}">₪${t.amount}</td>
+            <td>
+              <select class="plain" onchange="genericImportState['${target}'].rows[${i}].type = this.value">
+                <option value="expense" ${t.type === 'expense' ? 'selected' : ''}>הוצאה</option>
+                <option value="income" ${t.type === 'income' ? 'selected' : ''}>הכנסה</option>
+              </select>
+            </td>
+            <td><input class="plain" value="${(t.category || '').replace(/"/g, '&quot;')}" onchange="genericImportState['${target}'].rows[${i}].category = this.value"></td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+    ${alreadyCount ? '<div class="hint" style="margin-top:8px">שורות מוצללות כבר יובאו בעבר - אפשר עדיין לסמן ולייבא אותן שוב במפורש אם צריך.</div>' : ''}`;
+}
+
+async function giCommit(target) {
+  const state = genericImportState[target];
+  const selected = (state && state.rows || []).filter(t => t.included);
+  if (!selected.length) { toast('לא סומנה אף שורה לייבוא', 'error'); return; }
+  const r = await api('POST', '/api/transactions/import/commit', { transactions: selected, filename: state.filename, target });
+  if (!r.ok) return;
+  const { imported, skippedDuplicates, skippedInvalid } = r.data;
+  toast(`יובאו ${imported} תנועות` + (skippedDuplicates ? ` · ${skippedDuplicates} דולגו ככבר-קיימות` : '') + (skippedInvalid ? ` · ${skippedInvalid} דולגו (לא תקינות)` : ''), 'success');
+  giEl(target, 'preview-area').style.display = 'none';
+  giEl(target, 'file').value = '';
+  genericImportState[target] = { rows: [], filename: '' };
+  if (target === 'wedding') loadWedding(); else if (target === 'apartment') loadApartment();
+}
+
+async function giLoadBatches(target) {
+  const el = giEl(target, 'batches-list');
+  if (!el) return;
+  const r = await api('GET', `/api/transactions/import/batches?target=${target}`);
+  if (!r.ok) return;
+  const batches = r.data.batches || [];
+  el.innerHTML = batches.length ? batches.map(b => `
+    <div class="list-item">
+      <div>
+        <div class="li-main">${(b.filename || 'קובץ ללא שם').replace(/</g, '&lt;')}</div>
+        <div class="li-sub">${b.count} תנועות · ${b.minDate === b.maxDate ? b.minDate : `${b.minDate} עד ${b.maxDate}`} · הכנסות ₪${b.income} · הוצאות ₪${b.expense}</div>
+      </div>
+      <button class="btn secondary sm" onclick="giDeleteBatch('${target}', '${b.batchId}', '${(b.filename || 'קובץ ללא שם').replace(/'/g, "\\'")}', ${b.count})">מחיקת הקובץ</button>
+    </div>`).join('') : '<div class="empty-state">עדיין לא יובא אף קובץ</div>';
+}
+
+async function giDeleteBatch(target, batchId, filename, count) {
+  if (!confirm(`למחוק את כל ${count} התנועות שיובאו מהקובץ "${filename}"? לא ניתן לשחזר אחרי המחיקה.`)) return;
+  const r = await api('DELETE', `/api/transactions/import/batches/${batchId}?target=${target}`);
+  if (!r.ok) return;
+  toast(`נמחקו ${r.data.deleted} תנועות מהקובץ`, 'success');
+  if (target === 'wedding') loadWedding(); else if (target === 'apartment') loadApartment();
 }
 
 // דוח חודשי מסודר: הכנסות מול הוצאות (בנוסף לרשימת התנועות הגולמית) - מבוסס על /api/transactions/trend,

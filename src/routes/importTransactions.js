@@ -7,6 +7,9 @@
 //   (2) POST /api/transactions/import/commit  - שומר תנועות שהמשתמש אישר/ערך בתצוגה המקדימה. מדלג
 //       אוטומטית על תנועות שכבר יובאו בעבר (ר' import_hash), כדי שאפשר יהיה להעלות את אותו קובץ
 //       פעמיים (למשל דף שמכיל גם כמה שורות שכבר יובאו וגם שורות חדשות) בלי ליצור כפילויות.
+// כל שלושת הנתיבים למעלה (וגם /import/batches למטה) מקבלים `target` אופציונלי - "wedding"/"apartment"
+// מייבאים לתקציב הנפרד המתאים במקום לתנועות הרגילות (ר' IMPORT_TARGETS; משוב אמיתי: "גם בקטגוריה
+// דירה וגם בחתונה אין אופציה של יבוא קבצים"). אותו מנוע פענוח קבצים בדיוק - רק היעד בבסיס הנתונים שונה.
 "use strict";
 const crypto = require("crypto");
 const db = require("../db");
@@ -20,6 +23,22 @@ const { rowsToTransactions } = require("../lib/importMapping");
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_ROWS_PER_IMPORT = 2000; // רשת ביטחון - קובץ תקין של דף בנק/כרטיס לא אמור לחרוג מזה בפועל
+
+// משוב אמיתי: "גם בקטגוריה דירה וגם בחתונה אין אופציה של יבוא קבצים" - אותו מנוע ייבוא בדיוק
+// (פענוח קובץ, זיהוי עמודות, דדופ לפי import_hash, מחיקת קובץ שלם) עובד גם על "חתונה"/"דירה", לא
+// רק על התנועות הרגילות - נבחר לפי `target` שנשלח מהאתר (ברירת מחדל "regular" לתאימות לאחור).
+// "hasSource" - רק לטבלת transactions הרגילה יש עמודת source (phone/web/import); wedding/apartment
+// אין להן בכלל את העמודה הזו (ר' db.js).
+const IMPORT_TARGETS = {
+  regular: { table: "transactions", hasSource: true },
+  wedding: { table: "wedding_transactions", hasSource: false },
+  apartment: { table: "apartment_transactions", hasSource: false },
+};
+// הערה חשובה לבטיחות: target.table אף פעם לא מגיע ישירות מקלט המשתמש לתוך SQL - תמיד עובר דרך
+// המפה הקבועה הזו קודם (ברירת מחדל "regular" לכל ערך לא-מוכר), כך שאין כאן שום סיכון הזרקת SQL.
+function resolveImportTarget(target) {
+  return IMPORT_TARGETS[target] || IMPORT_TARGETS.regular;
+}
 
 function decodeBase64File(data_base64) {
   const base64Only = String(data_base64 || "").includes(",") ? String(data_base64).split(",").pop() : data_base64;
@@ -40,9 +59,10 @@ function isCsvFilename(name) {
 function register(router) {
   // שלב 1: פירוק הקובץ + זיהוי עמודות + החזרת תצוגה מקדימה. לא נוגע במסד הנתונים בכלל.
   router.post("/api/transactions/import/parse", requireAuth(async (ctx) => {
-    const { data_base64, filename, source_type } = ctx.body;
+    const { data_base64, filename, source_type, target } = ctx.body;
     if (!data_base64) return json(ctx.res, 400, { error: "לא התקבל תוכן קובץ (data_base64)" });
     const sourceType = source_type === "card" ? "card" : "bank";
+    const importTarget = resolveImportTarget(target);
 
     let buffer;
     try {
@@ -92,7 +112,7 @@ function register(router) {
     // מסמנים לכל תנועה מיד גם אם היא כבר יובאה בעבר (import_hash) - כך שהתצוגה המקדימה יכולה להראות
     // למשתמש "כבר יובא" ולבטל מראש את הסימון שלה, בלי לחכות לניסיון שמירה כפול בשלב commit.
     const existingHashes = new Set(
-      db.prepare("SELECT import_hash FROM transactions WHERE user_id = ? AND import_hash IS NOT NULL").all(ctx.user.userId).map(r => r.import_hash)
+      db.prepare(`SELECT import_hash FROM ${importTarget.table} WHERE user_id = ? AND import_hash IS NOT NULL`).all(ctx.user.userId).map(r => r.import_hash)
     );
     const transactions = result.transactions.map(t => ({ ...t, alreadyImported: existingHashes.has(importHash(ctx.user.userId, t)) }));
 
@@ -115,10 +135,15 @@ function register(router) {
     }
     const filename = ctx.body.filename ? String(ctx.body.filename).trim().slice(0, 255) : null;
     const batchId = crypto.randomUUID();
+    const importTarget = resolveImportTarget(ctx.body.target);
 
-    const insert = db.prepare(
-      "INSERT INTO transactions (user_id, type, amount, category, note, source, import_hash, import_batch_id, import_filename, occurred_at) VALUES (?, ?, ?, ?, ?, 'import', ?, ?, ?, ?)"
-    );
+    const insert = importTarget.hasSource
+      ? db.prepare(
+          "INSERT INTO transactions (user_id, type, amount, category, note, source, import_hash, import_batch_id, import_filename, occurred_at) VALUES (?, ?, ?, ?, ?, 'import', ?, ?, ?, ?)"
+        )
+      : db.prepare(
+          `INSERT INTO ${importTarget.table} (user_id, type, amount, category, note, import_hash, import_batch_id, import_filename, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        );
     let imported = 0;
     let skippedDuplicates = 0;
     let skippedInvalid = 0;
@@ -134,15 +159,18 @@ function register(router) {
       const t = { date, amount: Math.round(amount * 100) / 100, type, description };
       const hash = importHash(ctx.user.userId, t);
 
-      const exists = db.prepare("SELECT 1 FROM transactions WHERE user_id = ? AND import_hash = ?").get(ctx.user.userId, hash);
+      const exists = db.prepare(`SELECT 1 FROM ${importTarget.table} WHERE user_id = ? AND import_hash = ?`).get(ctx.user.userId, hash);
       if (exists) { skippedDuplicates++; continue; }
 
       try {
+        // שני מקרי ה-target משתמשים באותה רשימת פרמטרים מכורכים בדיוק (9) - ההבדל היחיד בין שתי
+        // ה-INSERT המוכנות למעלה הוא הטקסט הקבוע 'import' בעמודת source (רק בטבלת transactions
+        // הרגילה, שהיא היחידה עם עמודה כזו) - לא פרמטר בפני עצמו, אז אותה קריאת run() מתאימה לשתיהן.
         insert.run(ctx.user.userId, type, t.amount, category, description || null, hash, batchId, filename, `${date} 12:00:00`);
         imported++;
       } catch (e) {
-        // התנגשות באינדקס הייחודי (idx_transactions_import_hash, ר' db.js) - מרוץ תזמון נדיר בין
-        // ה-SELECT לבדיקת קיום למעלה לבין ה-INSERT בפועל. מתייחסים לזה כמו כפילות רגילה, לא כשגיאה.
+        // התנגשות באינדקס הייחודי (idx_..._import_hash, ר' db.js) - מרוץ תזמון נדיר בין ה-SELECT
+        // לבדיקת קיום למעלה לבין ה-INSERT בפועל. מתייחסים לזה כמו כפילות רגילה, לא כשגיאה.
         if (/UNIQUE constraint failed/i.test(e.message)) skippedDuplicates++;
         else throw e;
       }
@@ -153,14 +181,17 @@ function register(router) {
 
   // רשימת קבצי ייבוא (אצוות) שנשמרו בפועל - קובץ אחד שהועלה = שורה אחת כאן, גם אם הוא הכיל עשרות
   // תנועות. מוצג ב"תנועות" כדי לאפשר מחיקה של קובץ שלם בלחיצה אחת (ר' /import/batches/:id DELETE למטה).
+  // ?target=wedding|apartment (ברירת מחדל "regular") - אותה רשימת "קבצים שיובאו" בדיוק, על כל אחת
+  // משלוש הטבלאות (ר' משוב אמיתי למעלה: "גם בקטגוריה דירה וגם בחתונה אין אופציה של יבוא קבצים").
   router.get("/api/transactions/import/batches", requireAuth(async (ctx) => {
+    const importTarget = resolveImportTarget(ctx.query.target);
     const rows = db.prepare(
       `SELECT import_batch_id AS batchId, import_filename AS filename, COUNT(*) AS count,
               MIN(occurred_at) AS minDate, MAX(occurred_at) AS maxDate,
               SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) AS income,
               SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) AS expense,
               MAX(id) AS lastId
-       FROM transactions WHERE user_id = ? AND import_batch_id IS NOT NULL
+       FROM ${importTarget.table} WHERE user_id = ? AND import_batch_id IS NOT NULL
        GROUP BY import_batch_id ORDER BY lastId DESC`
     ).all(ctx.user.userId);
     return json(ctx.res, 200, { batches: rows });
@@ -170,7 +201,8 @@ function register(router) {
   // "אם הבאתי דפי בנק ואני רוצה למחוק את הקבצים שהועלו שיהיה אופציה לבחור למחוק מהמערכת" - עד כה
   // אפשר היה למחוק רק תנועה-תנועה (DELETE /api/transactions/:id), מה שלא מעשי לקובץ עם עשרות שורות.
   router.delete("/api/transactions/import/batches/:batchId", requireAuth(async (ctx) => {
-    const info = db.prepare("DELETE FROM transactions WHERE user_id = ? AND import_batch_id = ?").run(ctx.user.userId, ctx.params.batchId);
+    const importTarget = resolveImportTarget(ctx.query.target);
+    const info = db.prepare(`DELETE FROM ${importTarget.table} WHERE user_id = ? AND import_batch_id = ?`).run(ctx.user.userId, ctx.params.batchId);
     if (!info.changes) return json(ctx.res, 404, { error: "קובץ ייבוא לא נמצא" });
     return json(ctx.res, 200, { deleted: info.changes });
   }));

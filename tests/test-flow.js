@@ -841,6 +841,64 @@ async function run() {
     const apartmentDelete = await api("DELETE", `/api/apartment/transactions/${apartmentTama.data.transaction.id}`, null, token);
     assert(apartmentDelete.status === 200, "מחיקת תנועת דירה (הבעלים האמיתי) הצליחה");
 
+    console.log("\n📥 ייבוא קבצים לחתונה ולדירה - משוב אמיתי: 'גם בקטגוריה דירה וגם בחתונה אין אופציה של יבוא קבצים'");
+    // אותו מנוע ייבוא בדיוק (src/routes/importTransactions.js) עם target=wedding|apartment - בודקים
+    // ששני היעדים עובדים עצמאית, לא מתערבבים זה בזה ולא בתנועות הרגילות, ושהדדופ/מחיקת-קובץ-שלם
+    // עובדים בנפרד על כל טבלה (ר' IMPORT_TARGETS).
+    const weddingImportCsv = "תאריך,תיאור,סכום\n01/09/2026,תרומה מהמשפחה,1000\n02/09/2026,מקדמה לאולם,-5000\n";
+    const weddingImportPreview = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: Buffer.from(weddingImportCsv, "utf8").toString("base64"), filename: "wedding-bank.csv", source_type: "bank", target: "wedding" },
+      token
+    );
+    assert(weddingImportPreview.status === 200 && weddingImportPreview.data.transactions.length === 2, `תצוגה מקדימה של ייבוא לחתונה הצליחה (${JSON.stringify(weddingImportPreview.data)})`);
+    const weddingImportCommit = await api(
+      "POST", "/api/transactions/import/commit",
+      { transactions: weddingImportPreview.data.transactions, filename: "wedding-bank.csv", target: "wedding" },
+      token
+    );
+    assert(weddingImportCommit.status === 201 && weddingImportCommit.data.imported === 2, `שמירת הייבוא לחתונה הצליחה (${JSON.stringify(weddingImportCommit.data)})`);
+    const weddingAfterImport = await api("GET", "/api/wedding/transactions", null, token);
+    assert(
+      weddingAfterImport.data.transactions.some(t => t.note === "תרומה מהמשפחה" && t.type === "income") &&
+      weddingAfterImport.data.transactions.some(t => t.note === "מקדמה לאולם" && t.type === "expense"),
+      "התנועות שיובאו לחתונה נשמרו בטבלת wedding_transactions עם התיאור המקורי"
+    );
+    const regularUnaffectedByWeddingImport = await api("GET", "/api/transactions", null, token);
+    assert(
+      !regularUnaffectedByWeddingImport.data.transactions.some(t => t.note === "תרומה מהמשפחה"),
+      "ייבוא לחתונה לא דלף לתנועות הרגילות - יעד נפרד באמת"
+    );
+
+    const apartmentImportCsv = "תאריך,תיאור,סכום\n03/09/2026,מקדמה לדירה,-30000\n";
+    const apartmentImportPreview = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: Buffer.from(apartmentImportCsv, "utf8").toString("base64"), filename: "apartment-bank.csv", source_type: "bank", target: "apartment" },
+      token
+    );
+    const apartmentImportCommit = await api(
+      "POST", "/api/transactions/import/commit",
+      { transactions: apartmentImportPreview.data.transactions, filename: "apartment-bank.csv", target: "apartment" },
+      token
+    );
+    assert(apartmentImportCommit.status === 201 && apartmentImportCommit.data.imported === 1, `שמירת הייבוא לדירה הצליחה (${JSON.stringify(apartmentImportCommit.data)})`);
+
+    const weddingBatches = await api("GET", "/api/transactions/import/batches?target=wedding", null, token);
+    assert(
+      weddingBatches.data.batches.length === 1 && weddingBatches.data.batches[0].filename === "wedding-bank.csv" && weddingBatches.data.batches[0].count === 2,
+      `רשימת קבצי ייבוא של החתונה מציגה רק את הקובץ שיובא לחתונה, לא לדירה (${JSON.stringify(weddingBatches.data)})`
+    );
+    const apartmentBatches = await api("GET", "/api/transactions/import/batches?target=apartment", null, token);
+    assert(
+      apartmentBatches.data.batches.length === 1 && apartmentBatches.data.batches[0].filename === "apartment-bank.csv",
+      `רשימת קבצי ייבוא של הדירה מציגה רק את הקובץ שיובא לדירה, לא לחתונה (${JSON.stringify(apartmentBatches.data)})`
+    );
+
+    const weddingBatchDelete = await api("DELETE", `/api/transactions/import/batches/${weddingBatches.data.batches[0].batchId}?target=wedding`, null, token);
+    assert(weddingBatchDelete.status === 200 && weddingBatchDelete.data.deleted === 2, `מחיקת קובץ הייבוא של החתונה מחקה בדיוק את שתי התנועות שלו (${JSON.stringify(weddingBatchDelete.data)})`);
+    const apartmentBatchesAfterWeddingDelete = await api("GET", "/api/transactions/import/batches?target=apartment", null, token);
+    assert(apartmentBatchesAfterWeddingDelete.data.batches.length === 1, "מחיקת קובץ הייבוא של החתונה לא נגעה בקובץ הייבוא של הדירה");
+
     console.log("\n🎓 חונכות ותלמידים");
     const student = await api("POST", "/api/students", { name: "תלמיד בדיקה" }, token);
     assert(student.status === 201, "הוספת תלמיד הצליחה");
