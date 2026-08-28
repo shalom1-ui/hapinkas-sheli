@@ -80,6 +80,7 @@ db.exec(`
     -- רגילות (טלפון/אתר) שלא הגיעו מייבוא.
     import_batch_id TEXT,
     import_filename TEXT,
+    loan_id INTEGER REFERENCES loans(id), -- קישור אופציונלי להלוואה (ר' טבלת loans למטה) - לתשלום שנרשם בפועל
     occurred_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -100,6 +101,7 @@ db.exec(`
     import_hash TEXT,
     import_batch_id TEXT,
     import_filename TEXT,
+    loan_id INTEGER REFERENCES loans(id),
     occurred_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -115,7 +117,24 @@ db.exec(`
     import_hash TEXT,
     import_batch_id TEXT,
     import_filename TEXT,
+    loan_id INTEGER REFERENCES loans(id),
     occurred_at TEXT DEFAULT (datetime('now'))
+  );
+
+  -- מעקב הלוואות בתשלומים - משוב אמיתי: "כמו כן שיהיה חישוב אוטומטי אם יש הלוואות בתשלומים כל
+  -- חודש שיתעדכן כמה תשלומים נשאר". לשאלת הבהרה (רשומה ייעודית מול קישור לתנועות "הלוואות" קיימות)
+  -- המשתמש ענה "גם וגם" - ר' src/routes/loans.js: מחשב גם הערכה אוטומטית לפי חודשים שחלפו מתאריך
+  -- ההתחלה, וגם - אם יש תנועות "הלוואות" מקושרות בפועל (ר' loan_id ב-transactions/wedding/apartment
+  -- למטה) - מעדיף את המספר האמיתי של תשלומים שנרשמו על פני ההערכה.
+  CREATE TABLE IF NOT EXISTS loans (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    name TEXT NOT NULL,                -- שם ההלוואה, למשל "הלוואת רכב" / "משכנתא"
+    total_installments INTEGER NOT NULL,
+    monthly_amount REAL,               -- סכום לתשלום חודשי (אופציונלי - לתצוגה/הערכה בלבד)
+    start_date TEXT NOT NULL,          -- תאריך התשלום הראשון (YYYY-MM-DD) - ממנו נספרים החודשים שחלפו
+    note TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
   );
 
   CREATE TABLE IF NOT EXISTS students (
@@ -287,6 +306,10 @@ for (const alterSql of [
   "ALTER TABLE apartment_transactions ADD COLUMN import_hash TEXT",
   "ALTER TABLE apartment_transactions ADD COLUMN import_batch_id TEXT",
   "ALTER TABLE apartment_transactions ADD COLUMN import_filename TEXT",
+  // מעקב הלוואות (ר' טבלת loans למעלה) - קישור אופציונלי לתשלום שנרשם בפועל, בכל אחד משלושת אזורי התנועות.
+  "ALTER TABLE transactions ADD COLUMN loan_id INTEGER REFERENCES loans(id)",
+  "ALTER TABLE wedding_transactions ADD COLUMN loan_id INTEGER REFERENCES loans(id)",
+  "ALTER TABLE apartment_transactions ADD COLUMN loan_id INTEGER REFERENCES loans(id)",
 ]) {
   try {
     db.exec(alterSql);

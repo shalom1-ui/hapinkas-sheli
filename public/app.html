@@ -239,6 +239,7 @@
       <button class="nav-item" data-view="transactions" onclick="showView('transactions')"><span class="ic">💳</span> תנועות</button>
       <button class="nav-item" data-view="wedding" onclick="showView('wedding')"><span class="ic">💍</span> חתונה</button>
       <button class="nav-item" data-view="apartment" onclick="showView('apartment')"><span class="ic">🏠</span> דירה</button>
+      <button class="nav-item" data-view="loans" onclick="showView('loans')"><span class="ic">💰</span> הלוואות</button>
       <button class="nav-item" data-view="mentoring" onclick="showView('mentoring')"><span class="ic">🎓</span> חונכות</button>
       <button class="nav-item" data-view="therapy" onclick="showView('therapy')"><span class="ic">🩺</span> מעגל מטפלים</button>
       <button class="nav-item" data-view="parents" onclick="showView('parents')"><span class="ic">👪</span> אזור הורים</button>
@@ -294,6 +295,7 @@
               <option value="חינוך">
               <option value="הלוואות">
             </datalist>
+            <select id="t_loan_link" class="plain"><option value="">בלי לקשר להלוואה מסוימת</option></select>
             <button class="btn" onclick="addTransaction()">הוספה</button>
           </div>
           <div class="hint">טיפ: לרישום מעשר שנתתם, בחרו סוג "הוצאה" וקטגוריה "מעשרות" - זה יתעדכן אוטומטית בסקירה הכללית.</div>
@@ -366,6 +368,7 @@
             <datalist id="wedding-category-suggestions"></datalist>
             <input id="wed_amount" class="plain" type="number" placeholder="סכום בש״ח">
             <input id="wed_note" class="plain" placeholder="הערה (לא חובה)">
+            <select id="wed_loan_link" class="plain"><option value="">בלי לקשר להלוואה מסוימת</option></select>
             <button class="btn" onclick="addWeddingTransaction()">הוספה</button>
           </div>
         </div>
@@ -428,6 +431,7 @@
             <datalist id="apartment-category-suggestions"></datalist>
             <input id="apt_amount" class="plain" type="number" placeholder="סכום בש״ח">
             <input id="apt_note" class="plain" placeholder="הערה (לא חובה)">
+            <select id="apt_loan_link" class="plain"><option value="">בלי לקשר להלוואה מסוימת</option></select>
             <button class="btn" onclick="addApartmentTransaction()">הוספה</button>
           </div>
         </div>
@@ -463,6 +467,28 @@
             <button class="btn secondary sm" onclick="bulkDeleteTransactions(selectedApartmentIds, '/api/apartment/transactions', loadApartment)">מחיקת המסומנות</button>
           </div>
           <div id="apt-list"><div class="empty-state">אין עדיין תנועות</div></div>
+        </div>
+      </div>
+
+      <!-- ---------- LOANS ---------- -->
+      <!-- מעקב הלוואות בתשלומים - משוב אמיתי: "כל חודש כשאני מגיע לפנקס... שיהיה חישוב אוטומטי אם
+           יש הלוואות בתשלומים כל חודש שיתעדכן כמה תשלומים נשאר". ר' src/routes/loans.js. -->
+      <div class="view" id="view-loans">
+        <div class="view-header"><h1>הלוואות</h1><p>מעקב תשלומים - כמה שולם עד כה וכמה נותר, מתעדכן אוטומטית כל חודש</p></div>
+        <div class="card">
+          <h3>הוספת הלוואה</h3>
+          <div class="row">
+            <input id="loan_name" class="plain" placeholder="שם ההלוואה, למשל הלוואת רכב">
+            <input id="loan_total" class="plain" type="number" placeholder="מס' תשלומים כולל">
+            <input id="loan_monthly" class="plain" type="number" placeholder="סכום לתשלום חודשי (לא חובה)">
+            <input id="loan_start" class="plain" type="date">
+            <button class="btn" onclick="addLoan()">הוספה</button>
+          </div>
+          <div class="hint" style="margin-top:8px">"בוצעו" מוערך אוטומטית לפי כמה חודשים חלפו מתאריך התשלום הראשון - אבל אם מקשרים תנועת "הלוואות" בפועל (בתנועות/חתונה/דירה, ר' שדה "לקשר להלוואה") המספר האמיתי גובר על ההערכה.</div>
+        </div>
+        <div class="card">
+          <h3>ההלוואות שלי</h3>
+          <div id="loans-list"><div class="empty-state">אין עדיין הלוואות רשומות</div></div>
         </div>
       </div>
 
@@ -824,10 +850,11 @@ function showView(name) {
   if (name === 'settings') loadProfile();
   if (name === 'wedding') loadWedding();
   if (name === 'apartment') loadApartment();
+  if (name === 'loans') loadLoans();
 }
 
 async function refreshAll() {
-  await Promise.all([loadTransactions(), loadStudents(), loadPlans()]);
+  await Promise.all([loadTransactions(), loadStudents(), loadPlans(), loadLoans()]);
   loadLessonDictionaries();
   autofillLessonFormFromProfile();
 }
@@ -849,8 +876,16 @@ async function addTransaction() {
     if (!custom || !custom.trim()) { toast('לא הוזנה קטגוריה - התנועה לא נוספה', 'error'); return; }
     category = custom.trim();
   }
-  const r = await api('POST', '/api/transactions', { type, amount, category: category || undefined });
-  if (r.ok) { toast('התנועה נוספה בהצלחה', 'success'); document.getElementById('t_amount').value = ''; document.getElementById('t_category').value = ''; loadTransactions(); }
+  const loanLinkEl = document.getElementById('t_loan_link');
+  const loanId = loanLinkEl && loanLinkEl.value ? Number(loanLinkEl.value) : undefined;
+  const r = await api('POST', '/api/transactions', { type, amount, category: category || undefined, loan_id: loanId });
+  if (r.ok) {
+    toast('התנועה נוספה בהצלחה', 'success');
+    document.getElementById('t_amount').value = '';
+    document.getElementById('t_category').value = '';
+    if (loanLinkEl) loanLinkEl.value = '';
+    loadTransactions();
+  }
 }
 
 // תוקן (משוב אמיתי: "אני לא רואה שיש אפשרות למחוק נתונים") - נתיב DELETE /api/transactions/:id
@@ -1057,13 +1092,16 @@ async function addWeddingTransaction() {
   const note = document.getElementById('wed_note').value.trim();
   if (!amount) { toast('יש להזין סכום', 'error'); return; }
   if (catSelect === '__other__' && !category) { toast('יש להזין פירוט קטגוריה', 'error'); return; }
-  const r = await api('POST', '/api/wedding/transactions', { type, amount, category: category || undefined, note: note || undefined });
+  const loanLinkEl = document.getElementById('wed_loan_link');
+  const loanId = loanLinkEl && loanLinkEl.value ? Number(loanLinkEl.value) : undefined;
+  const r = await api('POST', '/api/wedding/transactions', { type, amount, category: category || undefined, note: note || undefined, loan_id: loanId });
   if (r.ok) {
     toast('התנועה נוספה בהצלחה', 'success');
     document.getElementById('wed_amount').value = '';
     document.getElementById('wed_note').value = '';
     document.getElementById('wed_category_other').value = '';
     document.getElementById('wed_category_other').style.display = 'none';
+    if (loanLinkEl) loanLinkEl.value = '';
     loadWedding();
   }
 }
@@ -1210,13 +1248,16 @@ async function addApartmentTransaction() {
   const note = document.getElementById('apt_note').value.trim();
   if (!amount) { toast('יש להזין סכום', 'error'); return; }
   if (catSelect === '__other__' && !category) { toast('יש להזין פירוט קטגוריה', 'error'); return; }
-  const r = await api('POST', '/api/apartment/transactions', { type, amount, category: category || undefined, note: note || undefined });
+  const loanLinkEl = document.getElementById('apt_loan_link');
+  const loanId = loanLinkEl && loanLinkEl.value ? Number(loanLinkEl.value) : undefined;
+  const r = await api('POST', '/api/apartment/transactions', { type, amount, category: category || undefined, note: note || undefined, loan_id: loanId });
   if (r.ok) {
     toast('התנועה נוספה בהצלחה', 'success');
     document.getElementById('apt_amount').value = '';
     document.getElementById('apt_note').value = '';
     document.getElementById('apt_category_other').value = '';
     document.getElementById('apt_category_other').style.display = 'none';
+    if (loanLinkEl) loanLinkEl.value = '';
     loadApartment();
   }
 }
@@ -1410,6 +1451,107 @@ async function giDeleteBatch(target, batchId, filename, count) {
   if (!r.ok) return;
   toast(`נמחקו ${r.data.deleted} תנועות מהקובץ`, 'success');
   if (target === 'wedding') loadWedding(); else if (target === 'apartment') loadApartment();
+}
+
+// ---------- הלוואות (מעקב תשלומים) ----------
+// משוב אמיתי: "כל חודש כשאני מגיע לפנקס... שיהיה חישוב אוטומטי אם יש הלוואות בתשלומים כל חודש
+// שיתעדכן כמה תשלומים נשאר". ר' src/routes/loans.js לחישוב (הערכה אוטומטית לפי חודשים, גובר ע"י
+// קישור תנועות בפועל אם יש). loansCache משמש גם למלא את בורר "לקשר להלוואה" בטפסי ההוספה (ר' למטה).
+let loansCache = [];
+let loanEditingId = null;
+
+async function loadLoans() {
+  const r = await api('GET', '/api/loans');
+  if (!r.ok) return;
+  loansCache = r.data.loans;
+  renderLoansList();
+  refreshLoanLinkSelects();
+}
+
+async function addLoan() {
+  const name = document.getElementById('loan_name').value.trim();
+  const total = Number(document.getElementById('loan_total').value);
+  const monthly = document.getElementById('loan_monthly').value ? Number(document.getElementById('loan_monthly').value) : undefined;
+  const start = document.getElementById('loan_start').value;
+  if (!name) { toast('יש להזין שם להלוואה', 'error'); return; }
+  if (!total || total <= 0) { toast('יש להזין מספר תשלומים תקין', 'error'); return; }
+  if (!start) { toast('יש להזין תאריך תשלום ראשון', 'error'); return; }
+  const r = await api('POST', '/api/loans', { name, total_installments: total, monthly_amount: monthly, start_date: start });
+  if (r.ok) {
+    toast('ההלוואה נוספה בהצלחה', 'success');
+    document.getElementById('loan_name').value = '';
+    document.getElementById('loan_total').value = '';
+    document.getElementById('loan_monthly').value = '';
+    document.getElementById('loan_start').value = '';
+    loadLoans();
+  }
+}
+
+function renderLoansList() {
+  const el = document.getElementById('loans-list');
+  if (!loansCache.length) { el.innerHTML = '<div class="empty-state">אין עדיין הלוואות רשומות</div>'; return; }
+  el.innerHTML = loansCache.map(l => {
+    if (l.id === loanEditingId) {
+      return `
+        <div class="list-item" style="flex-wrap:wrap; gap:8px">
+          <input id="loan-edit-name-${l.id}" class="plain" value="${l.name.replace(/"/g, '&quot;')}" placeholder="שם">
+          <input id="loan-edit-total-${l.id}" class="plain" type="number" value="${l.total_installments}" style="max-width:110px" placeholder="מס' תשלומים">
+          <input id="loan-edit-monthly-${l.id}" class="plain" type="number" value="${l.monthly_amount ?? ''}" style="max-width:130px" placeholder="תשלום חודשי">
+          <input id="loan-edit-start-${l.id}" class="plain" type="date" value="${l.start_date}">
+          <button class="btn secondary sm" onclick="saveLoanEdit(${l.id})">שמירה</button>
+          <button class="btn secondary sm" onclick="cancelLoanEdit()">ביטול</button>
+        </div>`;
+    }
+    const pct = l.total_installments ? Math.min(100, Math.round(l.paidInstallments / l.total_installments * 100)) : 0;
+    return `
+    <div class="list-item" style="flex-wrap:wrap">
+      <div style="flex:1; min-width:220px">
+        <div class="li-main">${l.name.replace(/</g, '&lt;')}</div>
+        <div class="li-sub">
+          שולמו ${l.paidInstallments} מתוך ${l.total_installments} תשלומים · נותרו ${l.remainingInstallments}
+          ${l.linkedPaymentsCount > 0 ? ' (לפי תנועות שקושרו בפועל)' : ' (הערכה אוטומטית לפי חודשים שחלפו)'}
+          ${l.monthly_amount ? ` · ₪${l.monthly_amount} לחודש` : ''}
+        </div>
+        <div style="background:var(--surface-2); border-radius:6px; height:6px; margin-top:6px; overflow:hidden">
+          <div style="background:var(--brand); height:100%; width:${pct}%"></div>
+        </div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px">
+        <button class="btn secondary sm" onclick="startLoanEdit(${l.id})">עריכה</button>
+        <button class="btn secondary sm" onclick="deleteLoan(${l.id}, '${l.name.replace(/'/g, "\\'")}')">מחיקה</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function startLoanEdit(id) { loanEditingId = id; renderLoansList(); }
+function cancelLoanEdit() { loanEditingId = null; renderLoansList(); }
+
+async function saveLoanEdit(id) {
+  const name = document.getElementById(`loan-edit-name-${id}`).value.trim();
+  const total = Number(document.getElementById(`loan-edit-total-${id}`).value);
+  const monthlyRaw = document.getElementById(`loan-edit-monthly-${id}`).value;
+  const start = document.getElementById(`loan-edit-start-${id}`).value;
+  if (!name || !total || total <= 0 || !start) { toast('יש למלא שם, מספר תשלומים ותאריך תקינים', 'error'); return; }
+  const r = await api('PUT', `/api/loans/${id}`, { name, total_installments: total, monthly_amount: monthlyRaw ? Number(monthlyRaw) : null, start_date: start });
+  if (r.ok) { toast('ההלוואה עודכנה', 'success'); loanEditingId = null; loadLoans(); }
+}
+
+async function deleteLoan(id, name) {
+  if (!confirm(`למחוק את ההלוואה "${name}"? תנועות שכבר קושרו אליה יישארו, רק הקישור יתבטל.`)) return;
+  const r = await api('DELETE', `/api/loans/${id}`);
+  if (r.ok) { toast('ההלוואה נמחקה', 'success'); loadLoans(); }
+}
+
+// ממלא את בוררי "לקשר להלוואה" בטפסי ההוספה (תנועות/חתונה/דירה) - נקרא אחרי טעינת הלוואות, ובכל
+// מעבר לתצוגת "הלוואות" בקטגוריה (ר' onchange על t_category/wed_category/apt_category).
+function refreshLoanLinkSelects() {
+  for (const id of ['t_loan_link', 'wed_loan_link', 'apt_loan_link']) {
+    const el = document.getElementById(id);
+    if (!el) continue;
+    el.innerHTML = '<option value="">בלי לקשר להלוואה מסוימת</option>' +
+      loansCache.map(l => `<option value="${l.id}">${l.name.replace(/</g, '&lt;')} (נותרו ${l.remainingInstallments})</option>`).join('');
+  }
 }
 
 // דוח חודשי מסודר: הכנסות מול הוצאות (בנוסף לרשימת התנועות הגולמית) - מבוסס על /api/transactions/trend,

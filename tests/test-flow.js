@@ -899,6 +899,66 @@ async function run() {
     const apartmentBatchesAfterWeddingDelete = await api("GET", "/api/transactions/import/batches?target=apartment", null, token);
     assert(apartmentBatchesAfterWeddingDelete.data.batches.length === 1, "מחיקת קובץ הייבוא של החתונה לא נגעה בקובץ הייבוא של הדירה");
 
+    console.log("\n💰 מעקב הלוואות בתשלומים - חישוב אוטומטי + קישור תנועות בפועל");
+    // משוב אמיתי: "כל חודש כשאני מגיע לפנקס... שיהיה חישוב אוטומטי אם יש הלוואות בתשלומים כל חודש
+    // שיתעדכן כמה תשלומים נשאר" - לשאלת הבהרה (רשומה ייעודית מול קישור לתנועות קיימות) המשתמש ענה
+    // "גם וגם". ר' src/routes/loans.js.
+    function monthsElapsedSinceStart(startDateStr) {
+      const start = new Date(startDateStr + "T00:00:00");
+      const now = new Date();
+      let months = (now.getFullYear() - start.getFullYear()) * 12 + (now.getMonth() - start.getMonth());
+      if (now.getDate() < start.getDate()) months -= 1;
+      return months + 1;
+    }
+    // תאריך התחלה 20 חודשים לפני היום (חודש עגול, יום 1) - כדי שהחישוב האוטומטי יהיה יציב וניתן
+    // לחיזוי מדויק בבדיקה (לא תלוי היום-בחודש הנוכחי בפועל).
+    const loanStart = new Date();
+    loanStart.setMonth(loanStart.getMonth() - 20);
+    loanStart.setDate(1);
+    const loanStartStr = `${loanStart.getFullYear()}-${String(loanStart.getMonth() + 1).padStart(2, "0")}-01`;
+    const expectedElapsed = Math.min(36, monthsElapsedSinceStart(loanStartStr));
+
+    const loanCreate = await api("POST", "/api/loans", { name: "הלוואת רכב", total_installments: 36, monthly_amount: 1200, start_date: loanStartStr }, token);
+    assert(loanCreate.status === 201, "יצירת הלוואה חדשה הצליחה");
+    assert(
+      loanCreate.data.loan.paidInstallments === expectedElapsed && loanCreate.data.loan.linkedPaymentsCount === 0,
+      `לפני שקושרה אף תנועה, מספר התשלומים שבוצעו מוערך אוטומטית לפי חודשים שחלפו מתאריך ההתחלה (${JSON.stringify(loanCreate.data.loan)}, צפוי ${expectedElapsed})`
+    );
+    assert(
+      loanCreate.data.loan.remainingInstallments === 36 - expectedElapsed,
+      `נותרו = סה"כ תשלומים פחות מה שהוערך שבוצע (${loanCreate.data.loan.remainingInstallments})`
+    );
+    const loanId = loanCreate.data.loan.id;
+
+    const loanList = await api("GET", "/api/loans", null, token);
+    assert(loanList.status === 200 && loanList.data.loans.some(l => l.id === loanId), "רשימת ההלוואות כוללת את ההלוואה שנוצרה");
+
+    // עכשיו מקשרים תנועת "הלוואות" אמיתית להלוואה - מהרגע הזה, המספר *האמיתי* של תשלומים שקושרו
+    // גובר על ההערכה האוטומטית (לפי משוב "גם וגם" - מעדיפים מציאות על הערכה כשיש מציאות בפועל).
+    const loanPayment = await api("POST", "/api/transactions", { type: "expense", amount: 1200, category: "הלוואות", loan_id: loanId }, token);
+    assert(loanPayment.status === 201 && loanPayment.data.transaction.loan_id == loanId, "תנועת תשלום הלוואה נשמרה עם קישור להלוואה");
+    const loanAfterPayment = await api("GET", "/api/loans", null, token);
+    const loanRowAfterPayment = loanAfterPayment.data.loans.find(l => l.id === loanId);
+    assert(
+      loanRowAfterPayment.linkedPaymentsCount === 1 && loanRowAfterPayment.paidInstallments === 1 && loanRowAfterPayment.remainingInstallments === 35,
+      `אחרי קישור תשלום אחד בפועל, המספר האמיתי (1) גובר על ההערכה האוטומטית (${expectedElapsed}) (${JSON.stringify(loanRowAfterPayment)})`
+    );
+
+    const loanEdit = await api("PUT", `/api/loans/${loanId}`, { total_installments: 24 }, token);
+    assert(loanEdit.status === 200 && loanEdit.data.loan.total_installments === 24 && loanEdit.data.loan.remainingInstallments === 23, "עריכת מספר התשלומים הכולל של ההלוואה הצליחה ועדכנה את הנותרים");
+
+    const otherUserLoanSignup = await api("POST", "/api/auth/signup", {
+      full_name: "משתמש זר להלוואה", username: `stranger_loan_${Date.now()}`, password: "1234", phone: `+97250${Date.now().toString().slice(-7)}`,
+    });
+    const strangerLoanDelete = await api("DELETE", `/api/loans/${loanId}`, null, otherUserLoanSignup.data.token);
+    assert(strangerLoanDelete.status === 404, "משתמש אחר לא יכול למחוק הלוואה ששייכת למשתמש הזה");
+
+    const loanDelete = await api("DELETE", `/api/loans/${loanId}`, null, token);
+    assert(loanDelete.status === 200, "מחיקת ההלוואה הצליחה");
+    const paymentAfterLoanDelete = await api("GET", "/api/transactions", null, token);
+    const paymentRow = paymentAfterLoanDelete.data.transactions.find(t => t.id === loanPayment.data.transaction.id);
+    assert(paymentRow && paymentRow.loan_id === null, "מחיקת ההלוואה מנתקת את הקישור מהתנועה אבל לא מוחקת את התנועה עצמה");
+
     console.log("\n🎓 חונכות ותלמידים");
     const student = await api("POST", "/api/students", { name: "תלמיד בדיקה" }, token);
     assert(student.status === 201, "הוספת תלמיד הצליחה");

@@ -44,16 +44,20 @@ function register(router) {
 
   // הוספת תנועה (מגיע גם מהאזור האישי וגם מהמנוע הקולי, לכן source ניתן מבחוץ)
   router.post("/api/transactions", requireAuth(async (ctx) => {
-    const { type, amount, category, note, source } = ctx.body;
+    const { type, amount, category, note, source, loan_id } = ctx.body;
     if (!["income", "expense"].includes(type)) {
       return json(ctx.res, 400, { error: "סוג תנועה חייב להיות income או expense" });
     }
     const numAmount = Number(amount);
     if (!numAmount || numAmount <= 0) return json(ctx.res, 400, { error: "יש להזין סכום תקין" });
 
+    // קישור אופציונלי להלוואה (ר' routes/loans.js, משוב אמיתי: "חישוב אוטומטי אם יש הלוואות
+    // בתשלומים... שיתעדכן כמה תשלומים נשאר") - נבדק שההלוואה שייכת למשתמש הזה, לא רק שהמזהה קיים.
+    const loanId = loan_id && db.prepare("SELECT id FROM loans WHERE id = ? AND user_id = ?").get(loan_id, ctx.user.userId) ? loan_id : null;
+
     const info = db
-      .prepare("INSERT INTO transactions (user_id, type, amount, category, note, source) VALUES (?, ?, ?, ?, ?, ?)")
-      .run(ctx.user.userId, type, numAmount, category || null, note || null, source === "phone" ? "phone" : "web");
+      .prepare("INSERT INTO transactions (user_id, type, amount, category, note, source, loan_id) VALUES (?, ?, ?, ?, ?, ?, ?)")
+      .run(ctx.user.userId, type, numAmount, category || null, note || null, source === "phone" ? "phone" : "web", loanId);
 
     // קטגוריה שהוזנה (מהאתר או מהטלפון - ר' routes/ivr.js case "expense_confirm"/"income_confirm")
     // נכנסת גם ל"מילון" הניסוחים האישי, בדיוק כמו note/trend/role_type בדוחות טיפוליים - כדי שקטגוריות

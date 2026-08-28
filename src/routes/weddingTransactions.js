@@ -55,16 +55,18 @@ function register(router) {
   }));
 
   router.post("/api/wedding/transactions", requireAuth(async (ctx) => {
-    const { type, amount, category, note } = ctx.body;
+    const { type, amount, category, note, loan_id } = ctx.body;
     if (!["income", "expense"].includes(type)) {
       return json(ctx.res, 400, { error: "סוג תנועה חייב להיות income או expense" });
     }
     const numAmount = Number(amount);
     if (!numAmount || numAmount <= 0) return json(ctx.res, 400, { error: "יש להזין סכום תקין" });
+    // קישור אופציונלי להלוואה (ר' routes/loans.js) - נבדק שהיא שייכת למשתמש הזה.
+    const loanId = loan_id && db.prepare("SELECT id FROM loans WHERE id = ? AND user_id = ?").get(loan_id, ctx.user.userId) ? loan_id : null;
 
     const info = db
-      .prepare("INSERT INTO wedding_transactions (user_id, type, amount, category, note) VALUES (?, ?, ?, ?, ?)")
-      .run(ctx.user.userId, type, numAmount, category || null, note || null);
+      .prepare("INSERT INTO wedding_transactions (user_id, type, amount, category, note, loan_id) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(ctx.user.userId, type, numAmount, category || null, note || null, loanId);
 
     // קטגוריית "אחר" חופשית נכנסת למילון האישי הנפרד של החתונה, בדיוק כמו "אחר" בתנועות הרגילות -
     // כדי שתוצע שוב בפעם הבאה, בלי להתערבב עם מילון הקטגוריות הרגיל (kind נפרד).
@@ -88,9 +90,12 @@ function register(router) {
     if (!amount || amount <= 0) return json(ctx.res, 400, { error: "יש להזין סכום תקין" });
     const category = ctx.body.category !== undefined ? (ctx.body.category || null) : row.category;
     const note = ctx.body.note !== undefined ? (ctx.body.note || null) : row.note;
+    const loanId = ctx.body.loan_id !== undefined
+      ? (ctx.body.loan_id && db.prepare("SELECT id FROM loans WHERE id = ? AND user_id = ?").get(ctx.body.loan_id, ctx.user.userId) ? ctx.body.loan_id : null)
+      : row.loan_id;
 
-    db.prepare("UPDATE wedding_transactions SET type = ?, amount = ?, category = ?, note = ? WHERE id = ?")
-      .run(type, amount, category, note, row.id);
+    db.prepare("UPDATE wedding_transactions SET type = ?, amount = ?, category = ?, note = ?, loan_id = ? WHERE id = ?")
+      .run(type, amount, category, note, loanId, row.id);
 
     if (category && !WEDDING_EXPENSE_CATEGORIES.includes(category) && !WEDDING_INCOME_CATEGORIES.includes(category)) {
       rememberPhrase(ctx.user.userId, type === "income" ? "wedding_income_category_other" : "wedding_expense_category_other", category);
