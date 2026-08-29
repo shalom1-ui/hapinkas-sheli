@@ -355,6 +355,23 @@ async function run() {
     const deleteAgain = await api("DELETE", `/api/transactions/${txToDeleteId}`, null, token);
     assert(deleteAgain.status === 404, "ניסיון למחוק תנועה שכבר נמחקה מחזיר 404, לא קורס");
 
+    console.log("\n✏️ עריכת תנועה רגילה - משוב אמיתי: 'אפשרות לבחור כמה ואח\"כ בלחיצה אחת שיהיה ערוך מסומנים'");
+    // התנועות הרגילות היו היחידות בלי PUT בכלל (רק חתונה/דירה יכלו להיערך) - נדרש כבסיס לעריכה
+    // מרובה (שקוראת לנתיב הזה בלולאה, אחת לכל תנועה מסומנת - ר' bulkEditTransactions ב-app.html).
+    const txToEdit = await api("POST", "/api/transactions", { type: "expense", amount: 40, category: "לעריכה" }, token);
+    const txToEditId = txToEdit.data.transaction.id;
+    const otherUserEditSignup = await api("POST", "/api/auth/signup", {
+      full_name: "משתמש זר לעריכה", username: `stranger_edit_${Date.now()}`, password: "1234", phone: `+97250${Date.now().toString().slice(-7)}`,
+    });
+    const strangerEditAttempt = await api("PUT", `/api/transactions/${txToEditId}`, { amount: 1 }, otherUserEditSignup.data.token);
+    assert(strangerEditAttempt.status === 404, "משתמש אחר לא יכול לערוך תנועה שאינה שלו");
+    const realEdit = await api("PUT", `/api/transactions/${txToEditId}`, { category: "אחרי עריכה" }, token);
+    assert(
+      realEdit.status === 200 && realEdit.data.transaction.category === "אחרי עריכה" && realEdit.data.transaction.amount === 40,
+      `עריכת קטגוריה בלבד הצליחה, בלי לאבד את הסכום שלא נשלח מחדש (${JSON.stringify(realEdit.data.transaction)})`
+    );
+    await api("DELETE", `/api/transactions/${txToEditId}`, null, token);
+
     console.log("\n📥 ייבוא אקסל/CSV של דף בנק - זיהוי עמודות זכות/חובה אוטומטי");
     // משוב אמיתי ממשתמש: "רוצה להכניס אקסל של דפי בנק או דפי כרטיס אשראי, שיוכל להוריד אותו
     // והמערכת תכניס את זה להכנסות והוצאות". ר' src/lib/xlsxParser.js, src/lib/importMapping.js,

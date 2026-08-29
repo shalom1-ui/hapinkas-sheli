@@ -80,6 +80,33 @@ function register(router) {
     return json(ctx.res, 200, { phrases: getDictionary(ctx.user.userId, kind) });
   }));
 
+  // עריכת תנועה קיימת - משוב אמיתי: "אני צריך שיהיה אפשרות לבחור כמה [תנועות] ואח"כ בלחיצה אחת
+  // שיהיה ערוך מסומנים וכך אני שומר הכל" - עריכה מרובה בצד הלקוח פשוט קוראת לנתיב הזה בלולאה, פעם
+  // אחת לכל תנועה מסומנת (ר' bulkEditTransactions ב-public/app.html) - אין צורך בנתיב "עריכה קבוצתית"
+  // ייעודי בשרת. עדכון חלקי (רק שדות שנשלחו בפועל) - בדיוק כמו PUT בחתונה/דירה.
+  router.put("/api/transactions/:id", requireAuth(async (ctx) => {
+    const row = db.prepare("SELECT * FROM transactions WHERE id = ? AND user_id = ?").get(ctx.params.id, ctx.user.userId);
+    if (!row) return json(ctx.res, 404, { error: "תנועה לא נמצאה" });
+
+    const type = ctx.body.type !== undefined ? ctx.body.type : row.type;
+    if (!["income", "expense"].includes(type)) return json(ctx.res, 400, { error: "סוג תנועה חייב להיות income או expense" });
+    const amount = ctx.body.amount !== undefined ? Number(ctx.body.amount) : row.amount;
+    if (!amount || amount <= 0) return json(ctx.res, 400, { error: "יש להזין סכום תקין" });
+    const category = ctx.body.category !== undefined ? (ctx.body.category || null) : row.category;
+    const note = ctx.body.note !== undefined ? (ctx.body.note || null) : row.note;
+    const loanId = ctx.body.loan_id !== undefined
+      ? (ctx.body.loan_id && db.prepare("SELECT id FROM loans WHERE id = ? AND user_id = ?").get(ctx.body.loan_id, ctx.user.userId) ? ctx.body.loan_id : null)
+      : row.loan_id;
+
+    db.prepare("UPDATE transactions SET type = ?, amount = ?, category = ?, note = ?, loan_id = ? WHERE id = ?")
+      .run(type, amount, category, note, loanId, row.id);
+
+    if (category) rememberPhrase(ctx.user.userId, type === "income" ? "income_category" : "expense_category", category);
+
+    const updated = db.prepare("SELECT * FROM transactions WHERE id = ?").get(row.id);
+    return json(ctx.res, 200, { transaction: updated });
+  }));
+
   // מחיקת תנועה (למשל טעות בהזנה)
   router.delete("/api/transactions/:id", requireAuth(async (ctx) => {
     const row = db.prepare("SELECT * FROM transactions WHERE id = ? AND user_id = ?").get(ctx.params.id, ctx.user.userId);

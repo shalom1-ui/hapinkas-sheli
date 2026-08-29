@@ -349,7 +349,18 @@
           <h3>כל התנועות</h3>
           <div class="row" style="margin-bottom:10px; align-items:center">
             <label style="display:flex; align-items:center; gap:6px; font-size:14px"><input type="checkbox" id="tx-select-all" onchange="toggleSelectAll(selectedTxIds, txListIds, this.checked); renderTxList()"> בחר הכל</label>
+            <button class="btn secondary sm" onclick="toggleBulkEditPanel('tx-bulk-edit')">עריכת המסומנות</button>
             <button class="btn secondary sm" onclick="bulkDeleteTransactions(selectedTxIds, '/api/transactions', loadTransactions)">מחיקת המסומנות</button>
+          </div>
+          <div id="tx-bulk-edit" class="row" style="display:none; margin-bottom:10px; align-items:center">
+            <input id="tx-bulk-edit-category" class="plain" placeholder="קטגוריה חדשה (ריק = לא לשנות)" list="category-suggestions">
+            <select id="tx-bulk-edit-type" class="plain">
+              <option value="">לא לשנות סוג</option>
+              <option value="expense">הוצאה</option>
+              <option value="income">הכנסה</option>
+            </select>
+            <button class="btn sm" onclick="bulkEditTransactions(selectedTxIds, '/api/transactions', loadTransactions, 'tx-bulk-edit')">שמירה על המסומנות</button>
+            <button class="btn secondary sm" onclick="toggleBulkEditPanel('tx-bulk-edit')">ביטול</button>
           </div>
           <div id="tx-list"><div class="empty-state">אין עדיין תנועות</div></div>
         </div>
@@ -412,7 +423,18 @@
           <h3>כל תנועות החתונה</h3>
           <div class="row" style="margin-bottom:10px; align-items:center">
             <label style="display:flex; align-items:center; gap:6px; font-size:14px"><input type="checkbox" id="wed-select-all" onchange="toggleSelectAll(selectedWeddingIds, weddingListIds, this.checked); renderWeddingList(lastWeddingList)"> בחר הכל</label>
+            <button class="btn secondary sm" onclick="toggleBulkEditPanel('wed-bulk-edit')">עריכת המסומנות</button>
             <button class="btn secondary sm" onclick="bulkDeleteTransactions(selectedWeddingIds, '/api/wedding/transactions', loadWedding)">מחיקת המסומנות</button>
+          </div>
+          <div id="wed-bulk-edit" class="row" style="display:none; margin-bottom:10px; align-items:center">
+            <input id="wed-bulk-edit-category" class="plain" placeholder="קטגוריה חדשה (ריק = לא לשנות)" list="wedding-category-suggestions">
+            <select id="wed-bulk-edit-type" class="plain">
+              <option value="">לא לשנות סוג</option>
+              <option value="expense">הוצאה</option>
+              <option value="income">הכנסה</option>
+            </select>
+            <button class="btn sm" onclick="bulkEditTransactions(selectedWeddingIds, '/api/wedding/transactions', loadWedding, 'wed-bulk-edit')">שמירה על המסומנות</button>
+            <button class="btn secondary sm" onclick="toggleBulkEditPanel('wed-bulk-edit')">ביטול</button>
           </div>
           <div id="wed-list"><div class="empty-state">אין עדיין תנועות</div></div>
         </div>
@@ -473,7 +495,18 @@
           <h3>כל תנועות הדירה</h3>
           <div class="row" style="margin-bottom:10px; align-items:center">
             <label style="display:flex; align-items:center; gap:6px; font-size:14px"><input type="checkbox" id="apt-select-all" onchange="toggleSelectAll(selectedApartmentIds, apartmentListIds, this.checked); renderApartmentList(lastApartmentList)"> בחר הכל</label>
+            <button class="btn secondary sm" onclick="toggleBulkEditPanel('apt-bulk-edit')">עריכת המסומנות</button>
             <button class="btn secondary sm" onclick="bulkDeleteTransactions(selectedApartmentIds, '/api/apartment/transactions', loadApartment)">מחיקת המסומנות</button>
+          </div>
+          <div id="apt-bulk-edit" class="row" style="display:none; margin-bottom:10px; align-items:center">
+            <input id="apt-bulk-edit-category" class="plain" placeholder="קטגוריה חדשה (ריק = לא לשנות)" list="apartment-category-suggestions">
+            <select id="apt-bulk-edit-type" class="plain">
+              <option value="">לא לשנות סוג</option>
+              <option value="expense">הוצאה</option>
+              <option value="income">הכנסה</option>
+            </select>
+            <button class="btn sm" onclick="bulkEditTransactions(selectedApartmentIds, '/api/apartment/transactions', loadApartment, 'apt-bulk-edit')">שמירה על המסומנות</button>
+            <button class="btn secondary sm" onclick="toggleBulkEditPanel('apt-bulk-edit')">ביטול</button>
           </div>
           <div id="apt-list"><div class="empty-state">אין עדיין תנועות</div></div>
         </div>
@@ -957,6 +990,36 @@ async function bulkDeleteTransactions(selectedSet, endpointPrefix, reloadFn) {
   const failed = results.filter(r => !r.ok).length;
   selectedSet.clear();
   toast(failed ? `נמחקו ${ids.length - failed} מתוך ${ids.length} (${failed} נכשלו)` : `נמחקו ${ids.length} תנועות`, failed ? 'error' : 'success');
+  reloadFn();
+}
+
+// "עריכת המסומנות" - משוב אמיתי: "אני צריך שיהיה אפשרות לבחור כמה ואח\"כ בלחיצה אחת שיהיה ערוך
+// מסומנים וכך אני שומר הכל". פאנל קטן (קטגוריה חדשה + סוג חדש, שני השדות אופציונליים - ריק=לא
+// לשנות) שמוחל על כל התנועות המסומנות בבת אחת, פעם אחת לכל תנועה (PUT בלולאה, בדיוק כמו המחיקה
+// המרובה למעלה) - לא נתיב "עדכון קבוצתי" ייעודי בשרת.
+function toggleBulkEditPanel(panelId) {
+  const panel = document.getElementById(panelId);
+  panel.style.display = panel.style.display === 'none' ? 'flex' : 'none';
+}
+
+async function bulkEditTransactions(selectedSet, endpointPrefix, reloadFn, panelId) {
+  if (!selectedSet.size) { toast('לא סומנה אף תנועה', 'error'); return; }
+  const categoryEl = document.getElementById(`${panelId}-category`);
+  const typeEl = document.getElementById(`${panelId}-type`);
+  const category = categoryEl.value.trim();
+  const type = typeEl.value;
+  if (!category && !type) { toast('יש למלא קטגוריה חדשה ו/או לבחור סוג חדש - אחרת אין מה לשנות', 'error'); return; }
+  const ids = [...selectedSet];
+  if (!confirm(`לעדכן ${ids.length} תנועות מסומנות?`)) return;
+  const payload = {};
+  if (category) payload.category = category;
+  if (type) payload.type = type;
+  const results = await Promise.all(ids.map(id => api('PUT', `${endpointPrefix}/${id}`, payload)));
+  const failed = results.filter(r => !r.ok).length;
+  toast(failed ? `עודכנו ${ids.length - failed} מתוך ${ids.length} (${failed} נכשלו)` : `עודכנו ${ids.length} תנועות`, failed ? 'error' : 'success');
+  categoryEl.value = '';
+  typeEl.value = '';
+  document.getElementById(panelId).style.display = 'none';
   reloadFn();
 }
 
