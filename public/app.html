@@ -126,6 +126,10 @@
 
   .empty-state{color:var(--text-muted); font-size:13.5px; padding:14px 4px;}
   .hint{font-size:12.5px; color:var(--text-muted); margin:-4px 0 12px; line-height:1.6;}
+  /* משוב אמיתי: "במקום ללחוץ על יבוא ואז עולה קובץ, שאני גם אוכל לקחת אותו ולשחרר את הקבצים" -
+     גרירה-ושחרור בנוסף (לא במקום) לבחירת קובץ הרגילה. ר' setupFileDropZone. */
+  .dropzone-wrap{border:2px dashed transparent; border-radius:10px; padding:2px; transition: border-color .15s, background-color .15s;}
+  .dropzone-wrap.drag-over{border-color:var(--brand); background:var(--brand-soft);}
   select.plain, input.plain{padding:10px 12px; border:1.5px solid var(--border); border-radius:10px; font-size:14px; background:var(--surface);}
 
   details.more{margin-top:6px;}
@@ -161,17 +165,22 @@
       <button class="auth-tab" id="tab-signup-btn" onclick="showAuthTab('signup')">הרשמה</button>
     </div>
 
-    <div id="tab-login">
+    <!-- תוקן (משוב אמיתי: "אני חייב ללחוץ על התחבר, לחיצה על אנטר לא עוזר") - עטיפת <form> אמיתית
+         (במקום div עם onclick על הכפתור בלבד) כדי שהתנהגות ברירת המחדל הרגילה של דפדפן - שליחת
+         הטופס בהקשת Enter מתוך כל שדה טקסט - תעבוד, בלי שצריך להוסיף מאזין נפרד לכל שדה בנפרד. -->
+    <form id="tab-login" onsubmit="event.preventDefault(); doLogin();">
       <div class="field"><label>שם משתמש או מספר טלפון</label><input id="li_username" placeholder="שם משתמש, או מספר הטלפון שנרשמתם איתו"></div>
       <div class="field"><label>סיסמה</label><input id="li_password" type="password" placeholder="סיסמה (או קוד PIN שהוגדר בטלפון)"></div>
-      <button class="btn block" onclick="doLogin()">התחברות</button>
+      <button class="btn block" type="submit">התחברות</button>
       <div style="text-align:center; margin-top:8px"><a href="#" onclick="showAuthTab('forgot'); return false;" style="font-size:13px">שכחתי סיסמה</a></div>
       <div class="hint">נרשמתם דרך הטלפון? אפשר להתחבר עם מספר הטלפון שממנו התקשרתם, והקוד הסודי (PIN) שהגדרתם בשיחה.</div>
-    </div>
+    </form>
 
     <!-- שחזור סיסמה: שלושה שלבים (בקשת קוד -> אימות קוד -> קביעת סיסמה חדשה), ר' /api/auth/forgot-password/*
          ב-routes/auth.js - כבר קיים ועובד בשרת, רק חסרה הייתה ממשק כאן באתר. -->
-    <div id="tab-forgot" style="display:none">
+    <!-- שלושה שלבים, אבל form אחד - ה-onsubmit בוחר את הפעולה הנכונה לפי איזה שלב גלוי כרגע, כך
+         שהקשת Enter מכל שדה עושה תמיד את "הצעד הבא" הנכון (בקשת קוד / אימות קוד / קביעת סיסמה). -->
+    <form id="tab-forgot" style="display:none" onsubmit="event.preventDefault(); forgotPasswordSubmit();">
       <div class="hint">שוכחתם סיסמה? שולחים קוד אימות בן 4 ספרות - בשיחה קולית למספר הטלפון הרשום, או למייל הרשום (לפי הבחירה למטה) - ואז קובעים סיסמה חדשה.</div>
       <div class="field"><label>שם משתמש או מספר טלפון</label><input id="fp_username" placeholder="שם משתמש, או מספר הטלפון שנרשמתם איתו"></div>
       <div class="field">
@@ -181,23 +190,23 @@
           <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:500"><input type="radio" name="fp_channel" value="email"> מייל</label>
         </div>
       </div>
-      <button class="btn secondary block" onclick="forgotPasswordRequest()">שליחת קוד אימות</button>
+      <button class="btn secondary block" type="submit">שליחת קוד אימות</button>
       <div id="fp-demo-code" style="display:none; margin-top:8px; padding:10px; border-radius:8px; background:#fff8db; border:1px solid #e8d675; font-size:14px"></div>
 
       <div id="fp-step2" style="display:none; margin-top:14px">
         <div class="field"><label>קוד שהתקבל</label><input id="fp_code" placeholder="1234"></div>
-        <button class="btn secondary block" onclick="forgotPasswordVerify()">אימות קוד</button>
+        <button class="btn secondary block" type="submit">אימות קוד</button>
       </div>
 
       <div id="fp-step3" style="display:none; margin-top:14px">
         <div class="field"><label>סיסמה חדשה (קוד בן 4 ספרות - ישמש גם כ-PIN בטלפון)</label><input id="fp_new_password" type="password" placeholder="1234"></div>
-        <button class="btn block" onclick="forgotPasswordReset()">קביעת סיסמה חדשה</button>
+        <button class="btn block" type="submit">קביעת סיסמה חדשה</button>
       </div>
 
       <div style="text-align:center; margin-top:10px"><a href="#" onclick="showAuthTab('login'); return false;" style="font-size:13px">חזרה להתחברות</a></div>
-    </div>
+    </form>
 
-    <div id="tab-signup" style="display:none">
+    <form id="tab-signup" style="display:none" onsubmit="event.preventDefault(); doSignup();">
       <div class="field"><label>שם מלא</label><input id="su_name" placeholder="לדוגמה: דנה כהן"></div>
       <div class="field"><label>שם משתמש</label><input id="su_username" placeholder="בחרו שם משתמש"></div>
       <div class="field"><label>סיסמה</label><input id="su_password" type="password" placeholder="סיסמה"></div>
@@ -211,8 +220,8 @@
         </div>
         <div class="hint">תפקיד "מפקח/ת" ניתן רק לאחר אישור בעל הקו - אפשר לבקש אותו בהגדרות אחרי הכניסה למערכת.</div>
       </div>
-      <button class="btn block" onclick="doSignup()">יצירת חשבון</button>
-    </div>
+      <button class="btn block" type="submit">יצירת חשבון</button>
+    </form>
     <div class="auth-hint">גרסת הדגמה — כל המידע נשמר במחשב שמריץ את השרת, ופעולות תשלום/שיחה/מייל פועלות במצב בדיקה (MOCK).</div>
   </div>
 </div>
@@ -302,9 +311,9 @@
         </div>
         <div class="card">
           <h3>ייבוא תנועות מאקסל / CSV</h3>
-          <div class="hint" style="margin-bottom:10px">מעלים קובץ שהורדתם מהבנק או מחברת כרטיס האשראי (xlsx / xls / csv / pdf) - המערכת מזהה אוטומטית את עמודות התאריך/סכום/תיאור, ומציגה תצוגה מקדימה לאישור. שום תנועה לא נשמרת לפני שלוחצים "ייבוא" בפועל, ואפשר להעלות את אותו קובץ כמה פעמים בלי ליצור כפילויות.</div>
+          <div class="hint" style="margin-bottom:10px">מעלים (או גוררים) קובץ שהורדתם מהבנק או מחברת כרטיס האשראי (xlsx / xls / csv / pdf) - המערכת מזהה אוטומטית את עמודות התאריך/סכום/תיאור, ומציגה תצוגה מקדימה לאישור. שום תנועה לא נשמרת לפני שלוחצים "ייבוא" בפועל, ואפשר להעלות את אותו קובץ כמה פעמים בלי ליצור כפילויות.</div>
           <div class="row">
-            <input id="imp_file" class="plain" type="file" accept=".xlsx,.xls,.csv,.pdf">
+            <div class="dropzone-wrap" id="imp_file_zone"><input id="imp_file" class="plain" type="file" accept=".xlsx,.xls,.csv,.pdf"></div>
             <select id="imp_source_type" class="plain">
               <option value="bank">דף בנק (עו״ש)</option>
               <option value="card">דף כרטיס אשראי</option>
@@ -376,9 +385,9 @@
           <h3>ייבוא תנועות מאקסל / CSV</h3>
           <!-- משוב אמיתי: "גם בקטגוריה דירה וגם בחתונה אין אופציה של יבוא קבצים" - אותו מנוע ייבוא
                בדיוק כמו בעמוד "תנועות" הרגיל (target=wedding), ר' giPreview/giCommit למטה. -->
-          <div class="hint" style="margin-bottom:10px">מעלים קובץ שהורדתם מהבנק או מחברת כרטיס האשראי (xlsx / xls / csv / pdf) - התנועות ייובאו ישירות לתקציב החתונה, לא לתנועות הרגילות.</div>
+          <div class="hint" style="margin-bottom:10px">מעלים (או גוררים) קובץ שהורדתם מהבנק או מחברת כרטיס האשראי (xlsx / xls / csv / pdf) - התנועות ייובאו ישירות לתקציב החתונה, לא לתנועות הרגילות.</div>
           <div class="row">
-            <input id="wedding-imp-file" class="plain" type="file" accept=".xlsx,.xls,.csv,.pdf">
+            <div class="dropzone-wrap" id="wedding-imp-file_zone"><input id="wedding-imp-file" class="plain" type="file" accept=".xlsx,.xls,.csv,.pdf"></div>
             <select id="wedding-imp-source_type" class="plain">
               <option value="bank">דף בנק (עו״ש)</option>
               <option value="card">דף כרטיס אשראי</option>
@@ -437,9 +446,9 @@
         </div>
         <div class="card">
           <h3>ייבוא תנועות מאקסל / CSV</h3>
-          <div class="hint" style="margin-bottom:10px">מעלים קובץ שהורדתם מהבנק או מחברת כרטיס האשראי (xlsx / xls / csv / pdf) - התנועות ייובאו ישירות לתקציב הדירה, לא לתנועות הרגילות.</div>
+          <div class="hint" style="margin-bottom:10px">מעלים (או גוררים) קובץ שהורדתם מהבנק או מחברת כרטיס האשראי (xlsx / xls / csv / pdf) - התנועות ייובאו ישירות לתקציב הדירה, לא לתנועות הרגילות.</div>
           <div class="row">
-            <input id="apartment-imp-file" class="plain" type="file" accept=".xlsx,.xls,.csv,.pdf">
+            <div class="dropzone-wrap" id="apartment-imp-file_zone"><input id="apartment-imp-file" class="plain" type="file" accept=".xlsx,.xls,.csv,.pdf"></div>
             <select id="apartment-imp-source_type" class="plain">
               <option value="bank">דף בנק (עו״ש)</option>
               <option value="card">דף כרטיס אשראי</option>
@@ -495,9 +504,9 @@
           <!-- משוב אמיתי: "בהלוואות לא עשית שאני יכול לייבא נתונים". תשלומי הלוואה הם תנועות רגילות
                לכל דבר (נשמרות בתנועות הרגילות, target=regular) - הייחוד כאן הוא עמודת "לקשר להלוואה"
                בתצוגה המקדימה, כדי לסמן מראש אילו שורות מהקובץ שייכות לאיזו הלוואה. ר' giPreview/giCommit. -->
-          <div class="hint" style="margin-bottom:10px">מעלים קובץ שהורדתם מהבנק או מחברת כרטיס האשראי - התנועות ייובאו לתנועות הרגילות, עם אפשרות לקשר כל שורה (או את כולן יחד) להלוואה מסוימת.</div>
+          <div class="hint" style="margin-bottom:10px">מעלים (או גוררים) קובץ שהורדתם מהבנק או מחברת כרטיס האשראי - התנועות ייובאו לתנועות הרגילות, עם אפשרות לקשר כל שורה (או את כולן יחד) להלוואה מסוימת.</div>
           <div class="row">
-            <input id="loans-imp-file" class="plain" type="file" accept=".xlsx,.xls,.csv,.pdf">
+            <div class="dropzone-wrap" id="loans-imp-file_zone"><input id="loans-imp-file" class="plain" type="file" accept=".xlsx,.xls,.csv,.pdf"></div>
             <select id="loans-imp-source_type" class="plain">
               <option value="bank">דף בנק (עו״ש)</option>
               <option value="card">דף כרטיס אשראי</option>
@@ -828,6 +837,14 @@ function doLogout() {
 
 // ---------- שחזור סיסמה (שכחתי סיסמה) - שלושה שלבים, ר' /api/auth/forgot-password/* ב-routes/auth.js ----------
 let fpResetToken = null;
+// תוקן (משוב אמיתי: "אני חייב ללחוץ על התחבר, לחיצה על אנטר לא עוזר") - שלושת השלבים חולקים אותו
+// <form> אחד (ר' HTML), כי אי אפשר לקנן <form> בתוך <form>. הקשת Enter מכל שדה מפעילה onsubmit
+// אחד משותף - הפונקציה הזו בוחרת את הפעולה הנכונה לפי איזה שלב גלוי כרגע בפועל (3 → 2 → 1).
+function forgotPasswordSubmit() {
+  if (document.getElementById('fp-step3').style.display === 'block') forgotPasswordReset();
+  else if (document.getElementById('fp-step2').style.display === 'block') forgotPasswordVerify();
+  else forgotPasswordRequest();
+}
 async function forgotPasswordRequest() {
   const username = document.getElementById('fp_username').value.trim();
   const channel = document.querySelector('input[name="fp_channel"]:checked').value;
@@ -2275,6 +2292,34 @@ async function changePassword() {
     document.getElementById('st_new_password').value = '';
   }
 }
+
+// ---------- גרירה-ושחרור של קבצים לייבוא ----------
+// משוב אמיתי: "במקום ללחוץ על יבוא ואז עולה קובץ בשביל לייבא, שאני גם אוכל לקחת אותו ולשחרר את
+// הקבצים" - בנוסף (לא במקום) לבחירת קובץ הרגילה בלחיצה, שעדיין עובדת בדיוק כמו קודם. גוררים קובץ
+// מהמחשב ומשחררים על תיבת הבחירה - מודגש בעיצוב (מסגרת מקווקוות) בזמן הגרירה מעל האזור.
+function setupFileDropZone(inputId) {
+  const input = document.getElementById(inputId);
+  const zone = document.getElementById(inputId + '_zone');
+  if (!input || !zone) return;
+  ['dragenter', 'dragover'].forEach(evt => zone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    zone.classList.add('drag-over');
+  }));
+  ['dragleave', 'drop'].forEach(evt => zone.addEventListener(evt, (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    zone.classList.remove('drag-over');
+  }));
+  zone.addEventListener('drop', (e) => {
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (files && files.length) {
+      input.files = files;
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+  });
+}
+['imp_file', 'wedding-imp-file', 'apartment-imp-file', 'loans-imp-file'].forEach(setupFileDropZone);
 </script>
 </body>
 </html>
