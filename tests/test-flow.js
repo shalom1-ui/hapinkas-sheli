@@ -959,6 +959,32 @@ async function run() {
     const paymentRow = paymentAfterLoanDelete.data.transactions.find(t => t.id === loanPayment.data.transaction.id);
     assert(paymentRow && paymentRow.loan_id === null, "מחיקת ההלוואה מנתקת את הקישור מהתנועה אבל לא מוחקת את התנועה עצמה");
 
+    console.log("\n💰 ייבוא קובץ עם קישור להלוואה - משוב אמיתי: 'בהלוואות לא עשית שאני יכול לייבא נתונים'");
+    const loanForImport = await api("POST", "/api/loans", { name: "הלוואת משכנתא", total_installments: 120, start_date: "2024-01-01" }, token);
+    const loanForImportId = loanForImport.data.loan.id;
+    const loanImportCsv = "תאריך,תיאור,סכום\n05/09/2026,הלוואה- פרעון,-1500\n06/09/2026,קניה בסופר,-200\n";
+    const loanImportPreview = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: Buffer.from(loanImportCsv, "utf8").toString("base64"), filename: "loan-import.csv", source_type: "bank" },
+      token
+    );
+    assert(loanImportPreview.status === 200 && loanImportPreview.data.transactions.length === 2, "תצוגה מקדימה של ייבוא לצורך קישור להלוואה הצליחה");
+    // מקשרים רק את שורת "הלוואה- פרעון" להלוואה - השורה השנייה (קניה בסופר) לא קשורה לשום הלוואה.
+    const loanImportRows = loanImportPreview.data.transactions.map(t => ({
+      ...t,
+      loan_id: t.description === "הלוואה- פרעון" ? loanForImportId : undefined,
+    }));
+    const loanImportCommit = await api("POST", "/api/transactions/import/commit", { transactions: loanImportRows, filename: "loan-import.csv" }, token);
+    assert(loanImportCommit.status === 201 && loanImportCommit.data.imported === 2, `שמירת הייבוא עם קישור חלקי להלוואה הצליחה (${JSON.stringify(loanImportCommit.data)})`);
+    const txsAfterLoanImport = await api("GET", "/api/transactions", null, token);
+    const importedLoanTx = txsAfterLoanImport.data.transactions.find(t => t.note === "הלוואה- פרעון" && t.amount === 1500);
+    const importedOtherTx = txsAfterLoanImport.data.transactions.find(t => t.note === "קניה בסופר");
+    assert(importedLoanTx && importedLoanTx.loan_id == loanForImportId, "התנועה שסומנה בתצוגה המקדימה כשייכת להלוואה נשמרה עם הקישור הנכון");
+    assert(importedOtherTx && !importedOtherTx.loan_id, "התנועה השנייה, שלא סומנה, יובאה בלי שום קישור להלוואה");
+    const loanAfterImport = await api("GET", "/api/loans", null, token);
+    const loanRowAfterImport = loanAfterImport.data.loans.find(l => l.id === loanForImportId);
+    assert(loanRowAfterImport.linkedPaymentsCount === 1, `להלוואה מוצג עכשיו תשלום אחד אמיתי מהקובץ שיובא (${JSON.stringify(loanRowAfterImport)})`);
+
     console.log("\n🎓 חונכות ותלמידים");
     const student = await api("POST", "/api/students", { name: "תלמיד בדיקה" }, token);
     assert(student.status === 201, "הוספת תלמיד הצליחה");

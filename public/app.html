@@ -490,6 +490,34 @@
           <h3>ההלוואות שלי</h3>
           <div id="loans-list"><div class="empty-state">אין עדיין הלוואות רשומות</div></div>
         </div>
+        <div class="card">
+          <h3>ייבוא תנועות מאקסל / CSV</h3>
+          <!-- משוב אמיתי: "בהלוואות לא עשית שאני יכול לייבא נתונים". תשלומי הלוואה הם תנועות רגילות
+               לכל דבר (נשמרות בתנועות הרגילות, target=regular) - הייחוד כאן הוא עמודת "לקשר להלוואה"
+               בתצוגה המקדימה, כדי לסמן מראש אילו שורות מהקובץ שייכות לאיזו הלוואה. ר' giPreview/giCommit. -->
+          <div class="hint" style="margin-bottom:10px">מעלים קובץ שהורדתם מהבנק או מחברת כרטיס האשראי - התנועות ייובאו לתנועות הרגילות, עם אפשרות לקשר כל שורה (או את כולן יחד) להלוואה מסוימת.</div>
+          <div class="row">
+            <input id="loans-imp-file" class="plain" type="file" accept=".xlsx,.xls,.csv,.pdf">
+            <select id="loans-imp-source_type" class="plain">
+              <option value="bank">דף בנק (עו״ש)</option>
+              <option value="card">דף כרטיס אשראי</option>
+            </select>
+            <button class="btn secondary" onclick="giPreview('loans', 'regular')">תצוגה מקדימה</button>
+          </div>
+          <div id="loans-imp-preview-area" style="display:none; margin-top:14px">
+            <div class="row" style="margin-bottom:10px">
+              <span class="hint" id="loans-imp-preview-summary"></span>
+              <select id="loans-imp-bulk-loan" class="plain"><option value="">בחרו הלוואה לקישור מהיר</option></select>
+              <button class="btn secondary" onclick="giApplyBulkLoan('loans')">קשר את כל השורות המסומנות</button>
+            </div>
+            <div id="loans-imp-preview-table" style="overflow-x:auto"></div>
+            <button class="btn" style="margin-top:10px" onclick="giCommit('loans', 'regular')">ייבוא השורות המסומנות</button>
+          </div>
+          <div style="margin-top:16px">
+            <h4 style="margin-bottom:8px">קבצים שיובאו</h4>
+            <div id="loans-imp-batches-list"><div class="empty-state">עדיין לא יובא אף קובץ</div></div>
+          </div>
+        </div>
       </div>
 
       <!-- ---------- MENTORING ---------- -->
@@ -1355,36 +1383,48 @@ async function deleteApartmentTransaction(id, label, amount) {
   if (r.ok) { toast('התנועה נמחקה', 'success'); loadApartment(); }
 }
 
-// ---------- ייבוא קבצים גנרי לחתונה/דירה (target: 'wedding' | 'apartment') ----------
-// משוב אמיתי: "גם בקטגוריה דירה וגם בחתונה אין אופציה של יבוא קבצים". מנוע משותף אחד (לא כפילות
-// שלישית של קוד הייבוא) - התנועות הרגילות ממשיכות להשתמש בקוד הייעודי שלהן למעלה (previewImport/
-// commitImport/loadImportBatches וכו') בלי שינוי, כדי לא לסכן פיצ'ר קיים ובדוק. אלמנטים לפי מוסכמת
-// שם `${target}-imp-<suffix>` (ר' ה-HTML של view-wedding/view-apartment).
-const genericImportState = {}; // target -> { rows, filename }
-function giEl(target, suffix) { return document.getElementById(`${target}-imp-${suffix}`); }
+// ---------- ייבוא קבצים גנרי לחתונה/דירה/הלוואות (uiTarget: 'wedding' | 'apartment' | 'loans') ----------
+// משוב אמיתי: "גם בקטגוריה דירה וגם בחתונה אין אופציה של יבוא קבצים", ואח"כ "בהלוואות לא עשית שאני
+// יכול לייבא נתונים". מנוע משותף אחד (לא כפילות שלישית/רביעית של קוד הייבוא) - התנועות הרגילות
+// ממשיכות להשתמש בקוד הייעודי שלהן למעלה (previewImport/commitImport וכו') בלי שינוי. אלמנטים לפי
+// מוסכמת שם `${uiTarget}-imp-<suffix>` (ר' ה-HTML של view-wedding/view-apartment/view-loans).
+// "הלוואות" שונה מהותית מחתונה/דירה: אין לה טבלת "תנועות הלוואה" נפרדת משלה - תשלום הלוואה הוא
+// תנועה רגילה (target ל-API הוא 'regular', כמו כל דף בנק רגיל), רק עם loan_id אופציונלי לקישור.
+// לכן giPreview/giCommit מקבלות `apiTarget` נפרד מ-`uiTarget` (ברירת מחדל: זהה), ותצוגת ה-uiTarget
+// 'loans' מוסיפה עמודת "לקשר להלוואה" לכל שורה בתצוגה המקדימה + כפתור "קשר את הכל" מהיר.
+const genericImportState = {}; // uiTarget -> { rows, filename }
+function giEl(uiTarget, suffix) { return document.getElementById(`${uiTarget}-imp-${suffix}`); }
 
-async function giPreview(target) {
-  const fileInput = giEl(target, 'file');
+async function giPreview(uiTarget, apiTarget) {
+  apiTarget = apiTarget || uiTarget;
+  const fileInput = giEl(uiTarget, 'file');
   if (!fileInput.files.length) { toast('יש לבחור קובץ קודם', 'error'); return; }
   const file = fileInput.files[0];
-  const sourceType = giEl(target, 'source_type').value;
+  const sourceType = giEl(uiTarget, 'source_type').value;
   const dataUrl = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
-  const r = await api('POST', '/api/transactions/import/parse', { data_base64: dataUrl, filename: file.name, source_type: sourceType, target });
+  const r = await api('POST', '/api/transactions/import/parse', { data_base64: dataUrl, filename: file.name, source_type: sourceType, target: apiTarget });
   if (!r.ok) return;
-  genericImportState[target] = { filename: file.name, rows: r.data.transactions.map(t => ({ ...t, included: !t.alreadyImported })) };
-  giRenderPreview(target, r.data.skippedRowsCount);
+  genericImportState[uiTarget] = { filename: file.name, rows: r.data.transactions.map(t => ({ ...t, included: !t.alreadyImported, loanId: '' })) };
+  giRenderPreview(uiTarget, r.data.skippedRowsCount);
 }
 
-function giRenderPreview(target, skippedRowsCount) {
-  const state = genericImportState[target];
-  const area = giEl(target, 'preview-area');
-  const summary = giEl(target, 'preview-summary');
-  const tableEl = giEl(target, 'preview-table');
+function giApplyBulkLoan(uiTarget) {
+  const loanId = giEl(uiTarget, 'bulk-loan').value;
+  if (!loanId) { toast('יש לבחור הלוואה קודם', 'error'); return; }
+  genericImportState[uiTarget].rows.forEach(t => { if (t.included) t.loanId = loanId; });
+  giRenderPreview(uiTarget, 0);
+}
+
+function giRenderPreview(uiTarget, skippedRowsCount) {
+  const state = genericImportState[uiTarget];
+  const area = giEl(uiTarget, 'preview-area');
+  const summary = giEl(uiTarget, 'preview-summary');
+  const tableEl = giEl(uiTarget, 'preview-table');
   area.style.display = 'block';
   const alreadyCount = state.rows.filter(t => t.alreadyImported).length;
   summary.textContent = `זוהו ${state.rows.length} תנועות` +
@@ -1392,47 +1432,55 @@ function giRenderPreview(target, skippedRowsCount) {
     (skippedRowsCount ? ` · ${skippedRowsCount} שורות בקובץ דולגו (לא זוהו כתנועה תקינה)` : '');
 
   if (!state.rows.length) { tableEl.innerHTML = '<div class="empty-state">לא נמצאו תנועות בקובץ</div>'; return; }
+  const showLoanColumn = uiTarget === 'loans';
+  const loanOptionsHtml = '<option value="">בלי לקשר</option>' + loansCache.map(l => `<option value="${l.id}">${l.name.replace(/</g, '&lt;')}</option>`).join('');
   tableEl.innerHTML = `
     <table class="report-table">
-      <thead><tr><th></th><th>תאריך</th><th>תיאור</th><th>סכום</th><th>סוג</th><th>קטגוריה</th></tr></thead>
+      <thead><tr><th></th><th>תאריך</th><th>תיאור</th><th>סכום</th><th>סוג</th><th>קטגוריה</th>${showLoanColumn ? '<th>הלוואה</th>' : ''}</tr></thead>
       <tbody>
         ${state.rows.map((t, i) => `
           <tr style="${t.alreadyImported ? 'opacity:.55' : ''}">
-            <td><input type="checkbox" ${t.included ? 'checked' : ''} onchange="genericImportState['${target}'].rows[${i}].included = this.checked"></td>
+            <td><input type="checkbox" ${t.included ? 'checked' : ''} onchange="genericImportState['${uiTarget}'].rows[${i}].included = this.checked"></td>
             <td>${t.date}</td>
             <td>${(t.description || '').replace(/</g, '&lt;')}</td>
             <td class="num ${t.type}">₪${t.amount}</td>
             <td>
-              <select class="plain" onchange="genericImportState['${target}'].rows[${i}].type = this.value">
+              <select class="plain" onchange="genericImportState['${uiTarget}'].rows[${i}].type = this.value">
                 <option value="expense" ${t.type === 'expense' ? 'selected' : ''}>הוצאה</option>
                 <option value="income" ${t.type === 'income' ? 'selected' : ''}>הכנסה</option>
               </select>
             </td>
-            <td><input class="plain" value="${(t.category || '').replace(/"/g, '&quot;')}" onchange="genericImportState['${target}'].rows[${i}].category = this.value"></td>
+            <td><input class="plain" value="${(t.category || '').replace(/"/g, '&quot;')}" onchange="genericImportState['${uiTarget}'].rows[${i}].category = this.value"></td>
+            ${showLoanColumn ? `<td><select class="plain" onchange="genericImportState['${uiTarget}'].rows[${i}].loanId = this.value">${loanOptionsHtml.replace(`value="${t.loanId}"`, `value="${t.loanId}" selected`)}</select></td>` : ''}
           </tr>`).join('')}
       </tbody>
     </table>
     ${alreadyCount ? '<div class="hint" style="margin-top:8px">שורות מוצללות כבר יובאו בעבר - אפשר עדיין לסמן ולייבא אותן שוב במפורש אם צריך.</div>' : ''}`;
 }
 
-async function giCommit(target) {
-  const state = genericImportState[target];
+async function giCommit(uiTarget, apiTarget) {
+  apiTarget = apiTarget || uiTarget;
+  const state = genericImportState[uiTarget];
   const selected = (state && state.rows || []).filter(t => t.included);
   if (!selected.length) { toast('לא סומנה אף שורה לייבוא', 'error'); return; }
-  const r = await api('POST', '/api/transactions/import/commit', { transactions: selected, filename: state.filename, target });
+  const payload = selected.map(t => ({ ...t, loan_id: t.loanId || undefined }));
+  const r = await api('POST', '/api/transactions/import/commit', { transactions: payload, filename: state.filename, target: apiTarget });
   if (!r.ok) return;
   const { imported, skippedDuplicates, skippedInvalid } = r.data;
   toast(`יובאו ${imported} תנועות` + (skippedDuplicates ? ` · ${skippedDuplicates} דולגו ככבר-קיימות` : '') + (skippedInvalid ? ` · ${skippedInvalid} דולגו (לא תקינות)` : ''), 'success');
-  giEl(target, 'preview-area').style.display = 'none';
-  giEl(target, 'file').value = '';
-  genericImportState[target] = { rows: [], filename: '' };
-  if (target === 'wedding') loadWedding(); else if (target === 'apartment') loadApartment();
+  giEl(uiTarget, 'preview-area').style.display = 'none';
+  giEl(uiTarget, 'file').value = '';
+  genericImportState[uiTarget] = { rows: [], filename: '' };
+  if (uiTarget === 'wedding') loadWedding();
+  else if (uiTarget === 'apartment') loadApartment();
+  else if (uiTarget === 'loans') { loadTransactions(); loadLoans(); }
 }
 
-async function giLoadBatches(target) {
-  const el = giEl(target, 'batches-list');
+async function giLoadBatches(uiTarget, apiTarget) {
+  apiTarget = apiTarget || uiTarget;
+  const el = giEl(uiTarget, 'batches-list');
   if (!el) return;
-  const r = await api('GET', `/api/transactions/import/batches?target=${target}`);
+  const r = await api('GET', `/api/transactions/import/batches?target=${apiTarget}`);
   if (!r.ok) return;
   const batches = r.data.batches || [];
   el.innerHTML = batches.length ? batches.map(b => `
@@ -1441,16 +1489,18 @@ async function giLoadBatches(target) {
         <div class="li-main">${(b.filename || 'קובץ ללא שם').replace(/</g, '&lt;')}</div>
         <div class="li-sub">${b.count} תנועות · ${b.minDate === b.maxDate ? b.minDate : `${b.minDate} עד ${b.maxDate}`} · הכנסות ₪${b.income} · הוצאות ₪${b.expense}</div>
       </div>
-      <button class="btn secondary sm" onclick="giDeleteBatch('${target}', '${b.batchId}', '${(b.filename || 'קובץ ללא שם').replace(/'/g, "\\'")}', ${b.count})">מחיקת הקובץ</button>
+      <button class="btn secondary sm" onclick="giDeleteBatch('${uiTarget}', '${apiTarget}', '${b.batchId}', '${(b.filename || 'קובץ ללא שם').replace(/'/g, "\\'")}', ${b.count})">מחיקת הקובץ</button>
     </div>`).join('') : '<div class="empty-state">עדיין לא יובא אף קובץ</div>';
 }
 
-async function giDeleteBatch(target, batchId, filename, count) {
+async function giDeleteBatch(uiTarget, apiTarget, batchId, filename, count) {
   if (!confirm(`למחוק את כל ${count} התנועות שיובאו מהקובץ "${filename}"? לא ניתן לשחזר אחרי המחיקה.`)) return;
-  const r = await api('DELETE', `/api/transactions/import/batches/${batchId}?target=${target}`);
+  const r = await api('DELETE', `/api/transactions/import/batches/${batchId}?target=${apiTarget}`);
   if (!r.ok) return;
   toast(`נמחקו ${r.data.deleted} תנועות מהקובץ`, 'success');
-  if (target === 'wedding') loadWedding(); else if (target === 'apartment') loadApartment();
+  if (uiTarget === 'wedding') loadWedding();
+  else if (uiTarget === 'apartment') loadApartment();
+  else if (uiTarget === 'loans') { loadTransactions(); loadLoans(); }
 }
 
 // ---------- הלוואות (מעקב תשלומים) ----------
@@ -1466,6 +1516,7 @@ async function loadLoans() {
   loansCache = r.data.loans;
   renderLoansList();
   refreshLoanLinkSelects();
+  giLoadBatches('loans', 'regular');
 }
 
 async function addLoan() {
@@ -1550,6 +1601,11 @@ function refreshLoanLinkSelects() {
     const el = document.getElementById(id);
     if (!el) continue;
     el.innerHTML = '<option value="">בלי לקשר להלוואה מסוימת</option>' +
+      loansCache.map(l => `<option value="${l.id}">${l.name.replace(/</g, '&lt;')} (נותרו ${l.remainingInstallments})</option>`).join('');
+  }
+  const bulkLoanEl = document.getElementById('loans-imp-bulk-loan');
+  if (bulkLoanEl) {
+    bulkLoanEl.innerHTML = '<option value="">בחרו הלוואה לקישור מהיר</option>' +
       loansCache.map(l => `<option value="${l.id}">${l.name.replace(/</g, '&lt;')} (נותרו ${l.remainingInstallments})</option>`).join('');
   }
 }

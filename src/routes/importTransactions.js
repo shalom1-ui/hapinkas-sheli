@@ -139,10 +139,10 @@ function register(router) {
 
     const insert = importTarget.hasSource
       ? db.prepare(
-          "INSERT INTO transactions (user_id, type, amount, category, note, source, import_hash, import_batch_id, import_filename, occurred_at) VALUES (?, ?, ?, ?, ?, 'import', ?, ?, ?, ?)"
+          "INSERT INTO transactions (user_id, type, amount, category, note, source, import_hash, import_batch_id, import_filename, loan_id, occurred_at) VALUES (?, ?, ?, ?, ?, 'import', ?, ?, ?, ?, ?)"
         )
       : db.prepare(
-          `INSERT INTO ${importTarget.table} (user_id, type, amount, category, note, import_hash, import_batch_id, import_filename, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO ${importTarget.table} (user_id, type, amount, category, note, import_hash, import_batch_id, import_filename, loan_id, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         );
     let imported = 0;
     let skippedDuplicates = 0;
@@ -158,15 +158,18 @@ function register(router) {
       const category = raw.category ? String(raw.category).trim().slice(0, 100) : (type === "expense" ? "אחר" : "אחר");
       const t = { date, amount: Math.round(amount * 100) / 100, type, description };
       const hash = importHash(ctx.user.userId, t);
+      // קישור אופציונלי להלוואה (משוב אמיתי: "בהלוואות לא עשית שאני יכול לייבא נתונים") - כל שורה
+      // בתצוגה המקדימה יכולה לבחור להלוואה איזו היא שייכת (ר' loans.js), נבדק שההלוואה שייכת למשתמש הזה.
+      const loanId = raw.loan_id && db.prepare("SELECT id FROM loans WHERE id = ? AND user_id = ?").get(raw.loan_id, ctx.user.userId) ? raw.loan_id : null;
 
       const exists = db.prepare(`SELECT 1 FROM ${importTarget.table} WHERE user_id = ? AND import_hash = ?`).get(ctx.user.userId, hash);
       if (exists) { skippedDuplicates++; continue; }
 
       try {
-        // שני מקרי ה-target משתמשים באותה רשימת פרמטרים מכורכים בדיוק (9) - ההבדל היחיד בין שתי
+        // שני מקרי ה-target משתמשים באותה רשימת פרמטרים מכורכים בדיוק (10) - ההבדל היחיד בין שתי
         // ה-INSERT המוכנות למעלה הוא הטקסט הקבוע 'import' בעמודת source (רק בטבלת transactions
         // הרגילה, שהיא היחידה עם עמודה כזו) - לא פרמטר בפני עצמו, אז אותה קריאת run() מתאימה לשתיהן.
-        insert.run(ctx.user.userId, type, t.amount, category, description || null, hash, batchId, filename, `${date} 12:00:00`);
+        insert.run(ctx.user.userId, type, t.amount, category, description || null, hash, batchId, filename, loanId, `${date} 12:00:00`);
         imported++;
       } catch (e) {
         // התנגשות באינדקס הייחודי (idx_..._import_hash, ר' db.js) - מרוץ תזמון נדיר בין ה-SELECT
