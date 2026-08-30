@@ -118,13 +118,12 @@
   .chart-legend-item{display:flex; align-items:center; gap:6px; font-size:13px; color:var(--text-secondary); font-weight:600;}
   .chart-swatch{width:11px; height:11px; border-radius:3px; flex-shrink:0; display:inline-block;}
   .donut-wrap{display:flex; align-items:center; gap:24px; flex-wrap:wrap;}
-  /* תוקן (משוב אמיתי + אבחון ישיר מול ה-DOM החי אצל המשתמש, ר' renderCategoryDonut): גילינו שמשהו
-     בצד הלקוח (כנראה מסנן תוכן חיצוני כמו נטפרי - ר' [[netfree-content-filter-blocking]] בזיכרון -
-     שמזהה תמונות/SVG כ"תוכן" ומנטרל אותן) שינה בפועל את מאפייני width/height של ה-SVG ל-"1"/"1",
-     והעיגול נעלם לגמרי (רק המקרא הטקסטואלי נשאר גלוי). גודל ה-SVG הועבר מהמאפיינים width/height
-     הישירים (מטרה נפוצה לניטרול כזה) ל-class CSS בגיליון הסגנון - הרבה פחות סביר שמסנן יערוך ולידציה/
-     שינוי לתוך <style> קיים. */
-  .chart-donut-svg{width:180px; height:180px; flex-shrink:0;}
+  /* תוקן (משוב אמיתי + אבחון כפול מול ה-DOM החי אצל המשתמש): נסיון ראשון היה להעביר את גודל ה-<svg>
+     מ-width/height HTML ל-class CSS - לא עזר, כי Inspect Element הראה שמשהו (כנראה נטפרי, ר'
+     [[netfree-content-filter-blocking]]) עדיין מזריק width="1" height="1" על התג בעצמו, בלי קשר
+     למה שהקוד שולח. הפתרון שכן עבד: לא להשתמש בתג <svg> בכלל - שני הגרפים מצוירים על <canvas>
+     (ר' drawDonutCanvas/drawTrendCanvas ב-JS) - תג שסביר הרבה פחות שמסנן "תוכן קשר" יזהה כתמונה.
+     .chart-donut-canvas/.chart-trend-canvas לא צריכות width/height ב-CSS - נקבעים ב-JS ישירות. */
   .chart-legend-list{flex:1; min-width:200px;}
   .chart-legend-row{padding:6px 0; border-bottom:1px solid var(--border);}
   .chart-legend-row:last-child{border-bottom:none;}
@@ -1865,12 +1864,123 @@ function niceStep(maxVal) {
   return (norm < 1.5 ? 1 : norm < 3 ? 2 : norm < 7 ? 5 : 10) * mag;
 }
 
-// מלבן עם פינות מעוגלות רק למעלה ("קצה נתונים מעוגל, בסיס ישר" - ר' מיומנות dataviz) - SVG <rect>
-// לא תומך בעיגול חלקי של פינות, אז בונים נתיב ידני.
-function roundedTopRectPath(x, y, w, h, r) {
-  if (h <= 0) return '';
-  r = Math.min(r, w / 2, h);
-  return `M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h} Z`;
+// תוקן (משוב אמיתי + אבחון ישיר מול ה-DOM החי אצל משתמש: "Inspect Element" הראה בפירוש
+// width="1" height="1" על ה-<svg>, גם אחרי שהגודל כבר עבר ל-CSS בלבד ובלי שום width/height
+// HTML כתוב בקוד המקור בכלל!) - זה מוכיח שמשהו (כנראה נטפרי, ר' [[netfree-content-filter-blocking]]
+// בזיכרון) לא "עורך attribute קיים" אלא פשוט **מזהה כל תג בשם svg ומאלץ עליו width=1/height=1
+// בעצמו**, בלי קשר למה שהקוד שלנו שולח בפועל. אין דרך "לתקן CSS" נגד זה - הפתרון היחיד האמין הוא
+// לא להשתמש בתג <svg> בכלל. שני הגרפים (donut + trend) נבנים עכשיו על <canvas> (מצוירים בפועל
+// עם Canvas 2D API, לא מחרוזת HTML) - תג אחר לגמרי, שסביר הרבה פחות שמסנן "תוכן קשר"/מודעות
+// יזהה כ"תמונה שצריך לנטרל" (בניגוד ל-img/svg, canvas ריק כברירת מחדל וכל התוכן שלו מצויר
+// דרך קוד, לא נגזר מהתגית עצמה - הרבה פחות "חשוד" מבחינת סינון תמונות).
+function drawDonutCanvas(entries, total, unit, centerLabel, ariaLabel) {
+  const SIZE = 180, R = 70, strokeW = 30, cx = 90, cy = 90, gapRad = entries.length > 1 ? 0.035 : 0;
+  const canvas = document.createElement('canvas');
+  canvas.className = 'chart-donut-canvas';
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute('aria-label', ariaLabel);
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = SIZE * dpr;
+  canvas.height = SIZE * dpr;
+  canvas.style.width = SIZE + 'px';
+  canvas.style.height = SIZE + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.lineWidth = strokeW;
+
+  let angle = -Math.PI / 2;
+  entries.forEach(([, amt], i) => {
+    const sweep = (amt / total) * Math.PI * 2;
+    const start = angle + gapRad / 2;
+    const end = Math.max(start, angle + sweep - gapRad / 2);
+    ctx.beginPath();
+    ctx.strokeStyle = CATEGORY_COLORS[i % CATEGORY_COLORS.length];
+    ctx.arc(cx, cy, R, start, end);
+    ctx.stroke();
+    angle += sweep;
+  });
+
+  const cs = getComputedStyle(document.documentElement);
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = (cs.getPropertyValue('--text-secondary') || '#5b6270').trim();
+  ctx.font = '12px -apple-system, "Segoe UI", Arial, sans-serif';
+  ctx.fillText(centerLabel, cx, cy - 9);
+  ctx.fillStyle = (cs.getPropertyValue('--text-primary') || '#15181e').trim();
+  ctx.font = 'bold 17px -apple-system, "Segoe UI", Arial, sans-serif';
+  ctx.fillText(`${unit}${total.toLocaleString('he-IL')}`, cx, cy + 13);
+  return canvas;
+}
+
+// גרף עמודות מקובצות (הכנסות/הוצאות לפי חודש) - ר' הערה מעל drawDonutCanvas לגבי הסיבה ל-canvas
+// במקום SVG. פינות מעוגלות רק למעלה ("קצה נתונים מעוגל, בסיס ישר" - ר' מיומנות dataviz) דרך
+// ctx.roundRect עם רדיוסים נפרדים לכל פינה (top-left, top-right, bottom-right, bottom-left).
+function drawTrendCanvas(rows, W, H, padLeft, padRight, baseY, ticks, scaleY, groupW, barW, barGap) {
+  const canvas = document.createElement('canvas');
+  canvas.className = 'chart-trend-canvas';
+  canvas.setAttribute('role', 'img');
+  canvas.setAttribute('aria-label', 'גרף הכנסות מול הוצאות לפי חודש');
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = W * dpr;
+  canvas.height = H * dpr;
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  canvas.style.maxWidth = '100%';
+  canvas.style.display = 'block';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const cs = getComputedStyle(document.documentElement);
+  const borderColor = (cs.getPropertyValue('--border') || '#e6e9f0').trim();
+  const mutedColor = (cs.getPropertyValue('--text-muted') || '#8a90a0').trim();
+  const secondaryColor = (cs.getPropertyValue('--text-secondary') || '#5b6270').trim();
+  const successColor = (cs.getPropertyValue('--success') || '#1baf7a').trim();
+  const dangerColor = (cs.getPropertyValue('--danger') || '#e34948').trim();
+
+  ctx.strokeStyle = borderColor;
+  ctx.lineWidth = 1;
+  ctx.textAlign = 'end'; // RTL-friendly: מספרי הציר מיושרים לימין הקו (כמו text-anchor="end" ב-SVG הקודם)
+  ctx.textBaseline = 'middle';
+  ctx.font = '11px -apple-system, "Segoe UI", Arial, sans-serif';
+  ctx.fillStyle = mutedColor;
+  ticks.forEach(t => {
+    const y = baseY - scaleY(t);
+    ctx.beginPath();
+    ctx.moveTo(padLeft, y);
+    ctx.lineTo(W - padRight, y);
+    ctx.stroke();
+    ctx.fillText(t.toLocaleString('he-IL'), padLeft - 8, y);
+  });
+  ctx.beginPath();
+  ctx.moveTo(padLeft, baseY);
+  ctx.lineTo(W - padRight, baseY);
+  ctx.stroke();
+
+  const roundTopRect = (x, y, w, h, r) => {
+    if (h <= 0) return;
+    r = Math.min(r, w / 2, h);
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x, y, w, h, [r, r, 0, 0]);
+    else ctx.rect(x, y, w, h); // גיבוי לדפדפן ישן בלי roundRect - מלבן חד, לא קריטי
+    ctx.fill();
+  };
+
+  ctx.textAlign = 'center';
+  rows.forEach((m, i) => {
+    const gx = padLeft + i * groupW;
+    const incH = scaleY(m.income), expH = scaleY(m.expense);
+    const incX = gx + (groupW - (barW * 2 + barGap)) / 2;
+    const expX = incX + barW + barGap;
+    ctx.fillStyle = successColor;
+    roundTopRect(incX, baseY - incH, barW, incH, 4);
+    ctx.fillStyle = dangerColor;
+    roundTopRect(expX, baseY - expH, barW, expH, 4);
+    const [yy, mm] = String(m.month).split('-');
+    const shortLabel = mm ? `${mm}/${yy.slice(2)}` : m.month;
+    ctx.fillStyle = secondaryColor;
+    ctx.fillText(shortLabel, gx + groupW / 2, baseY + 18);
+  });
+  return canvas;
 }
 
 function renderTrendChart(rows, elId) {
@@ -1890,37 +2000,16 @@ function renderTrendChart(rows, elId) {
   const baseY = padTop + plotH;
   const scaleY = v => plotH * (v / niceMax);
 
-  const gridLines = ticks.map(t => {
-    const y = baseY - scaleY(t);
-    return `<line x1="${padLeft}" y1="${y}" x2="${W - padRight}" y2="${y}" style="stroke:var(--border)" stroke-width="1"/>
-            <text x="${padLeft - 8}" y="${y + 4}" text-anchor="end" font-size="11" style="fill:var(--text-muted)">${t.toLocaleString('he-IL')}</text>`;
-  }).join('');
-
-  const bars = rows.map((m, i) => {
-    const gx = padLeft + i * groupW;
-    const incH = scaleY(m.income), expH = scaleY(m.expense);
-    const incX = gx + (groupW - (barW * 2 + barGap)) / 2;
-    const expX = incX + barW + barGap;
-    const [yy, mm] = String(m.month).split('-');
-    const shortLabel = mm ? `${mm}/${yy.slice(2)}` : m.month;
-    return `
-      <path d="${roundedTopRectPath(incX, baseY - incH, barW, incH, 4)}" style="fill:var(--success)"><title>${m.month} · הכנסות ₪${m.income.toLocaleString('he-IL')}</title></path>
-      <path d="${roundedTopRectPath(expX, baseY - expH, barW, expH, 4)}" style="fill:var(--danger)"><title>${m.month} · הוצאות ₪${m.expense.toLocaleString('he-IL')}</title></path>
-      <text x="${gx + groupW / 2}" y="${baseY + 18}" text-anchor="middle" font-size="11" style="fill:var(--text-secondary)">${shortLabel}</text>`;
-  }).join('');
-
-  el.innerHTML = `
-    <div class="chart-legend">
-      <span class="chart-legend-item"><span class="chart-swatch" style="background:var(--success)"></span>הכנסות</span>
-      <span class="chart-legend-item"><span class="chart-swatch" style="background:var(--danger)"></span>הוצאות</span>
-    </div>
-    <div style="overflow-x:auto">
-      <svg viewBox="0 0 ${W} ${H}" style="width:${W}px; height:${H}px; max-width:100%; display:block" role="img" aria-label="גרף הכנסות מול הוצאות לפי חודש">
-        <line x1="${padLeft}" y1="${baseY}" x2="${W - padRight}" y2="${baseY}" style="stroke:var(--border)" stroke-width="1"/>
-        ${gridLines}
-        ${bars}
-      </svg>
-    </div>`;
+  el.innerHTML = '';
+  const legendDiv = document.createElement('div');
+  legendDiv.className = 'chart-legend';
+  legendDiv.innerHTML = `
+    <span class="chart-legend-item"><span class="chart-swatch" style="background:var(--success)"></span>הכנסות</span>
+    <span class="chart-legend-item"><span class="chart-swatch" style="background:var(--danger)"></span>הוצאות</span>`;
+  const scrollWrap = document.createElement('div');
+  scrollWrap.style.overflowX = 'auto';
+  scrollWrap.appendChild(drawTrendCanvas(rows, W, H, padLeft, padRight, baseY, ticks, scaleY, groupW, barW, barGap));
+  el.append(legendDiv, scrollWrap);
 }
 
 // עיגול (donut) עם ה"חור" באמצע נושא את סה"כ ההוצאות - ר' בקשת המשתמש "עיגול עם צבעים". מעל 6
@@ -1950,38 +2039,31 @@ function renderCategoryDonut(byCategory, elId, options) {
   }
 
   const total = entries.reduce((s, [, v]) => s + v, 0);
-  const R = 70, strokeW = 30, cx = 90, cy = 90, gap = 2;
-  const circumference = 2 * Math.PI * R;
 
-  let offset = 0;
-  const segments = entries.map(([cat, amt], i) => {
-    const frac = amt / total;
-    const len = Math.max(0, frac * circumference - (entries.length > 1 ? gap : 0));
-    const color = CATEGORY_COLORS[i % CATEGORY_COLORS.length];
-    const dashoffset = -offset;
-    offset += frac * circumference;
-    return `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" style="stroke:${color}" stroke-width="${strokeW}"
-              stroke-dasharray="${len} ${circumference - len}" stroke-dashoffset="${dashoffset}" transform="rotate(-90 ${cx} ${cy})">
-              <title>${cat} · ${unit}${amt.toLocaleString('he-IL')} (${Math.round(frac * 100)}%)</title>
-            </circle>`;
-  }).join('');
+  el.innerHTML = '';
+  const wrap = document.createElement('div');
+  wrap.className = 'donut-wrap';
+  wrap.appendChild(drawDonutCanvas(entries, total, unit, centerLabel, ariaLabel));
 
-  const legend = entries.map(([cat, amt], i) => `
-    <div class="chart-legend-item chart-legend-row">
-      <span class="chart-swatch" style="background:${CATEGORY_COLORS[i % CATEGORY_COLORS.length]}"></span>
-      <span style="flex:1">${cat}</span>
-      <span class="chart-legend-amount">${unit}${amt.toLocaleString('he-IL')} · ${Math.round(amt / total * 100)}%</span>
-    </div>`).join('');
-
-  el.innerHTML = `
-    <div class="donut-wrap">
-      <svg viewBox="0 0 180 180" class="chart-donut-svg" role="img" aria-label="${ariaLabel}">
-        ${segments}
-        <text x="90" y="85" text-anchor="middle" font-size="12" style="fill:var(--text-secondary)">${centerLabel}</text>
-        <text x="90" y="105" text-anchor="middle" font-size="17" font-weight="700" style="fill:var(--text-primary)">${unit}${total.toLocaleString('he-IL')}</text>
-      </svg>
-      <div class="chart-legend-list">${legend}</div>
-    </div>`;
+  const legendList = document.createElement('div');
+  legendList.className = 'chart-legend-list';
+  entries.forEach(([cat, amt], i) => {
+    const row = document.createElement('div');
+    row.className = 'chart-legend-item chart-legend-row';
+    const swatch = document.createElement('span');
+    swatch.className = 'chart-swatch';
+    swatch.style.background = CATEGORY_COLORS[i % CATEGORY_COLORS.length];
+    const label = document.createElement('span');
+    label.style.flex = '1';
+    label.textContent = cat;
+    const amountEl = document.createElement('span');
+    amountEl.className = 'chart-legend-amount';
+    amountEl.textContent = `${unit}${amt.toLocaleString('he-IL')} · ${Math.round(amt / total * 100)}%`;
+    row.append(swatch, label, amountEl);
+    legendList.appendChild(row);
+  });
+  wrap.appendChild(legendList);
+  el.appendChild(wrap);
 }
 
 // "מילון" קטגוריות אישי - מוסיף לרשימת ההצעות הקבועה (category-suggestions) גם קטגוריות מותאמות-
