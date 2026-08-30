@@ -111,6 +111,21 @@ function register(router) {
     db.prepare("DELETE FROM wedding_transactions WHERE id = ?").run(row.id);
     return json(ctx.res, 200, { message: "התנועה נמחקה" });
   }));
+
+  // מגמה חודשית - משוב אמיתי: "אני רוצה גרף כמו בתנועות רגילות" (שם כבר יש עמודות הכנסות/הוצאות
+  // לפי חודש, ר' routes/transactions.js) - אותו דבר בדיוק, על wedding_transactions.
+  router.get("/api/wedding/transactions/trend", requireAuth(async (ctx) => {
+    const rows = db
+      .prepare(
+        `SELECT strftime('%Y-%m', occurred_at) AS month,
+                SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) AS income,
+                SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) AS expense
+         FROM wedding_transactions WHERE user_id = ?
+         GROUP BY month ORDER BY month DESC LIMIT 12`
+      )
+      .all(ctx.user.userId);
+    return json(ctx.res, 200, { trend: rows.reverse() });
+  }));
 }
 
 module.exports = { register, WEDDING_EXPENSE_CATEGORIES, WEDDING_INCOME_CATEGORIES };

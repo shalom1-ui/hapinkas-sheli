@@ -104,6 +104,20 @@ function register(router) {
     db.prepare("DELETE FROM apartment_transactions WHERE id = ?").run(row.id);
     return json(ctx.res, 200, { message: "התנועה נמחקה" });
   }));
+
+  // מגמה חודשית - משוב אמיתי: "אני רוצה גרף כמו בתנועות רגילות" - אותו דבר בדיוק, על apartment_transactions.
+  router.get("/api/apartment/transactions/trend", requireAuth(async (ctx) => {
+    const rows = db
+      .prepare(
+        `SELECT strftime('%Y-%m', occurred_at) AS month,
+                SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) AS income,
+                SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) AS expense
+         FROM apartment_transactions WHERE user_id = ?
+         GROUP BY month ORDER BY month DESC LIMIT 12`
+      )
+      .all(ctx.user.userId);
+    return json(ctx.res, 200, { trend: rows.reverse() });
+  }));
 }
 
 module.exports = { register, APARTMENT_EXPENSE_CATEGORIES, APARTMENT_INCOME_CATEGORIES };

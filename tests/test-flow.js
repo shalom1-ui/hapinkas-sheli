@@ -858,6 +858,21 @@ async function run() {
     const apartmentDelete = await api("DELETE", `/api/apartment/transactions/${apartmentTama.data.transaction.id}`, null, token);
     assert(apartmentDelete.status === 200, "מחיקת תנועת דירה (הבעלים האמיתי) הצליחה");
 
+    console.log("\n📈 דוח חודשי (מגמה) לחתונה ולדירה - משוב אמיתי: 'אני רוצה גרף כמו בתנועות רגילות'");
+    const weddingTrendCheck = await api("POST", "/api/wedding/transactions", { type: "income", amount: 500, category: "תרומות" }, token);
+    const weddingTrend = await api("GET", "/api/wedding/transactions/trend", null, token);
+    assert(weddingTrend.status === 200 && Array.isArray(weddingTrend.data.trend), `מגמה חודשית לחתונה זמינה (${JSON.stringify(weddingTrend.data)})`);
+    const thisMonthWedding = weddingTrend.data.trend.find(m => m.income > 0);
+    assert(thisMonthWedding && thisMonthWedding.income >= 500, "התרומה שנרשמה כרגע מופיעה בחודש הנוכחי במגמת החתונה");
+    await api("DELETE", `/api/wedding/transactions/${weddingTrendCheck.data.transaction.id}`, null, token);
+
+    const apartmentTrendCheck = await api("POST", "/api/apartment/transactions", { type: "expense", amount: 700, category: "רגיל" }, token);
+    const apartmentTrend = await api("GET", "/api/apartment/transactions/trend", null, token);
+    assert(apartmentTrend.status === 200 && Array.isArray(apartmentTrend.data.trend), `מגמה חודשית לדירה זמינה (${JSON.stringify(apartmentTrend.data)})`);
+    const thisMonthApartment = apartmentTrend.data.trend.find(m => m.expense > 0);
+    assert(thisMonthApartment && thisMonthApartment.expense >= 700, "ההוצאה שנרשמה כרגע מופיעה בחודש הנוכחי במגמת הדירה");
+    await api("DELETE", `/api/apartment/transactions/${apartmentTrendCheck.data.transaction.id}`, null, token);
+
     console.log("\n📥 ייבוא קבצים לחתונה ולדירה - משוב אמיתי: 'גם בקטגוריה דירה וגם בחתונה אין אופציה של יבוא קבצים'");
     // אותו מנוע ייבוא בדיוק (src/routes/importTransactions.js) עם target=wedding|apartment - בודקים
     // ששני היעדים עובדים עצמאית, לא מתערבבים זה בזה ולא בתנועות הרגילות, ושהדדופ/מחיקת-קובץ-שלם

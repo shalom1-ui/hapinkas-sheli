@@ -415,6 +415,13 @@
             <div id="wedding-imp-batches-list"><div class="empty-state">עדיין לא יובא אף קובץ</div></div>
           </div>
         </div>
+        <!-- משוב אמיתי: "אני רוצה גרף כמו בתנועות רגילות" - אותו כרטיס דוח חודשי בדיוק. -->
+        <div class="card">
+          <h3>דוח חודשי: תרומות מול הוצאות</h3>
+          <div class="hint" style="margin-bottom:10px">12 החודשים האחרונים שבהם היו תנועות. "יתרת חודש" היא הכנסות פחות הוצאות לאותו חודש בלבד (לא מצטבר).</div>
+          <div id="wed-trend-chart"></div>
+          <div id="wed-trend-report"><div class="empty-state">אין עדיין מספיק נתונים לדוח</div></div>
+        </div>
         <div class="card">
           <h3>הוצאות לפי קטגוריה</h3>
           <div id="wed-categories"><div class="empty-state">אין עדיין הוצאות להצגה</div></div>
@@ -486,6 +493,13 @@
             <h4 style="margin-bottom:8px">קבצים שיובאו</h4>
             <div id="apartment-imp-batches-list"><div class="empty-state">עדיין לא יובא אף קובץ</div></div>
           </div>
+        </div>
+        <!-- משוב אמיתי: "אני רוצה גרף כמו בתנועות רגילות" - אותו כרטיס דוח חודשי בדיוק. -->
+        <div class="card">
+          <h3>דוח חודשי: הכנסות מול הוצאות</h3>
+          <div class="hint" style="margin-bottom:10px">12 החודשים האחרונים שבהם היו תנועות. "יתרת חודש" היא הכנסות פחות הוצאות לאותו חודש בלבד (לא מצטבר).</div>
+          <div id="apt-trend-chart"></div>
+          <div id="apt-trend-report"><div class="empty-state">אין עדיין מספיק נתונים לדוח</div></div>
         </div>
         <div class="card">
           <h3>הוצאות לפי קטגוריה</h3>
@@ -1175,16 +1189,28 @@ function onWeddingTypeChange() {
   document.getElementById('wed_category').innerHTML = weddingCategoryOptionsHtml(type);
   document.getElementById('wed_category_other').style.display = 'none';
   document.getElementById('wed_category_other').value = '';
-  loadWeddingCategoryDictionary(type);
+  loadWeddingCategoryDictionary();
 }
 
 // הצעות השלמה אוטומטית לקטגוריית "אחר" חופשית בחתונה (מילון נפרד לגמרי מ-category-suggestions
 // הרגיל של התנועות, ר' kind='wedding_income_category_other'/'wedding_expense_category_other' בשרת).
-async function loadWeddingCategoryDictionary(type) {
-  const r = await api('GET', '/api/wedding/dictionary' + (type === 'income' ? '?type=income' : '?type=expense'));
+// תוקן (משוב אמיתי: "אחרי עריכה מסומנת תן לי שוב את הקטגוריות ביגוד מתנות וכו' - לא שאני אצטרך
+// לכתוב") - הרשימה הזו הייתה כוללת רק ניסוחי "אחר" חופשיים שהוכתבו בעבר, בלי הקטגוריות הקבועות
+// (ביגוד/אולם חתונה/מתנות וכו') בכלל - כך שבפאנל "עריכת המסומנות" (ששותף לאותו datalist) המשתמש
+// לא ראה אותן ונאלץ להקליד אותן מחדש בעצמו. עכשיו ממזגים את *כל* הקטגוריות הקבועות (הכנסה+הוצאה
+// יחד) עם *כל* ניסוחי "אחר" מהמילון (שני הסוגים) - בלי תלות ב-type הנוכחי, כי הפאנל "עריכת
+// המסומנות" יכול לחול על תערובת של תנועות הכנסה והוצאה גם יחד.
+async function loadWeddingCategoryDictionary() {
   const dl = document.getElementById('wedding-category-suggestions');
-  if (!r.ok || !dl) return;
-  dl.innerHTML = (r.data.phrases || []).map(p => `<option value="${p.replace(/"/g, '&quot;')}">`).join('');
+  if (!dl) return;
+  const [expenseDict, incomeDict] = await Promise.all([
+    api('GET', '/api/wedding/dictionary?type=expense'),
+    api('GET', '/api/wedding/dictionary?type=income'),
+  ]);
+  const fixed = [...new Set([...(weddingCategories.expense || []), ...(weddingCategories.income || [])])];
+  const dictPhrases = [...(expenseDict.ok ? expenseDict.data.phrases || [] : []), ...(incomeDict.ok ? incomeDict.data.phrases || [] : [])];
+  const merged = [...fixed, ...dictPhrases.filter(p => !fixed.includes(p))];
+  dl.innerHTML = merged.map(p => `<option value="${p.replace(/"/g, '&quot;')}">`).join('');
 }
 
 function onWeddingCategoryChange() {
@@ -1218,6 +1244,7 @@ async function loadWedding() {
   if (!weddingCategories.expense.length) await loadWeddingCategories();
   if (document.getElementById('wed_category') && !document.getElementById('wed_category').options.length) onWeddingTypeChange();
   giLoadBatches('wedding');
+  loadWeddingTrend();
 
   const r = await api('GET', '/api/wedding/transactions');
   if (!r.ok) return;
@@ -1333,14 +1360,22 @@ function onApartmentTypeChange() {
   document.getElementById('apt_category').innerHTML = apartmentCategoryOptionsHtml(type);
   document.getElementById('apt_category_other').style.display = 'none';
   document.getElementById('apt_category_other').value = '';
-  loadApartmentCategoryDictionary(type);
+  loadApartmentCategoryDictionary();
 }
 
-async function loadApartmentCategoryDictionary(type) {
-  const r = await api('GET', '/api/apartment/dictionary' + (type === 'income' ? '?type=income' : '?type=expense'));
+// תוקן (משוב אמיתי - ר' הערה מקבילה ב-loadWeddingCategoryDictionary): מוזגות *כל* הקטגוריות
+// הקבועות (רגיל/תבע משותף וכו', הכנסה+הוצאה יחד) עם *כל* ניסוחי "אחר" חופשיים מהמילון.
+async function loadApartmentCategoryDictionary() {
   const dl = document.getElementById('apartment-category-suggestions');
-  if (!r.ok || !dl) return;
-  dl.innerHTML = (r.data.phrases || []).map(p => `<option value="${p.replace(/"/g, '&quot;')}">`).join('');
+  if (!dl) return;
+  const [expenseDict, incomeDict] = await Promise.all([
+    api('GET', '/api/apartment/dictionary?type=expense'),
+    api('GET', '/api/apartment/dictionary?type=income'),
+  ]);
+  const fixed = [...new Set([...(apartmentCategories.expense || []), ...(apartmentCategories.income || [])])];
+  const dictPhrases = [...(expenseDict.ok ? expenseDict.data.phrases || [] : []), ...(incomeDict.ok ? incomeDict.data.phrases || [] : [])];
+  const merged = [...fixed, ...dictPhrases.filter(p => !fixed.includes(p))];
+  dl.innerHTML = merged.map(p => `<option value="${p.replace(/"/g, '&quot;')}">`).join('');
 }
 
 function onApartmentCategoryChange() {
@@ -1374,6 +1409,7 @@ async function loadApartment() {
   if (!apartmentCategories.expense.length) await loadApartmentCategories();
   if (document.getElementById('apt_category') && !document.getElementById('apt_category').options.length) onApartmentTypeChange();
   giLoadBatches('apartment');
+  loadApartmentTrend();
 
   const r = await api('GET', '/api/apartment/transactions');
   if (!r.ok) return;
@@ -1725,6 +1761,69 @@ async function loadTransactionsTrend() {
     </table>`;
 }
 
+// דוח חודשי לחתונה/דירה - משוב אמיתי: "אני רוצה גרף כמו בתנועות רגילות". אותה לוגיקה בדיוק כמו
+// loadTransactionsTrend, רק עם endpoint/אלמנטים שונים - לא הפכתי גם את loadTransactionsTrend עצמה
+// לגנרית כדי לא לגעת בקוד קיים ובדוק של התנועות הרגילות.
+async function loadWeddingTrend() {
+  const r = await api('GET', '/api/wedding/transactions/trend');
+  const el = document.getElementById('wed-trend-report');
+  if (!el || !r.ok) return;
+  const rows = (r.data.trend || []).filter(m => m.income > 0 || m.expense > 0);
+  renderTrendChart(rows, 'wed-trend-chart');
+  if (!rows.length) { el.innerHTML = '<div class="empty-state">אין עדיין מספיק נתונים לדוח</div>'; return; }
+  const totalIncome = rows.reduce((sum, m) => sum + m.income, 0);
+  const totalExpense = rows.reduce((sum, m) => sum + m.expense, 0);
+  el.innerHTML = `
+    <table class="report-table">
+      <thead><tr><th>חודש</th><th>הכנסות</th><th>הוצאות</th><th>יתרת חודש</th></tr></thead>
+      <tbody>
+        ${rows.map(m => `
+          <tr>
+            <td>${m.month}</td>
+            <td class="num income">₪${m.income}</td>
+            <td class="num expense">₪${m.expense}</td>
+            <td class="num">₪${m.income - m.expense}</td>
+          </tr>`).join('')}
+        <tr class="total-row">
+          <td>סה"כ</td>
+          <td class="num income">₪${totalIncome}</td>
+          <td class="num expense">₪${totalExpense}</td>
+          <td class="num">₪${totalIncome - totalExpense}</td>
+        </tr>
+      </tbody>
+    </table>`;
+}
+
+async function loadApartmentTrend() {
+  const r = await api('GET', '/api/apartment/transactions/trend');
+  const el = document.getElementById('apt-trend-report');
+  if (!el || !r.ok) return;
+  const rows = (r.data.trend || []).filter(m => m.income > 0 || m.expense > 0);
+  renderTrendChart(rows, 'apt-trend-chart');
+  if (!rows.length) { el.innerHTML = '<div class="empty-state">אין עדיין מספיק נתונים לדוח</div>'; return; }
+  const totalIncome = rows.reduce((sum, m) => sum + m.income, 0);
+  const totalExpense = rows.reduce((sum, m) => sum + m.expense, 0);
+  el.innerHTML = `
+    <table class="report-table">
+      <thead><tr><th>חודש</th><th>הכנסות</th><th>הוצאות</th><th>יתרת חודש</th></tr></thead>
+      <tbody>
+        ${rows.map(m => `
+          <tr>
+            <td>${m.month}</td>
+            <td class="num income">₪${m.income}</td>
+            <td class="num expense">₪${m.expense}</td>
+            <td class="num">₪${m.income - m.expense}</td>
+          </tr>`).join('')}
+        <tr class="total-row">
+          <td>סה"כ</td>
+          <td class="num income">₪${totalIncome}</td>
+          <td class="num expense">₪${totalExpense}</td>
+          <td class="num">₪${totalIncome - totalExpense}</td>
+        </tr>
+      </tbody>
+    </table>`;
+}
+
 // ---------- גרפים (SVG בלי ספרייה חיצונית, בדיוק כמו שאר הפרויקט) ----------
 // בקשת פיצ'ר: "בתנועות שיהיה גרף הכנסות מול הוצאות, או שיהיה עיגול עם צבעים" - שני הגרפים למטה
 // עונים על שני החלקים: renderTrendChart (עמודות מקובצות לפי חודש) ו-renderCategoryDonut (עיגול).
@@ -1750,8 +1849,8 @@ function roundedTopRectPath(x, y, w, h, r) {
   return `M${x},${y + h} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + w - r},${y} Q${x + w},${y} ${x + w},${y + r} L${x + w},${y + h} Z`;
 }
 
-function renderTrendChart(rows) {
-  const el = document.getElementById('tx-trend-chart');
+function renderTrendChart(rows, elId) {
+  const el = document.getElementById(elId || 'tx-trend-chart');
   if (!el) return;
   if (!rows.length) { el.innerHTML = ''; return; }
 
