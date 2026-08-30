@@ -215,7 +215,7 @@ function register(router) {
   // מהשורות שייכות בפועל לתקציב נפרד - מוחקת מהטבלה המקורית ומכניסה לטבלת היעד (לא רק מעדכנת
   // category, כי אלה טבלאות DB נפרדות לגמרי - ר' הערת הפתיחה של הקובץ).
   router.post("/api/transactions/move", requireAuth(async (ctx) => {
-    const { from, id, to, force } = ctx.body;
+    const { from, id, to, force, category } = ctx.body;
     if (!from || !to) return json(ctx.res, 400, { error: "יש לציין מקור ויעד" });
     const fromTarget = resolveImportTarget(from);
     const toTarget = resolveImportTarget(to);
@@ -242,10 +242,15 @@ function register(router) {
       }
     }
 
+    // תוקן (משוב אמיתי: "תוסיף שיהיה קטגוריה בתוך חתונה - ביגוד וכו'") - עד כה הקטגוריה המקורית
+    // (של התנועה הרגילה, למשל "אולם" חופשי מדף בנק) פשוט הועתקה כמות שהיא ליעד, גם אם היא לא
+    // אחת מהקטגוריות הקבועות של חתונה/דירה. category אופציונלי בבקשה (נבחר בממשק מתוך רשימת
+    // הקטגוריות הקבועות של היעד עצמו, ר' onMoveTargetChange ב-public/app.html) דורס אותה כשנשלח.
+    const destCategory = category !== undefined && category !== null && category !== "" ? category : row.category;
     const insert = toTarget.hasSource
       ? db.prepare("INSERT INTO transactions (user_id, type, amount, category, note, source, loan_id, occurred_at) VALUES (?, ?, ?, ?, ?, 'web', ?, ?)")
       : db.prepare(`INSERT INTO ${toTarget.table} (user_id, type, amount, category, note, loan_id, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
-    const info = insert.run(ctx.user.userId, row.type, row.amount, row.category, row.note, row.loan_id, row.occurred_at);
+    const info = insert.run(ctx.user.userId, row.type, row.amount, destCategory, row.note, row.loan_id, row.occurred_at);
 
     // תוקן (משוב אמיתי: "שיהיה לי אפשרות להציג בצד תצוגה של הבנק שם אני רואה את הפרטים לאן הועבר") -
     // רק "transactions" הרגילה יודעת "לזכור" שהיא הועברה (יש לה עמודת moved_to, ר' db.js) - השורה

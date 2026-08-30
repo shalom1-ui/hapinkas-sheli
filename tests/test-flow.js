@@ -419,11 +419,39 @@ async function run() {
     const dupMoveForced = await api("POST", "/api/transactions/move", { from: "regular", id: todayTx.data.transaction.id, to: "apartment", force: true }, token);
     assert(dupMoveForced.status === 200, "עם force:true, ההעברה מתבצעת בכל זאת למרות חשד הכפילות");
 
+    console.log("\n➡️ העברת תנועה עם דריסת קטגוריה - משוב אמיתי: 'תוסיף שיהיה קטגוריה בתוך חתונה - ביגוד וכו''");
+    // תנועה רגילה עם קטגוריה חופשית ("קניה בבגדים") שאינה אחת מהקטגוריות הקבועות של חתונה בכלל -
+    // ההעברה כוללת category מפורש מרשימת הקטגוריות הקבועות של היעד, שאמור לדרוס את הקטגוריה המקורית.
+    const txForCategoryOverride = await api("POST", "/api/transactions", { type: "expense", amount: 300, category: "קניה בבגדים" }, token);
+    const overrideMove = await api(
+      "POST", "/api/transactions/move",
+      { from: "regular", id: txForCategoryOverride.data.transaction.id, to: "wedding", category: "ביגוד" },
+      token
+    );
+    assert(
+      overrideMove.status === 200 && overrideMove.data.transaction.category === "ביגוד",
+      `הקטגוריה שנשלחה בבקשת ההעברה (מרשימת הקטגוריות הקבועות של היעד) דורסת את הקטגוריה המקורית (${JSON.stringify(overrideMove.data)})`
+    );
+
+    console.log("\n➡️ 'העברה' להלוואות - קישור תנועה קיימת (לא טבלת יעד נפרדת) - משוב אמיתי: 'אין אופציה העבר להלוואות'");
+    // בניגוד לחתונה/דירה, "העברה" להלוואות היא לא POST /api/transactions/move (אין wedding_transactions
+    // מקביל להלוואות) - היא סתם PUT עם loan_id על התנועה הרגילה הקיימת, שנשארת בתנועות הרגילות.
+    const loanForLinkTest = await api("POST", "/api/loans", { name: "הלוואה לבדיקת קישור מהתנועות", total_installments: 10, start_date: "2026-01-01" }, token);
+    const loanIdForLink = loanForLinkTest.data.loan.id;
+    const txForLoanLink = await api("POST", "/api/transactions", { type: "expense", amount: 400, category: "תשלום מהבנק" }, token);
+    const linkToLoan = await api("PUT", `/api/transactions/${txForLoanLink.data.transaction.id}`, { loan_id: loanIdForLink }, token);
+    assert(
+      linkToLoan.status === 200 && linkToLoan.data.transaction.loan_id == loanIdForLink && linkToLoan.data.transaction.moved_to === null,
+      `תנועה רגילה קושרה להלוואה בלי לעבור לטבלה אחרת ובלי להיות מסומנת כ"הועברה" (${JSON.stringify(linkToLoan.data)})`
+    );
+
     // ניקוי - הבדיקות הבאות (חתונה/דירה/מעשרות) מניחות בסיס נקי, ומשתמשות באותו token/משתמש משותף
     // לאורך כל הקובץ - בלי הניקוי הזה, התנועות שהועברו/נוצרו כאן "דולפות" לסכומים המדויקים שם.
     await api("DELETE", `/api/wedding/transactions/${movedWeddingId}`, null, token);
     await api("DELETE", `/api/apartment/transactions/${existingInApartment.data.transaction.id}`, null, token);
     await api("DELETE", `/api/apartment/transactions/${dupMoveForced.data.transaction.id}`, null, token);
+    await api("DELETE", `/api/wedding/transactions/${overrideMove.data.transaction.id}`, null, token);
+    await api("DELETE", `/api/loans/${loanIdForLink}`, null, token);
 
     console.log("\n📥 ייבוא אקסל/CSV של דף בנק - זיהוי עמודות זכות/חובה אוטומטי");
     // משוב אמיתי ממשתמש: "רוצה להכניס אקסל של דפי בנק או דפי כרטיס אשראי, שיוכל להוריד אותו

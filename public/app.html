@@ -1021,12 +1021,13 @@ async function deleteTransaction(id, label, amount) {
 // הפרטים לאן הועבר". לא משתמשים בעוטפת api() הרגילה כאן, כדי לא להציג טוסט גולמי ("duplicate_suspected")
 // במקרה של חשד כפילות (משוב אמיתי: "במידה ויש כפל שהמערכת תשאל ותזהה שיש כפל") - שם רוצים confirm()
 // ידידותי עם ההודעה שהשרת מחזיר, ורק בעקבותיו לשלוח שוב עם force:true.
-async function moveTransaction(id, to, force) {
+async function moveTransaction(id, to, force, category) {
   if (!to) return;
   const headers = { 'Content-Type': 'application/json' };
   if (token) headers['Authorization'] = 'Bearer ' + token;
   const payload = { from: 'regular', id, to };
   if (force) payload.force = true;
+  if (category) payload.category = category;
   let res, data;
   try {
     res = await fetch(base() + '/api/transactions/move', { method: 'POST', headers, body: JSON.stringify(payload) });
@@ -1044,11 +1045,92 @@ async function moveTransaction(id, to, force) {
     // הודעת השרת (ר' POST /api/transactions/move) כבר מנוסחת כשאלה ("...להעביר בכל זאת?") -
     // לא מוסיפים ניסוח כפול, רק ליתר ביטחון fallback אם משום מה לא הגיעה הודעה.
     if (confirm(data.message || 'ייתכן שהתנועה כבר קיימת ביעד - להעביר בכל זאת?')) {
-      moveTransaction(id, to, true);
+      moveTransaction(id, to, true, category);
     }
     return;
   }
   toast(data.error || 'ההעברה נכשלה', 'error');
+}
+
+// תוקן (משוב אמיתי: "תוסיף שיהיה קטגוריה בתוך חתונה - ביגוד וכו'") - בורר "העבר ל..." לבדו העתיק
+// את הקטגוריה המקורית של התנועה (חופשית, מדף בנק) כמו שהיא ליעד, בלי אפשרות לבחור אחת מהקטגוריות
+// הקבועות של חתונה/דירה (ביגוד/אולם חתונה/מתנות/וכו'). עכשיו בחירת יעד חושפת בורר קטגוריה שני,
+// עם בדיוק אותה רשימה ואותו דפוס "אחר..." שכבר קיים בטופסי ההוספה של חתונה/דירה עצמן (ר'
+// weddingCategoryOptionsHtml/apartmentCategoryOptionsHtml) - כדי לא לשכפל את רשימת הקטגוריות.
+//
+// משוב אמיתי נוסף: "אין אופציה העבר להלוואות" - הלוואות שונות מהותית מחתונה/דירה: אין טבלת
+// "תנועות הלוואה" נפרדת (תשלום הלוואה הוא תנועה רגילה עם loan_id, ר' routes/loans.js) - לכן
+// "העברה" להלוואות היא לא POST /api/transactions/move בכלל, אלא פשוט קישור התנועה הקיימת להלוואה
+// (PUT /api/transactions/:id עם loan_id) - נשארת בתנועות הרגילות, לא מסומנת moved_to, לא מוחרגת
+// מהסכומים (זו עדיין תנועה "רגילה" - הלוואות היא רק תיוג/מעקב, לא תקציב נפרד כמו חתונה/דירה).
+async function onMoveTargetChange(id) {
+  const target = document.getElementById(`move-target-${id}`).value;
+  const catSelect = document.getElementById(`move-category-${id}`);
+  const otherInput = document.getElementById(`move-category-other-${id}`);
+  const loanSelect = document.getElementById(`move-loan-${id}`);
+  const confirmBtn = document.getElementById(`move-confirm-${id}`);
+  catSelect.style.display = 'none';
+  otherInput.style.display = 'none';
+  loanSelect.style.display = 'none';
+  confirmBtn.style.display = 'none';
+  if (!target) return;
+
+  if (target === 'loans') {
+    if (!loansCache.length) await loadLoans();
+    if (!loansCache.length) {
+      toast('אין עדיין הלוואות רשומות - אפשר להוסיף במסך "הלוואות"', 'error');
+      document.getElementById(`move-target-${id}`).value = '';
+      return;
+    }
+    loanSelect.innerHTML = '<option value="">בחרו הלוואה</option>' +
+      loansCache.map(l => `<option value="${l.id}">${l.name.replace(/</g, '&lt;')} (נותרו ${l.remainingInstallments})</option>`).join('');
+    loanSelect.style.display = '';
+    confirmBtn.style.display = '';
+    return;
+  }
+
+  const tx = lastTxList.find(t => t.id === id);
+  const type = tx ? tx.type : 'expense';
+  if (target === 'wedding') {
+    if (!weddingCategories.expense.length && !weddingCategories.income.length) await loadWeddingCategories();
+    catSelect.innerHTML = weddingCategoryOptionsHtml(type);
+    otherInput.setAttribute('list', 'wedding-category-suggestions');
+    loadWeddingCategoryDictionary();
+  } else {
+    if (!apartmentCategories.expense.length && !apartmentCategories.income.length) await loadApartmentCategories();
+    catSelect.innerHTML = apartmentCategoryOptionsHtml(type);
+    otherInput.setAttribute('list', 'apartment-category-suggestions');
+    loadApartmentCategoryDictionary();
+  }
+  // אם הקטגוריה המקורית (למשל "הלוואות") קיימת גם ברשימת היעד - נבחרת מראש, נוחות בלבד.
+  if (tx && tx.category && [...catSelect.options].some(o => o.value === tx.category)) catSelect.value = tx.category;
+  catSelect.style.display = '';
+  otherInput.style.display = catSelect.value === '__other__' ? '' : 'none';
+  confirmBtn.style.display = '';
+}
+
+function onMoveCategoryChange(id) {
+  const catSelect = document.getElementById(`move-category-${id}`);
+  document.getElementById(`move-category-other-${id}`).style.display = catSelect.value === '__other__' ? '' : 'none';
+}
+
+async function confirmMoveOrLink(id, force) {
+  const target = document.getElementById(`move-target-${id}`).value;
+  if (!target) return;
+
+  if (target === 'loans') {
+    const loanId = document.getElementById(`move-loan-${id}`).value;
+    if (!loanId) { toast('יש לבחור הלוואה', 'error'); return; }
+    const r = await api('PUT', `/api/transactions/${id}`, { loan_id: Number(loanId) });
+    if (r.ok) { toast('התנועה קושרה להלוואה', 'success'); loadTransactions(); }
+    return;
+  }
+
+  const catSelect = document.getElementById(`move-category-${id}`);
+  const catValue = catSelect.value;
+  const category = catValue === '__other__' ? document.getElementById(`move-category-other-${id}`).value.trim() : catValue;
+  if (catValue === '__other__' && !category) { toast('יש להזין פירוט קטגוריה', 'error'); return; }
+  await moveTransaction(id, target, force, category);
 }
 
 // "סמן הכל" למחיקה מרובה - משוב אמיתי: "במחיקות של התנועות שיהיה סמן הכל כדי שאני לא יצטרך למחוק
@@ -1117,12 +1199,24 @@ function renderTxList() {
     const movedBadge = t.moved_to
       ? `<span class="pill" style="background:var(--border); color:var(--text-secondary)">→ הועברה ל${t.moved_to === 'wedding' ? 'חתונה' : 'דירה'}</span>`
       : '';
+    // "העבר ל..." - בחירת יעד חושפת בקרה שנייה (קטגוריית חתונה/דירה, או הלוואה לקישור), ורק אז
+    // כפתור "אישור" מבצע בפועל (ר' onMoveTargetChange/confirmMoveOrLink). שדה "אחר..." מחובר
+    // לאותו datalist הצעות-קטגוריה שכבר קיים בטופס ההוספה של חתונה/דירה עצמן - משוב אמיתי: "תצוגה
+    // מקדימה... שאני אוכל לראות מה לכתוב" - כדי שגם כאן יופיעו הצעות (ביגוד/מתנות/וכו' + ניסוחים
+    // חופשיים קודמים) תוך כדי הקלדה, לא תיבה ריקה בלי שום רמז.
     const moveControl = t.moved_to ? '' : `
-        <select class="plain" style="width:auto; padding:7px 10px; font-size:13px" onchange="moveTransaction(${t.id}, this.value); this.selectedIndex=0;">
-          <option value="">העבר ל...</option>
-          <option value="wedding">חתונה</option>
-          <option value="apartment">דירה</option>
-        </select>`;
+        <span style="display:flex; align-items:center; gap:6px">
+          <select id="move-target-${t.id}" class="plain" style="width:auto; padding:7px 10px; font-size:13px" onchange="onMoveTargetChange(${t.id})">
+            <option value="">העבר ל...</option>
+            <option value="wedding">חתונה</option>
+            <option value="apartment">דירה</option>
+            <option value="loans">הלוואות</option>
+          </select>
+          <select id="move-category-${t.id}" class="plain" style="width:auto; padding:7px 10px; font-size:13px; display:none" onchange="onMoveCategoryChange(${t.id})"></select>
+          <input id="move-category-other-${t.id}" class="plain" style="width:auto; padding:7px 10px; font-size:13px; display:none" placeholder="פירוט הקטגוריה">
+          <select id="move-loan-${t.id}" class="plain" style="width:auto; padding:7px 10px; font-size:13px; display:none"></select>
+          <button id="move-confirm-${t.id}" class="btn secondary sm" style="display:none" onclick="confirmMoveOrLink(${t.id})">אישור</button>
+        </span>`;
     return `
     <div class="list-item">
       <div style="display:flex; align-items:center; gap:10px">
