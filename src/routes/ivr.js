@@ -1087,6 +1087,10 @@ function createPhoneUser(fullName, phone, email, pin) {
 // חישוב חובת/יתרת המעשר - משותף בין doBalance (קריאת יתרה) ובין תפריט "מעשרות" הייעודי (ר' case
 // "tithe_confirm" למטה), כדי לא לשכפל את אותו חישוב (10% מסך ההכנסות, בניכוי כל מה שכבר נרשם כהוצאה
 // תחת הקטגוריה "מעשרות") בשני מקומות - בדיוק כמו החישוב באתר ב-routes/transactions.js.
+//
+// AND moved_to IS NULL - תוקן (נתפס ע"י בדיקה אוטומטית): תנועה שהועברה לחתונה/דירה (ר'
+// /api/transactions/move ב-routes/importTransactions.js) כבר נספרת שם - בלי התנאי הזה כאן היא
+// הייתה נספרת פעמיים (גם כאן וגם ביעד), וההקראה בטלפון הייתה לא תואמת לסכום המדויק שמוצג באתר.
 function titheStatus(userId) {
   const row = db
     .prepare(
@@ -1094,7 +1098,7 @@ function titheStatus(userId) {
          COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income,
          COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense,
          COALESCE(SUM(CASE WHEN type = 'expense' AND category = 'מעשרות' THEN amount ELSE 0 END), 0) AS tithePaid
-       FROM transactions WHERE user_id = ?`
+       FROM transactions WHERE user_id = ? AND moved_to IS NULL`
     )
     .get(userId);
   const obligation = Math.round(row.income * 0.1 * 100) / 100;

@@ -12,11 +12,15 @@ function register(router) {
       .prepare("SELECT * FROM transactions WHERE user_id = ? ORDER BY occurred_at DESC, id DESC")
       .all(ctx.user.userId);
 
-    const income = rows.filter(r => r.type === "income").reduce((s, r) => s + r.amount, 0);
-    const expense = rows.filter(r => r.type === "expense").reduce((s, r) => s + r.amount, 0);
+    // תנועות ש"הועברו" לחתונה/דירה (ר' /api/transactions/move) נשארות ברשימה (מוצגות עם ציון לאן
+    // הועברו) אבל מוחרגות מכל הסכומים/הפילוח - הן כבר נספרות ביעד, לא נכון לספור אותן פעמיים.
+    const activeRows = rows.filter(r => !r.moved_to);
+
+    const income = activeRows.filter(r => r.type === "income").reduce((s, r) => s + r.amount, 0);
+    const expense = activeRows.filter(r => r.type === "expense").reduce((s, r) => s + r.amount, 0);
 
     const byCategory = {};
-    for (const r of rows) {
+    for (const r of activeRows) {
       if (r.type !== "expense") continue;
       const cat = r.category || "אחר";
       byCategory[cat] = (byCategory[cat] || 0) + r.amount;
@@ -24,7 +28,7 @@ function register(router) {
 
     // מעשרות: המערכת מחשבת אוטומטית 10% מסך ההכנסות כחובת מעשר,
     // ומחסירה מזה כל מה שכבר נרשם כהוצאה תחת הקטגוריה "מעשרות" (לא כולל "צדקה" - זו קטגוריה נפרדת).
-    const tithePaid = rows
+    const tithePaid = activeRows
       .filter(r => r.type === "expense" && r.category === "מעשרות")
       .reduce((s, r) => s + r.amount, 0);
     const titheObligation = Math.round(income * 0.1 * 100) / 100;
@@ -122,7 +126,7 @@ function register(router) {
         `SELECT strftime('%Y-%m', occurred_at) AS month,
                 SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) AS income,
                 SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) AS expense
-         FROM transactions WHERE user_id = ?
+         FROM transactions WHERE user_id = ? AND moved_to IS NULL
          GROUP BY month ORDER BY month DESC LIMIT 12`
       )
       .all(ctx.user.userId);

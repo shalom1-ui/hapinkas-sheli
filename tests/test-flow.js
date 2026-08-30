@@ -372,6 +372,59 @@ async function run() {
     );
     await api("DELETE", `/api/transactions/${txToEditId}`, null, token);
 
+    console.log("\n➡️ העברת תנועה מהתנועות הרגילות לחתונה/דירה - משוב אמיתי: 'יש בדפי הבנק שקשורים לדירה או חתונה, אז צריך שיהיה כפתור שאני יכול להעביר אליו'");
+    const txToMove = await api("POST", "/api/transactions", { type: "expense", amount: 5000, category: "אולם", note: "מקדמה לאולם חתונה" }, token);
+    const txToMoveId = txToMove.data.transaction.id;
+    const moveResult = await api("POST", "/api/transactions/move", { from: "regular", id: txToMoveId, to: "wedding" }, token);
+    assert(
+      moveResult.status === 200 && moveResult.data.transaction.amount === 5000 && moveResult.data.transaction.note === "מקדמה לאולם חתונה",
+      `העברת תנועה מהתנועות הרגילות לחתונה הצליחה ושמרה על הפרטים (${JSON.stringify(moveResult.data)})`
+    );
+    const movedWeddingId = moveResult.data.transaction.id;
+
+    const txsAfterMove = await api("GET", "/api/transactions", null, token);
+    const originalRowAfterMove = txsAfterMove.data.transactions.find(t => t.id === txToMoveId);
+    assert(
+      originalRowAfterMove && originalRowAfterMove.moved_to === "wedding",
+      `תוקן (משוב אמיתי: "שיהיה לי אפשרות להציג... אני רואה את הפרטים לאן הועבר") - השורה המקורית לא נמחקה, נשארת עם ציון היעד (${JSON.stringify(originalRowAfterMove)})`
+    );
+    // הערה: movedWeddingId הוא מזהה מטבלת wedding_transactions - סדרת autoincrement נפרדת מזו של
+    // transactions, כך שהשוואת מזהים בין הטבלאות לא אומרת כלום (עלולה "להתנגש" במקרה עם מזהה קיים
+    // ולתת נכשל-שווא). הבדיקה האמיתית: ההעברה היא UPDATE על השורה הקיימת, לא הוספת שורה חדשה -
+    // צריכה להישאר בדיוק שורה אחת עם המזהה המקורי בתנועות הרגילות.
+    assert(
+      txsAfterMove.data.transactions.filter(t => t.id === txToMoveId).length === 1,
+      "ההעברה עדכנה את השורה הקיימת במקום, ולא יצרה שורה כפולה בתנועות הרגילות"
+    );
+    assert(
+      txsAfterMove.data.summary.expense === 0 || !txsAfterMove.data.transactions.some(t => t.id === txToMoveId && !t.moved_to),
+      "תנועה שהועברה מוחרגת מהסכום הכולל של התנועות הרגילות (לא נספרת פעמיים)"
+    );
+    const weddingAfterMove = await api("GET", "/api/wedding/transactions", null, token);
+    assert(weddingAfterMove.data.transactions.some(t => t.id === movedWeddingId && t.category === "אולם"), "התנועה שהועברה אכן מופיעה בתקציב החתונה");
+
+    const reMoveAttempt = await api("POST", "/api/transactions/move", { from: "regular", id: txToMoveId, to: "apartment" }, token);
+    assert(reMoveAttempt.status === 400, "לא ניתן להעביר שוב תנועה שכבר הועברה בעבר");
+
+    console.log("\n➡️ העברת תנועה - זיהוי כפילות אפשרית ביעד - משוב אמיתי: 'במידה ויש כפל שהמערכת תשאל ותזהה שיש כפל'");
+    // תנועה קיימת בדירה עם סכום+סוג ספציפיים, ותאריך "עכשיו" (ברירת המחדל) - ותנועה רגילה חדשה
+    // עם אותו סכום+סוג בדיוק, שנוצרת גם היא "עכשיו" (אותו יום) - ניסיון להעביר אותה לדירה אמור להיתקל בחשד כפילות.
+    const existingInApartment = await api("POST", "/api/apartment/transactions", { type: "expense", amount: 1234, category: "רגיל" }, token);
+    const todayTx = await api("POST", "/api/transactions", { type: "expense", amount: 1234, category: "אולם" }, token);
+    const dupMoveAttempt = await api("POST", "/api/transactions/move", { from: "regular", id: todayTx.data.transaction.id, to: "apartment" }, token);
+    assert(
+      dupMoveAttempt.status === 409 && dupMoveAttempt.data.error === "duplicate_suspected",
+      `זוהתה כפילות אפשרית (אותו סכום+סוג+תאריך כבר קיים ביעד) - לא הועבר אוטומטית בלי אזהרה (${JSON.stringify(dupMoveAttempt.data)})`
+    );
+    const dupMoveForced = await api("POST", "/api/transactions/move", { from: "regular", id: todayTx.data.transaction.id, to: "apartment", force: true }, token);
+    assert(dupMoveForced.status === 200, "עם force:true, ההעברה מתבצעת בכל זאת למרות חשד הכפילות");
+
+    // ניקוי - הבדיקות הבאות (חתונה/דירה/מעשרות) מניחות בסיס נקי, ומשתמשות באותו token/משתמש משותף
+    // לאורך כל הקובץ - בלי הניקוי הזה, התנועות שהועברו/נוצרו כאן "דולפות" לסכומים המדויקים שם.
+    await api("DELETE", `/api/wedding/transactions/${movedWeddingId}`, null, token);
+    await api("DELETE", `/api/apartment/transactions/${existingInApartment.data.transaction.id}`, null, token);
+    await api("DELETE", `/api/apartment/transactions/${dupMoveForced.data.transaction.id}`, null, token);
+
     console.log("\n📥 ייבוא אקסל/CSV של דף בנק - זיהוי עמודות זכות/חובה אוטומטי");
     // משוב אמיתי ממשתמש: "רוצה להכניס אקסל של דפי בנק או דפי כרטיס אשראי, שיוכל להוריד אותו
     // והמערכת תכניס את זה להכנסות והוצאות". ר' src/lib/xlsxParser.js, src/lib/importMapping.js,

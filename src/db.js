@@ -81,6 +81,11 @@ db.exec(`
     import_batch_id TEXT,
     import_filename TEXT,
     loan_id INTEGER REFERENCES loans(id), -- קישור אופציונלי להלוואה (ר' טבלת loans למטה) - לתשלום שנרשם בפועל
+    -- "הועברה" לחתונה/דירה (ר' routes/importTransactions.js /api/transactions/move) - משוב אמיתי:
+    -- "כדי לערוך מה שיש בפנים בתוך דפי הבנק, שיהיה לי אפשרות להציג... אני רואה את הפרטים לאן הועבר".
+    -- השורה *לא* נמחקת בהעברה - נשארת כאן (מוצגת בתצוגה, מסומנת "הועבר ל...") אבל מוחרגת מהסכומים/
+    -- מהפילוח (ר' WHERE moved_to IS NULL בשאילתות), כדי לא לספור אותה פעמיים (גם כאן וגם ביעד).
+    moved_to TEXT,
     occurred_at TEXT DEFAULT (datetime('now'))
   );
 
@@ -310,6 +315,8 @@ for (const alterSql of [
   "ALTER TABLE transactions ADD COLUMN loan_id INTEGER REFERENCES loans(id)",
   "ALTER TABLE wedding_transactions ADD COLUMN loan_id INTEGER REFERENCES loans(id)",
   "ALTER TABLE apartment_transactions ADD COLUMN loan_id INTEGER REFERENCES loans(id)",
+  // "הועברה לחתונה/דירה" - ר' הערה מפורטת ב-CREATE TABLE transactions למעלה.
+  "ALTER TABLE transactions ADD COLUMN moved_to TEXT",
 ]) {
   try {
     db.exec(alterSql);

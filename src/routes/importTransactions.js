@@ -209,6 +209,57 @@ function register(router) {
     if (!info.changes) return json(ctx.res, 404, { error: "קובץ ייבוא לא נמצא" });
     return json(ctx.res, 200, { deleted: info.changes });
   }));
+
+  // העברת תנועה בין אזורים (רגיל/חתונה/דירה) - משוב אמיתי: "יש בדפי הבנק שקשורים לדירה או חתונה,
+  // אז צריך שיהיה כפתור שאני יכול להעביר אליו". שימושי כשמייבאים/מזינים דף בנק רגיל אבל חלק
+  // מהשורות שייכות בפועל לתקציב נפרד - מוחקת מהטבלה המקורית ומכניסה לטבלת היעד (לא רק מעדכנת
+  // category, כי אלה טבלאות DB נפרדות לגמרי - ר' הערת הפתיחה של הקובץ).
+  router.post("/api/transactions/move", requireAuth(async (ctx) => {
+    const { from, id, to, force } = ctx.body;
+    if (!from || !to) return json(ctx.res, 400, { error: "יש לציין מקור ויעד" });
+    const fromTarget = resolveImportTarget(from);
+    const toTarget = resolveImportTarget(to);
+    if (fromTarget.table === toTarget.table) return json(ctx.res, 400, { error: "היעד זהה למקור" });
+
+    const row = db.prepare(`SELECT * FROM ${fromTarget.table} WHERE id = ? AND user_id = ?`).get(id, ctx.user.userId);
+    if (!row) return json(ctx.res, 404, { error: "תנועה לא נמצאה" });
+    if (row.moved_to) return json(ctx.res, 400, { error: "התנועה כבר הועברה בעבר" });
+
+    // בדיקת כפילות אפשרית ביעד - משוב אמיתי: "במידה ויש כפל שהמערכת תשאל ותזהה שיש כפל". משווים
+    // לפי תאריך (רק היום, לא השעה) + סכום + סוג - לא מסתמכים על import_hash בלבד כי התנועה ביעד
+    // יכולה להיות גם רשומה ידנית (לא ייבוא). אם נמצא חשד לכפילות ולא ביקשו force - לא מעבירים,
+    // רק מתריעים; הלקוח מציג אישור למשתמש ושולח שוב עם force:true אם הוא בכל זאת רוצה להעביר.
+    if (!force) {
+      const dateOnly = String(row.occurred_at).slice(0, 10);
+      const dup = db.prepare(
+        `SELECT id, category, note FROM ${toTarget.table} WHERE user_id = ? AND type = ? AND amount = ? AND substr(occurred_at, 1, 10) = ?`
+      ).get(ctx.user.userId, row.type, row.amount, dateOnly);
+      if (dup) {
+        return json(ctx.res, 409, {
+          error: "duplicate_suspected",
+          message: `כבר יש תנועה דומה ביעד (${dup.category || "אחר"}${dup.note ? " · " + dup.note : ""}) - להעביר בכל זאת?`,
+        });
+      }
+    }
+
+    const insert = toTarget.hasSource
+      ? db.prepare("INSERT INTO transactions (user_id, type, amount, category, note, source, loan_id, occurred_at) VALUES (?, ?, ?, ?, ?, 'web', ?, ?)")
+      : db.prepare(`INSERT INTO ${toTarget.table} (user_id, type, amount, category, note, loan_id, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?)`);
+    const info = insert.run(ctx.user.userId, row.type, row.amount, row.category, row.note, row.loan_id, row.occurred_at);
+
+    // תוקן (משוב אמיתי: "שיהיה לי אפשרות להציג בצד תצוגה של הבנק שם אני רואה את הפרטים לאן הועבר") -
+    // רק "transactions" הרגילה יודעת "לזכור" שהיא הועברה (יש לה עמודת moved_to, ר' db.js) - השורה
+    // המקורית נשארת (לא נמחקת) כדי שהתנועה עדיין תופיע ברשימה עם ציון היעד, פשוט מוחרגת מהסכומים.
+    // wedding/apartment אין להן עמודה כזו כרגע (לא התבקש להעביר *מהן* עם זיכרון דומה) - שם עדיין מוחקים.
+    if (fromTarget.table === "transactions") {
+      db.prepare("UPDATE transactions SET moved_to = ? WHERE id = ?").run(to, row.id);
+    } else {
+      db.prepare(`DELETE FROM ${fromTarget.table} WHERE id = ?`).run(row.id);
+    }
+
+    const moved = db.prepare(`SELECT * FROM ${toTarget.table} WHERE id = ?`).get(info.lastInsertRowid);
+    return json(ctx.res, 200, { transaction: moved });
+  }));
 }
 
 module.exports = { register };

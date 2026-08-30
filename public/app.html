@@ -299,7 +299,12 @@
           <div class="row">
             <select id="t_type" class="plain" onchange="loadCategoryDictionary(this.value)"><option value="expense">הוצאה</option><option value="income">הכנסה</option></select>
             <input id="t_amount" class="plain" type="number" placeholder="סכום בש״ח" value="50">
-            <input id="t_category" class="plain" placeholder="קטגוריה, למשל מזון" list="category-suggestions">
+            <input id="t_category" class="plain" placeholder="קטגוריה, למשל מזון" list="category-suggestions" oninput="onRegularCategoryInput()">
+            <!-- תוקן (משוב אמיתי: "אני לוחץ על אחר אבל לא נוסף טקסט חופשי") - היה מבוסס על window.prompt(),
+                 שכנראה נחסם באותו סינון תוכן שכבר תיעדנו (ר' [[netfree-content-filter-blocking]]) - בדיוק
+                 כמו שקרה ל-<svg>. הוחלף בתיבת טקסט רגילה בתוך הדף (כמו ב"חתונה"/"דירה"), בלי להסתמך
+                 על שום דיאלוג דפדפן. -->
+            <input id="t_category_other" class="plain" placeholder="פירוט הקטגוריה" style="display:none">
             <datalist id="category-suggestions">
               <option value="מעשרות">
               <option value="צדקה">
@@ -965,20 +970,27 @@ async function refreshAll() {
 
 // ---------- TRANSACTIONS + OVERVIEW ----------
 const CATEGORY_COLORS = ['#2a78d6', '#1baf7a', '#eda100', '#4a3aa7', '#eb6834'];
+// מציג/מסתיר את שדה "פירוט הקטגוריה" בזמן אמת בעת הקלדה/בחירה מה-datalist - ר' הערה ב-HTML למעלה
+// לגבי הסיבה שזה לא מבוסס יותר על window.prompt().
+function onRegularCategoryInput() {
+  const isOther = document.getElementById('t_category').value.trim() === 'אחר';
+  document.getElementById('t_category_other').style.display = isOther ? '' : 'none';
+}
+
 async function addTransaction() {
   const type = document.getElementById('t_type').value;
   const amount = Number(document.getElementById('t_amount').value);
   let category = document.getElementById('t_category').value.trim();
   if (!amount) { toast('יש להזין סכום', 'error'); return; }
-  // תוקן (משוב אמיתי: "כשאני לוחץ על אחר אמור להיפתח קוביה לטקסט חופשי ולהשאיר קטגוריות למילון") -
-  // "אחר" הוא ערך placeholder ברשימת ההצעות (category-suggestions), לא קטגוריה אמיתית - בדיוק כמו
-  // "אחר" בתפריט הקטגוריות בטלפון (ר' case "expense_category_other"/"income_category_other" ב-
-  // routes/ivr.js), כשבוחרים אותו מבקשים תיאור חופשי בפועל. הערך החופשי הזה משמש כקטגוריה בפועל,
-  // ונכנס למילון האישי כרגיל (rememberPhrase ב-routes/transactions.js כבר שומר כל קטגוריה שמגיעה).
+  // תוקן (משוב אמיתי: "כשאני לוחץ על אחר אמור להיפתח קוביה לטקסט חופשי ולהשאיר קטגוריות למילון",
+  // ואח"כ "אני לוחץ על אחר אבל לא נוסף טקסט חופשי" - ר' הערה מפורטת ב-HTML למעלה) - "אחר" הוא ערך
+  // placeholder ברשימת ההצעות (category-suggestions), לא קטגוריה אמיתית - בדיוק כמו "אחר" בתפריט
+  // הקטגוריות בטלפון. הערך החופשי מ-t_category_other משמש כקטגוריה בפועל, ונכנס למילון האישי כרגיל
+  // (rememberPhrase ב-routes/transactions.js כבר שומר כל קטגוריה שמגיעה).
   if (category === 'אחר') {
-    const custom = prompt('איזו קטגוריה? (למשל: תרופות, מתנות)');
-    if (!custom || !custom.trim()) { toast('לא הוזנה קטגוריה - התנועה לא נוספה', 'error'); return; }
-    category = custom.trim();
+    const custom = document.getElementById('t_category_other').value.trim();
+    if (!custom) { toast('יש להזין פירוט קטגוריה - התנועה לא נוספה', 'error'); return; }
+    category = custom;
   }
   const loanLinkEl = document.getElementById('t_loan_link');
   const loanId = loanLinkEl && loanLinkEl.value ? Number(loanLinkEl.value) : undefined;
@@ -987,6 +999,8 @@ async function addTransaction() {
     toast('התנועה נוספה בהצלחה', 'success');
     document.getElementById('t_amount').value = '';
     document.getElementById('t_category').value = '';
+    document.getElementById('t_category_other').value = '';
+    document.getElementById('t_category_other').style.display = 'none';
     if (loanLinkEl) loanLinkEl.value = '';
     loadTransactions();
   }
@@ -998,6 +1012,43 @@ async function deleteTransaction(id, label, amount) {
   if (!confirm(`למחוק את התנועה "${label}" (₪${amount})? לא ניתן לשחזר אחרי המחיקה.`)) return;
   const r = await api('DELETE', `/api/transactions/${id}`);
   if (r.ok) { toast('התנועה נמחקה', 'success'); loadTransactions(); }
+}
+
+// "העבר ל..." - משוב אמיתי: "יש בדפי הבנק שקשורים לדירה או חתונה, אז צריך שיהיה כפתור שאני יכול
+// להעביר אליו... שיהיה מסונכרן" - מעביר תנועה מהתנועות הרגילות לתקציב החתונה/הדירה (ר'
+// POST /api/transactions/move ב-routes/importTransactions.js). השורה המקורית לא נעלמת בשקט - נשארת
+// ברשימה עם ציון היעד (ר' renderTxList), לפי משוב נוסף: "שיהיה לי אפשרות להציג... אני רואה את
+// הפרטים לאן הועבר". לא משתמשים בעוטפת api() הרגילה כאן, כדי לא להציג טוסט גולמי ("duplicate_suspected")
+// במקרה של חשד כפילות (משוב אמיתי: "במידה ויש כפל שהמערכת תשאל ותזהה שיש כפל") - שם רוצים confirm()
+// ידידותי עם ההודעה שהשרת מחזיר, ורק בעקבותיו לשלוח שוב עם force:true.
+async function moveTransaction(id, to, force) {
+  if (!to) return;
+  const headers = { 'Content-Type': 'application/json' };
+  if (token) headers['Authorization'] = 'Bearer ' + token;
+  const payload = { from: 'regular', id, to };
+  if (force) payload.force = true;
+  let res, data;
+  try {
+    res = await fetch(base() + '/api/transactions/move', { method: 'POST', headers, body: JSON.stringify(payload) });
+    data = await res.json().catch(() => ({}));
+  } catch (e) {
+    toast('לא ניתן להתחבר לשרת. ודאו שהשרת פועל.', 'error');
+    return;
+  }
+  if (res.ok) {
+    toast(`התנועה הועברה ל${to === 'wedding' ? 'חתונה' : 'דירה'}`, 'success');
+    loadTransactions();
+    return;
+  }
+  if (res.status === 409 && data.error === 'duplicate_suspected') {
+    // הודעת השרת (ר' POST /api/transactions/move) כבר מנוסחת כשאלה ("...להעביר בכל זאת?") -
+    // לא מוסיפים ניסוח כפול, רק ליתר ביטחון fallback אם משום מה לא הגיעה הודעה.
+    if (confirm(data.message || 'ייתכן שהתנועה כבר קיימת ביעד - להעביר בכל זאת?')) {
+      moveTransaction(id, to, true);
+    }
+    return;
+  }
+  toast(data.error || 'ההעברה נכשלה', 'error');
 }
 
 // "סמן הכל" למחיקה מרובה - משוב אמיתי: "במחיקות של התנועות שיהיה סמן הכל כדי שאני לא יצטרך למחוק
@@ -1058,17 +1109,34 @@ function renderTxList() {
   const selectAllBox = document.getElementById('tx-select-all');
   if (selectAllBox) selectAllBox.checked = txListIds.length > 0 && selectedTxIds.size === txListIds.length;
   if (!el) return;
-  el.innerHTML = lastTxList.length ? lastTxList.map(t => `
+  el.innerHTML = lastTxList.length ? lastTxList.map(t => {
+    const label = t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה');
+    // תנועה ש"הועברה" (ר' moveTransaction) לא נעלמת מהרשימה - מוצגת עם תגית ציון-יעד במקום
+    // בחירת "העבר ל..." (אי אפשר להעביר תנועה שכבר הועברה - ר' תיקוף בשרת), משוב אמיתי: "שיהיה לי
+    // אפשרות להציג בצד תצוגה של הבנק... אני רואה את הפרטים לאן הועבר".
+    const movedBadge = t.moved_to
+      ? `<span class="pill" style="background:var(--border); color:var(--text-secondary)">→ הועברה ל${t.moved_to === 'wedding' ? 'חתונה' : 'דירה'}</span>`
+      : '';
+    const moveControl = t.moved_to ? '' : `
+        <select class="plain" style="width:auto; padding:7px 10px; font-size:13px" onchange="moveTransaction(${t.id}, this.value); this.selectedIndex=0;">
+          <option value="">העבר ל...</option>
+          <option value="wedding">חתונה</option>
+          <option value="apartment">דירה</option>
+        </select>`;
+    return `
     <div class="list-item">
       <div style="display:flex; align-items:center; gap:10px">
         <input type="checkbox" ${selectedTxIds.has(t.id) ? 'checked' : ''} onchange="this.checked ? selectedTxIds.add(${t.id}) : selectedTxIds.delete(${t.id}); renderTxList()">
-        <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div></div>
+        <div><div class="li-main">${label}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div></div>
       </div>
       <div style="display:flex; align-items:center; gap:10px">
+        ${movedBadge}
         <span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span>
-        <button class="btn secondary sm" onclick="deleteTransaction(${t.id}, '${(t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')).replace(/'/g, "\\'")}', ${t.amount})">מחיקה</button>
+        ${moveControl}
+        <button class="btn secondary sm" onclick="deleteTransaction(${t.id}, '${label.replace(/'/g, "\\'")}', ${t.amount})">מחיקה</button>
       </div>
-    </div>`).join('') : '<div class="empty-state">אין עדיין תנועות</div>';
+    </div>`;
+  }).join('') : '<div class="empty-state">אין עדיין תנועות</div>';
 }
 
 // ---------- ייבוא תנועות מאקסל/CSV (דף בנק/כרטיס אשראי) ----------
@@ -2120,11 +2188,14 @@ async function loadTransactions() {
   // יעדים). תוקן: הקריאה הישנה כאן לא העבירה elId כלל, כך שבפועל תמיד ציירה לתוך tx-category-donut
   // בלבד (ברירת המחדל של renderCategoryDonut) - "ov-categories" מעולם לא קיבל donut אמיתי, רק
   // רשימת-פסים נפרדת (שהוסרה עכשיו) - זה כנראה מה שנראה כמו "נעלם" מהסקירה הכללית.
-  const expenses = txs.filter(t => t.type === 'expense');
-  const byCategory = {};
-  expenses.forEach(t => { const c = t.category || 'אחר'; byCategory[c] = (byCategory[c] || 0) + t.amount; });
-  renderCategoryDonut(byCategory, 'ov-categories');
-  renderCategoryDonut(byCategory, 'tx-category-donut');
+  //
+  // תוקן (נתפס ע"י בדיקה אוטומטית לפני שיגור פיצ'ר "העברת תנועה"): פעם היה חישוב byCategory מחדש
+  // כאן מתוך txs (רשימת התנועות המלאה) - אבל מאז שנוסף moved_to (ר' /api/transactions/move), txs
+  // כוללת גם תנועות שהועברו לחתונה/דירה, וחישוב-מחדש כזה היה סופר אותן פעמיים (גם כאן וגם ביעד).
+  // r.data.byCategory מגיע מהשרת כבר מסונן נכון (ר' routes/transactions.js) - עדיף להשתמש בו ישירות
+  // מאשר לשכפל את אותה לוגיקת סינון גם כאן.
+  renderCategoryDonut(r.data.byCategory, 'ov-categories');
+  renderCategoryDonut(r.data.byCategory, 'tx-category-donut');
 }
 
 // ---------- MENTORING ----------
