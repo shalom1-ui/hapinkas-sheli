@@ -546,6 +546,12 @@
           <h3>ההלוואות שלי</h3>
           <div id="loans-list"><div class="empty-state">אין עדיין הלוואות רשומות</div></div>
         </div>
+        <!-- משוב אמיתי: "אני צריך מעוגל... צריך שזה יהיה בכל המקומות: הלוואות, חתונה, דירה, ותנועות" -
+             אותו רכיב עיגול (donut) בדיוק, כאן מפולח לפי הלוואה (תשלומים שנותרו לכל הלוואה) במקום קטגוריה. -->
+        <div class="card">
+          <h3>תשלומים שנותרו לפי הלוואה</h3>
+          <div id="loans-categories"><div class="empty-state">אין עדיין הלוואות עם תשלומים שנותרו</div></div>
+        </div>
         <div class="card">
           <h3>ייבוא תנועות מאקסל / CSV</h3>
           <!-- משוב אמיתי: "בהלוואות לא עשית שאני יכול לייבא נתונים". תשלומי הלוואה הם תנועות רגילות
@@ -1633,6 +1639,17 @@ async function loadLoans() {
   renderLoansList();
   refreshLoanLinkSelects();
   giLoadBatches('loans', 'regular');
+
+  // "מעוגל" לפי הלוואה - משוב אמיתי: "צריך שזה יהיה בכל המקומות: הלוואות, חתונה, דירה, ותנועות".
+  // אותו רכיב donut בדיוק, מפולח לפי הלוואה (תשלומים שנותרו) במקום לפי קטגוריה.
+  const byLoan = {};
+  loansCache.forEach(l => { if (l.remainingInstallments > 0) byLoan[l.name] = l.remainingInstallments; });
+  renderCategoryDonut(byLoan, 'loans-categories', {
+    unit: '',
+    centerLabel: 'סה"כ תשלומים שנותרו',
+    ariaLabel: 'פילוח תשלומים שנותרו לפי הלוואה',
+    emptyMessage: 'אין עדיין הלוואות עם תשלומים שנותרו',
+  });
 }
 
 async function addLoan() {
@@ -1901,11 +1918,19 @@ function renderTrendChart(rows, elId) {
 
 // עיגול (donut) עם ה"חור" באמצע נושא את סה"כ ההוצאות - ר' בקשת המשתמש "עיגול עם צבעים". מעל 6
 // קטגוריות מקפלים את השאר ל"אחר" (המלצת מיומנות dataviz - יותר מ-6 פרוסות נהיה קשה לקרוא בעין).
-function renderCategoryDonut(byCategory, elId) {
+// options אופציונלי - נדרש כדי לעשות שימוש חוזר ברכיב הזה גם למקומות שאינם "הוצאות בש\"ח" (למשל
+// "מעוגל" תשלומי הלוואות שנותרו - יחידה "תשלומים", לא ₪ - ר' loadLoans). ברירות המחדל שומרות על
+// ההתנהגות המקורית בדיוק (₪, "סה\"כ הוצאות") לכל הקריאות הקיימות שלא מעבירות options.
+function renderCategoryDonut(byCategory, elId, options) {
+  const opts = options || {};
+  const unit = opts.unit !== undefined ? opts.unit : '₪';
+  const centerLabel = opts.centerLabel || 'סה"כ הוצאות';
+  const ariaLabel = opts.ariaLabel || 'פילוח הוצאות לפי קטגוריה';
+  const emptyMessage = opts.emptyMessage || 'אין עדיין הוצאות להצגה';
   const el = document.getElementById(elId || 'tx-category-donut');
   if (!el) return;
   const sorted = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
-  if (!sorted.length) { el.innerHTML = '<div class="empty-state">אין עדיין הוצאות להצגה</div>'; return; }
+  if (!sorted.length) { el.innerHTML = `<div class="empty-state">${emptyMessage}</div>`; return; }
 
   let entries = sorted;
   if (sorted.length > 6) {
@@ -1930,7 +1955,7 @@ function renderCategoryDonut(byCategory, elId) {
     offset += frac * circumference;
     return `<circle cx="${cx}" cy="${cy}" r="${R}" fill="none" style="stroke:${color}" stroke-width="${strokeW}"
               stroke-dasharray="${len} ${circumference - len}" stroke-dashoffset="${dashoffset}" transform="rotate(-90 ${cx} ${cy})">
-              <title>${cat} · ₪${amt.toLocaleString('he-IL')} (${Math.round(frac * 100)}%)</title>
+              <title>${cat} · ${unit}${amt.toLocaleString('he-IL')} (${Math.round(frac * 100)}%)</title>
             </circle>`;
   }).join('');
 
@@ -1938,15 +1963,15 @@ function renderCategoryDonut(byCategory, elId) {
     <div class="chart-legend-item chart-legend-row">
       <span class="chart-swatch" style="background:${CATEGORY_COLORS[i % CATEGORY_COLORS.length]}"></span>
       <span style="flex:1">${cat}</span>
-      <span class="chart-legend-amount">₪${amt.toLocaleString('he-IL')} · ${Math.round(amt / total * 100)}%</span>
+      <span class="chart-legend-amount">${unit}${amt.toLocaleString('he-IL')} · ${Math.round(amt / total * 100)}%</span>
     </div>`).join('');
 
   el.innerHTML = `
     <div class="donut-wrap">
-      <svg viewBox="0 0 180 180" width="180" height="180" role="img" aria-label="פילוח הוצאות לפי קטגוריה" style="flex-shrink:0">
+      <svg viewBox="0 0 180 180" width="180" height="180" role="img" aria-label="${ariaLabel}" style="flex-shrink:0">
         ${segments}
-        <text x="90" y="85" text-anchor="middle" font-size="12" style="fill:var(--text-secondary)">סה"כ הוצאות</text>
-        <text x="90" y="105" text-anchor="middle" font-size="17" font-weight="700" style="fill:var(--text-primary)">₪${total.toLocaleString('he-IL')}</text>
+        <text x="90" y="85" text-anchor="middle" font-size="12" style="fill:var(--text-secondary)">${centerLabel}</text>
+        <text x="90" y="105" text-anchor="middle" font-size="17" font-weight="700" style="fill:var(--text-primary)">${unit}${total.toLocaleString('he-IL')}</text>
       </svg>
       <div class="chart-legend-list">${legend}</div>
     </div>`;
@@ -2001,21 +2026,16 @@ async function loadTransactions() {
       </div>`).join('')
     : '<div class="empty-state">אין עדיין תנועות</div>';
 
-  // פילוח הוצאות לפי קטגוריה
+  // פילוח הוצאות לפי קטגוריה - משוב אמיתי: "אני צריך מעוגל, היה פעם בסקירה כללית ונעלם" - מציגים
+  // את אותו רכיב עיגול (donut) גם בסקירה הכללית וגם בעמוד "תנועות" (אותו byCategory בדיוק, שני
+  // יעדים). תוקן: הקריאה הישנה כאן לא העבירה elId כלל, כך שבפועל תמיד ציירה לתוך tx-category-donut
+  // בלבד (ברירת המחדל של renderCategoryDonut) - "ov-categories" מעולם לא קיבל donut אמיתי, רק
+  // רשימת-פסים נפרדת (שהוסרה עכשיו) - זה כנראה מה שנראה כמו "נעלם" מהסקירה הכללית.
   const expenses = txs.filter(t => t.type === 'expense');
   const byCategory = {};
   expenses.forEach(t => { const c = t.category || 'אחר'; byCategory[c] = (byCategory[c] || 0) + t.amount; });
-  const entries = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
-  const maxVal = entries.length ? entries[0][1] : 1;
-  document.getElementById('ov-categories').innerHTML = entries.length
-    ? entries.map(([cat, amt], i) => `
-      <div class="bar-row">
-        <div class="bar-label">${cat}</div>
-        <div class="bar-track"><div class="bar-fill" style="width:${Math.max(4, (amt / maxVal) * 100)}%; background:${CATEGORY_COLORS[i % CATEGORY_COLORS.length]}"></div></div>
-        <div class="bar-amount">₪${amt}</div>
-      </div>`).join('')
-    : '<div class="empty-state">אין עדיין הוצאות להצגה</div>';
-  renderCategoryDonut(byCategory);
+  renderCategoryDonut(byCategory, 'ov-categories');
+  renderCategoryDonut(byCategory, 'tx-category-donut');
 }
 
 // ---------- MENTORING ----------
