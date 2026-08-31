@@ -150,6 +150,25 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- כרטיסי אשראי / הוראות קבע חוזרים - משוב אמיתי: "יש לאנשים כרטיסי אשראי שכל כרטיס יוצא בתאריך
+  -- אחר או הו"ק בבנק, חשוב לי שאיש יקבל התראה לפני התאריך כמה כסף הוא צריך להכניס לבנק". כל רשומה
+  -- כאן היא "מחויב חוזר" אחד - שם + יום קבוע בחודש שבו יוצא החיוב. הסכום *לא* מוזן ידנית - מוערך
+  -- אוטומטית מהממוצע של תנועות ההוצאה האמיתיות שכבר הוזנו/יובאו תחת category (3 חודשים אחרונים,
+  -- ר' routes/recurringCharges.js) - כדי שההערכה תתעדכן ממילא ככל שנכנסים עוד חודשים, בלי שהמשתמש
+  -- יצטרך לעדכן ידנית כל פעם שהסכום משתנה מעט (כרטיס אשראי כמעט אף פעם לא מדויק לשקל בכל חודש).
+  CREATE TABLE IF NOT EXISTS recurring_charges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    name TEXT NOT NULL,                -- שם, למשל "כרטיס ויזה" / "הו"ק ארנונה"
+    charge_day INTEGER NOT NULL,       -- יום בחודש (1-31) שבו החיוב יוצא בפועל בבנק
+    category TEXT,                     -- קטגוריה בתנועות הרגילות שממנה מחשבים הערכת סכום (ר' למעלה)
+    reminder_days_before INTEGER NOT NULL DEFAULT 3,
+    -- תאריך (YYYY-MM-DD) החיוב האחרון שעליו כבר נשלחה תזכורת - מונע שליחה כפולה אם ה-cron היומי
+    -- רץ יותר מפעם אחת באותו יום (ר' routes/recurringCharges.js, /api/system/charge-reminders/run).
+    last_reminder_sent_for TEXT,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_user_id INTEGER NOT NULL REFERENCES users(id), -- מי יצר/מנהל את התלמיד (חונך/מטפל ראשי)

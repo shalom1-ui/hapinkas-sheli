@@ -1112,6 +1112,81 @@ async function run() {
     const loanRowAfterImport = loanAfterImport.data.loans.find(l => l.id === loanForImportId);
     assert(loanRowAfterImport.linkedPaymentsCount === 1, `להלוואה מוצג עכשיו תשלום אחד אמיתי מהקובץ שיובא (${JSON.stringify(loanRowAfterImport)})`);
 
+    console.log("\n💳 תשלומים חוזרים (כרטיסי אשראי/הו\"ק) + התראה לפני תאריך החיוב");
+    // משוב אמיתי: "יש לאנשים כרטיסי אשראי שכל כרטיס יוצא בתאריך אחר או הו\"ק בבנק, חשוב לי שיקבל
+    // התראה לפני התאריך כמה כסף צריך להכניס לבנק". ר' src/routes/recurringCharges.js.
+    const { nextChargeDate: rcNextChargeDate } = require("../src/routes/recurringCharges");
+
+    // --- חישוב תאריך החיוב הבא (פונקציית תאריכים טהורה, בלי API) ---
+    const jan15 = new Date(Date.UTC(2026, 0, 15));
+    assert(
+      rcNextChargeDate(20, jan15).getTime() === Date.UTC(2026, 0, 20),
+      "אם יום החיוב עוד לא הגיע החודש, החיוב הבא הוא באותו חודש"
+    );
+    assert(
+      rcNextChargeDate(10, jan15).getTime() === Date.UTC(2026, 1, 10),
+      "אם יום החיוב כבר עבר החודש, החיוב הבא קופץ לחודש הבא"
+    );
+    assert(
+      rcNextChargeDate(15, jan15).getTime() === Date.UTC(2026, 0, 15),
+      "אם היום עצמו הוא יום החיוב, נחשב 'החיוב הבא' (לא קופץ קדימה)"
+    );
+    // מ-1 בפברואר (אחרי שה-31 בינואר כבר עבר) - החיוב הבא ליום "31" צריך להיות פברואר 2026 (לא
+    // מעוברת, 28 ימים בלבד) - נצמד ליום האחרון בפועל של החודש, לא גולש למרץ.
+    const feb1 = new Date(Date.UTC(2026, 1, 1));
+    assert(
+      rcNextChargeDate(31, feb1).getTime() === Date.UTC(2026, 1, 28),
+      `יום חיוב 31 בחודש שאין בו 31 (פברואר 2026, לא מעוברת) נצמד ליום האחרון בפועל (${new Date(rcNextChargeDate(31, feb1)).toISOString()})`
+    );
+
+    // --- CRUD + הערכת סכום אוטומטית מהקטגוריה המקושרת (ממוצע, לא הזנה ידנית) ---
+    await api("POST", "/api/transactions", { type: "expense", amount: 300, category: "כרטיס בדיקה" }, token);
+    await api("POST", "/api/transactions", { type: "expense", amount: 340, category: "כרטיס בדיקה" }, token);
+    await api("POST", "/api/transactions", { type: "expense", amount: 320, category: "כרטיס בדיקה" }, token);
+
+    const rcCreate = await api("POST", "/api/recurring-charges", { name: "כרטיס בדיקה", charge_day: 10, category: "כרטיס בדיקה" }, token);
+    assert(rcCreate.status === 201, `יצירת מחויב חוזר חדש הצליחה (${JSON.stringify(rcCreate.data)})`);
+    assert(
+      rcCreate.data.charge.estimatedFromCount === 3 && rcCreate.data.charge.estimatedAmount === 320,
+      `הסכום המוערך מחושב אוטומטית כממוצע 3 התנועות האחרונות בקטגוריה, לא הוזן ידנית (320 = (300+340+320)/3) (${JSON.stringify(rcCreate.data.charge)})`
+    );
+    const rcId = rcCreate.data.charge.id;
+
+    const rcNoCategory = await api("POST", "/api/recurring-charges", { name: "בלי קטגוריה מקושרת", charge_day: 5 }, token);
+    assert(
+      rcNoCategory.status === 201 && rcNoCategory.data.charge.estimatedFromCount === 0 && rcNoCategory.data.charge.estimatedAmount === null,
+      "מחויב בלי קטגוריה מקושרת מוצג בלי סכום מוערך (null, לא 0 מטעה)"
+    );
+
+    const rcList = await api("GET", "/api/recurring-charges", null, token);
+    assert(rcList.status === 200 && rcList.data.charges.some(c => c.id === rcId), "רשימת המחויבים החוזרים כוללת את מה שנוצר");
+
+    const rcEdit = await api("PUT", `/api/recurring-charges/${rcId}`, { charge_day: 15, reminder_days_before: 5 }, token);
+    assert(
+      rcEdit.status === 200 && rcEdit.data.charge.charge_day === 15 && rcEdit.data.charge.reminder_days_before === 5,
+      "עריכת יום החיוב וימי ההתראה מראש הצליחה"
+    );
+
+    const otherUserRcSignup = await api("POST", "/api/auth/signup", {
+      full_name: "משתמש זר למחויב", username: `stranger_rc_${Date.now()}`, password: "1234", phone: `+97250${Date.now().toString().slice(-7)}`,
+    });
+    const strangerRcDelete = await api("DELETE", `/api/recurring-charges/${rcId}`, null, otherUserRcSignup.data.token);
+    assert(strangerRcDelete.status === 404, "משתמש אחר לא יכול למחוק מחויב חוזר ששייך למשתמש הזה");
+
+    // --- נתיב הרצת ההתראות היומי - מוגן ב-key קבוע (Render Cron Job חיצוני), לא JWT רגיל ---
+    const cronNoKey = await api("GET", "/api/system/charge-reminders/run", null, token);
+    assert(cronNoKey.status === 403, "נתיב הרצת ההתראות היומי דורש key נכון בפרמטר - לא נתיב מוגן ב-JWT רגיל");
+    const cronWithKey = await api("GET", "/api/system/charge-reminders/run?key=hapinkas-charges-cron-5817", null, token);
+    assert(
+      cronWithKey.status === 200 && typeof cronWithKey.data.checked === "number" && typeof cronWithKey.data.remindersSent === "number",
+      `עם key נכון, נתיב ה-cron רץ על כל המשתמשים ומחזיר סיכום (${JSON.stringify(cronWithKey.data)})`
+    );
+
+    // ניקוי - לא משפיע על בדיקות אחרות (סכומי התנועות הרגילות נבדקים תמיד באופן דינמי, לא מול
+    // ערך קבוע מראש - ר' הערה דומה בבדיקות ההעברה למעלה), אבל מנקים בכל זאת לניקיון.
+    await api("DELETE", `/api/recurring-charges/${rcId}`, null, token);
+    await api("DELETE", `/api/recurring-charges/${rcNoCategory.data.charge.id}`, null, token);
+
     console.log("\n🎓 חונכות ותלמידים");
     const student = await api("POST", "/api/students", { name: "תלמיד בדיקה" }, token);
     assert(student.status === 201, "הוספת תלמיד הצליחה");

@@ -747,6 +747,18 @@
           <button class="btn" onclick="saveProfile()">שמירת שינויים</button>
         </div>
         <div class="card">
+          <h3 style="margin-top:0">תשלומים חוזרים (כרטיסי אשראי / הוראות קבע)</h3>
+          <div class="hint">משוב אמיתי: "יש לאנשים כרטיסי אשראי שכל כרטיס יוצא בתאריך אחר או הו"ק בבנק, חשוב לי שיקבל התראה לפני התאריך כמה כסף צריך להכניס לבנק". רושמים כאן כל כרטיס/הוראת קבע פעם אחת (שם + יום קבוע בחודש) - הסכום המוצג לא מוזן ידנית, אלא מוערך אוטומטית לפי ממוצע התנועות מ-3 החודשים האחרונים תחת הקטגוריה שתבחרו (ר' "תנועות"). ההתראה נשלחת למייל, לפי מספר הימים שבחרתם מראש - ודורשת שהתיבה "לקבל התראות תקציב" למעלה מסומנת, וכתובת מייל מוגדרת.</div>
+          <div class="row" style="margin-top:10px">
+            <div class="field"><label>שם (למשל "כרטיס ויזה")</label><input id="rc_name" class="plain" placeholder="כרטיס ויזה"></div>
+            <div class="field"><label>יום קבוע בחודש</label><input id="rc_day" class="plain" type="number" min="1" max="31" placeholder="10"></div>
+            <div class="field"><label>קטגוריה להערכת סכום (אופציונלי)</label><input id="rc_category" class="plain" list="category-suggestions" placeholder="למשל 'כרטיס ויזה'"></div>
+            <div class="field"><label>ימי התראה מראש</label><input id="rc_days_before" class="plain" type="number" min="0" max="30" value="3"></div>
+            <button class="btn" style="align-self:flex-end" onclick="addRecurringCharge()">הוספה</button>
+          </div>
+          <div id="recurring-charges-list" style="margin-top:14px"><div class="empty-state">אין עדיין תשלומים חוזרים רשומים</div></div>
+        </div>
+        <div class="card">
           <h3 style="margin-top:0">בעל/ת הקו</h3>
           <div id="admin-status" class="hint">בודק סטטוס...</div>
           <div id="admin-claim-box" style="display:none; margin-top:10px">
@@ -956,7 +968,7 @@ function showView(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-' + name).classList.add('active');
   if (name === 'mentoring') { loadLessonDictionaries(); autofillLessonFormFromProfile(); }
-  if (name === 'settings') loadProfile();
+  if (name === 'settings') { loadProfile(); loadRecurringCharges(); }
   if (name === 'wedding') loadWedding();
   if (name === 'apartment') loadApartment();
   if (name === 'loans') loadLoans();
@@ -2683,6 +2695,94 @@ async function loadProfile() {
   document.getElementById('supervisor-request-box').style.display = isSupervisor ? 'none' : '';
   loadAdminClaimStatus();
 }
+// ---------- תשלומים חוזרים (כרטיסי אשראי / הוראות קבע) ----------
+// משוב אמיתי: "יש לאנשים כרטיסי אשראי שכל כרטיס יוצא בתאריך אחר או הו"ק בבנק, חשוב לי שיקבל
+// התראה לפני התאריך כמה כסף צריך להכניס לבנק". ר' src/routes/recurringCharges.js - ההערכה
+// האוטומטית (ממוצע 3 חודשים) והשליחה בפועל (מייל, ע"י Render Cron Job חיצוני) קורות בשרת בלבד -
+// כאן רק CRUD + תצוגת ההערכה שהשרת כבר מחשב.
+let recurringChargesCache = [];
+let recurringChargeEditingId = null;
+
+async function loadRecurringCharges() {
+  const r = await api('GET', '/api/recurring-charges');
+  if (!r.ok) return;
+  recurringChargesCache = r.data.charges;
+  renderRecurringChargesList();
+}
+
+function renderRecurringChargesList() {
+  const el = document.getElementById('recurring-charges-list');
+  if (!el) return;
+  if (!recurringChargesCache.length) { el.innerHTML = '<div class="empty-state">אין עדיין תשלומים חוזרים רשומים</div>'; return; }
+  el.innerHTML = recurringChargesCache.map(c => {
+    if (c.id === recurringChargeEditingId) {
+      return `
+        <div class="list-item" style="flex-wrap:wrap; gap:8px">
+          <input id="rc-edit-name-${c.id}" class="plain" value="${c.name.replace(/"/g, '&quot;')}" placeholder="שם">
+          <input id="rc-edit-day-${c.id}" class="plain" type="number" min="1" max="31" value="${c.charge_day}" style="max-width:90px">
+          <input id="rc-edit-category-${c.id}" class="plain" list="category-suggestions" value="${(c.category || '').replace(/"/g, '&quot;')}" placeholder="קטגוריה">
+          <input id="rc-edit-days-before-${c.id}" class="plain" type="number" min="0" max="30" value="${c.reminder_days_before}" style="max-width:90px">
+          <button class="btn secondary sm" onclick="saveRecurringChargeEdit(${c.id})">שמירה</button>
+          <button class="btn secondary sm" onclick="cancelRecurringChargeEdit()">ביטול</button>
+        </div>`;
+    }
+    const amountText = c.estimatedFromCount > 0
+      ? `הערכה: כ-₪${c.estimatedAmount} (לפי ${c.estimatedFromCount} תנועות אחרונות)`
+      : 'אין עדיין מספיק נתונים להערכת סכום' + (c.category ? '' : ' - לא נבחרה קטגוריה');
+    return `
+    <div class="list-item">
+      <div>
+        <div class="li-main">${c.name.replace(/</g, '&lt;')}</div>
+        <div class="li-sub">יום ${c.charge_day} בחודש · חיוב הבא: ${c.nextChargeDate} · התראה ${c.reminder_days_before} ימים לפני · ${amountText}${c.category ? ` · קטגוריה: ${c.category.replace(/</g, '&lt;')}` : ''}</div>
+      </div>
+      <div style="display:flex; align-items:center; gap:10px">
+        <button class="btn secondary sm" onclick="startRecurringChargeEdit(${c.id})">עריכה</button>
+        <button class="btn secondary sm" onclick="deleteRecurringCharge(${c.id}, '${c.name.replace(/'/g, "\\'")}')">מחיקה</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function addRecurringCharge() {
+  const name = document.getElementById('rc_name').value.trim();
+  const day = Number(document.getElementById('rc_day').value);
+  const category = document.getElementById('rc_category').value.trim();
+  const daysBefore = document.getElementById('rc_days_before').value;
+  if (!name) { toast('יש להזין שם', 'error'); return; }
+  if (!day || day < 1 || day > 31) { toast('יש להזין יום בחודש תקין (1 עד 31)', 'error'); return; }
+  const r = await api('POST', '/api/recurring-charges', {
+    name, charge_day: day, category: category || undefined,
+    reminder_days_before: daysBefore !== '' ? Number(daysBefore) : undefined,
+  });
+  if (r.ok) {
+    toast('נוסף בהצלחה', 'success');
+    document.getElementById('rc_name').value = '';
+    document.getElementById('rc_day').value = '';
+    document.getElementById('rc_category').value = '';
+    document.getElementById('rc_days_before').value = '3';
+    loadRecurringCharges();
+  }
+}
+
+function startRecurringChargeEdit(id) { recurringChargeEditingId = id; renderRecurringChargesList(); }
+function cancelRecurringChargeEdit() { recurringChargeEditingId = null; renderRecurringChargesList(); }
+
+async function saveRecurringChargeEdit(id) {
+  const name = document.getElementById(`rc-edit-name-${id}`).value.trim();
+  const day = Number(document.getElementById(`rc-edit-day-${id}`).value);
+  const category = document.getElementById(`rc-edit-category-${id}`).value.trim();
+  const daysBefore = Number(document.getElementById(`rc-edit-days-before-${id}`).value);
+  if (!name) { toast('יש להזין שם', 'error'); return; }
+  const r = await api('PUT', `/api/recurring-charges/${id}`, { name, charge_day: day, category: category || null, reminder_days_before: daysBefore });
+  if (r.ok) { toast('עודכן בהצלחה', 'success'); recurringChargeEditingId = null; loadRecurringCharges(); }
+}
+
+async function deleteRecurringCharge(id, name) {
+  if (!confirm(`למחוק את "${name}"? לא ניתן לשחזר.`)) return;
+  const r = await api('DELETE', `/api/recurring-charges/${id}`);
+  if (r.ok) { toast('נמחק', 'success'); loadRecurringCharges(); }
+}
+
 async function loadAdminClaimStatus() {
   const r = await api('GET', '/api/me/admin-claim-status');
   if (!r.ok) return;
