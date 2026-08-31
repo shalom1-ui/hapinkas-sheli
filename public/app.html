@@ -622,6 +622,32 @@
           <h3>הכרטיסים/הוראות הקבע שלי</h3>
           <div id="recurring-charges-list"><div class="empty-state">אין עדיין תשלומים חוזרים רשומים</div></div>
         </div>
+        <div class="card">
+          <h3>ייבוא תנועות מאקסל / CSV</h3>
+          <!-- משוב אמיתי: "באשראי או הו"ק אין אפשרות של יבוא קבצים". בדיוק כמו "הלוואות" - אין
+               טבלת "תנועות אשראי/הו"ק" נפרדת (חיוב כרטיס הוא תנועה רגילה לכל דבר) - אז מייבאים
+               לתנועות הרגילות (apiTarget='regular'), עם אותו מנוע ייבוא גנרי (giPreview/giCommit/
+               giLoadBatches, uiTarget='recurring'). הקטגוריה שמזינים/עורכים בתצוגה המקדימה היא זו
+               שצריכה להתאים לקטגוריה שנבחרה במחויב למעלה, כדי שההערכה האוטומטית תעבוד עליה. -->
+          <div class="hint" style="margin-bottom:10px">מעלים (או גוררים) קובץ דף חיוב/דף בנק - התנועות ייובאו לתנועות הרגילות. כדי שההערכה האוטומטית של מחויב חוזר תעבוד, הקפידו שהקטגוריה שתבחרו כאן לכל שורה תואמת לקטגוריה שהוגדרה לו למעלה.</div>
+          <div class="row">
+            <div class="dropzone-wrap" id="recurring-imp-file_zone"><input id="recurring-imp-file" class="plain" type="file" accept=".xlsx,.xls,.csv,.pdf"></div>
+            <select id="recurring-imp-source_type" class="plain">
+              <option value="bank">דף בנק (עו״ש)</option>
+              <option value="card">דף כרטיס אשראי</option>
+            </select>
+            <button class="btn secondary" onclick="giPreview('recurring', 'regular')">תצוגה מקדימה</button>
+          </div>
+          <div id="recurring-imp-preview-area" style="display:none; margin-top:14px">
+            <span class="hint" id="recurring-imp-preview-summary"></span>
+            <div id="recurring-imp-preview-table" style="overflow-x:auto"></div>
+            <button class="btn" style="margin-top:10px" onclick="giCommit('recurring', 'regular')">ייבוא השורות המסומנות</button>
+          </div>
+          <div style="margin-top:16px">
+            <h4 style="margin-bottom:8px">קבצים שיובאו</h4>
+            <div id="recurring-imp-batches-list"><div class="empty-state">עדיין לא יובא אף קובץ</div></div>
+          </div>
+        </div>
       </div>
 
       <!-- ---------- MENTORING ---------- -->
@@ -1870,6 +1896,7 @@ async function giCommit(uiTarget, apiTarget) {
   if (uiTarget === 'wedding') loadWedding();
   else if (uiTarget === 'apartment') loadApartment();
   else if (uiTarget === 'loans') { loadTransactions(); loadLoans(); }
+  else if (uiTarget === 'recurring') loadRecurringCharges();
 }
 
 async function giLoadBatches(uiTarget, apiTarget) {
@@ -1904,6 +1931,7 @@ async function giDeleteBatch(uiTarget, apiTarget, batchId, filename, count) {
   if (uiTarget === 'wedding') loadWedding();
   else if (uiTarget === 'apartment') loadApartment();
   else if (uiTarget === 'loans') { loadTransactions(); loadLoans(); }
+  else if (uiTarget === 'recurring') giLoadBatches('recurring', 'regular');
 }
 
 // ---------- הלוואות (מעקב תשלומים) ----------
@@ -2728,6 +2756,7 @@ async function loadRecurringCharges() {
   if (!r.ok) return;
   recurringChargesCache = r.data.charges;
   renderRecurringChargesList();
+  giLoadBatches('recurring', 'regular'); // ר' כרטיס "ייבוא תנועות מאקסל / CSV" למטה - נטען כאן כמו בהלוואות/חתונה/דירה
 }
 
 function renderRecurringChargesList() {
@@ -2956,7 +2985,7 @@ function setupFileDropZone(inputId) {
     }
   });
 }
-['imp_file', 'wedding-imp-file', 'apartment-imp-file', 'loans-imp-file'].forEach(setupFileDropZone);
+['imp_file', 'wedding-imp-file', 'apartment-imp-file', 'loans-imp-file', 'recurring-imp-file'].forEach(setupFileDropZone);
 </script>
 </body>
 </html>
