@@ -305,7 +305,12 @@
                  שכנראה נחסם באותו סינון תוכן שכבר תיעדנו (ר' [[netfree-content-filter-blocking]]) - בדיוק
                  כמו שקרה ל-<svg>. הוחלף בתיבת טקסט רגילה בתוך הדף (כמו ב"חתונה"/"דירה"), בלי להסתמך
                  על שום דיאלוג דפדפן. -->
-            <input id="t_category_other" class="plain" placeholder="פירוט הקטגוריה" style="display:none">
+            <!-- תוקן (משוב אמיתי: "בקטגוריות אחר בכל הכרטיסים... אני רוצה שזה יהפוך למילון") - חסר
+                 list כאן בכלל (בניגוד ל-wed_category_other/apt_category_other שכבר היו מחוברות
+                 להצעות שלהן) - אותו datalist שהשדה הראשי t_category כבר משתמש בו, כדי שהצעות
+                 (כולל ניסוחי "אחר" קודמים - ר' rememberPhrase ב-routes/transactions.js) יופיעו
+                 גם כאן, לא רק בשדה הראשי. -->
+            <input id="t_category_other" class="plain" list="category-suggestions" placeholder="פירוט הקטגוריה" style="display:none">
             <datalist id="category-suggestions">
               <option value="מעשרות">
               <option value="צדקה">
@@ -1713,7 +1718,7 @@ function renderApartmentList(txs) {
             <option value="income" ${t.type === 'income' ? 'selected' : ''}>הכנסה</option>
           </select>
           <select id="apt-edit-category-${t.id}" class="plain"></select>
-          <input id="apt-edit-category-other-${t.id}" class="plain" placeholder="פירוט הקטגוריה" style="display:none">
+          <input id="apt-edit-category-other-${t.id}" class="plain" list="apartment-category-suggestions" placeholder="פירוט הקטגוריה" style="display:none">
           <input id="apt-edit-amount-${t.id}" class="plain" type="number" value="${t.amount}" style="max-width:110px">
           <input id="apt-edit-note-${t.id}" class="plain" value="${(t.note || '').replace(/"/g, '&quot;')}" placeholder="הערה">
           <button class="btn secondary sm" onclick="saveApartmentEdit(${t.id})">שמירה</button>
