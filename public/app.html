@@ -255,6 +255,7 @@
       <button class="nav-item" data-view="wedding" onclick="showView('wedding')"><span class="ic">💍</span> חתונה</button>
       <button class="nav-item" data-view="apartment" onclick="showView('apartment')"><span class="ic">🏠</span> דירה</button>
       <button class="nav-item" data-view="loans" onclick="showView('loans')"><span class="ic">💰</span> הלוואות</button>
+      <button class="nav-item" data-view="recurring" onclick="showView('recurring')"><span class="ic">🧾</span> אשראי / הו"ק</button>
       <button class="nav-item" data-view="mentoring" onclick="showView('mentoring')"><span class="ic">🎓</span> חונכות</button>
       <button class="nav-item" data-view="therapy" onclick="showView('therapy')"><span class="ic">🩺</span> מעגל מטפלים</button>
       <button class="nav-item" data-view="parents" onclick="showView('parents')"><span class="ic">👪</span> אזור הורים</button>
@@ -593,6 +594,31 @@
         </div>
       </div>
 
+      <!-- ---------- תשלומים חוזרים (כרטיסי אשראי / הוראות קבע) ---------- -->
+      <!-- משוב אמיתי: "יש לאנשים כרטיסי אשראי שכל כרטיס יוצא בתאריך אחר או הו"ק בבנק, חשוב לי
+           שיקבל התראה לפני התאריך כמה כסף צריך להכניס לבנק", ובהמשך: "אני צריך שיהיה בקטגוריה
+           נפרד מערכת להכנס אשראי והו"ק, אני לא רואה את זה" - הועבר מכרטיס קטן בתוך "הגדרות" לכאן,
+           לקטגוריה נפרדת משלו בתפריט (כמו חתונה/דירה/הלוואות), כדי שיהיה גלוי ולא "אבוד" בתוך
+           ההגדרות. ר' src/routes/recurringCharges.js. -->
+      <div class="view" id="view-recurring">
+        <div class="view-header"><h1>אשראי / הו"ק</h1><p>תשלומים חוזרים - תזכורת מייל לפני תאריך החיוב, עם הערכת סכום אוטומטית</p></div>
+        <div class="card">
+          <h3>הוספת כרטיס / הוראת קבע</h3>
+          <div class="hint">רושמים כאן כל כרטיס/הוראת קבע פעם אחת (שם + יום קבוע בחודש) - הסכום לא מוזן ידנית, אלא מוערך אוטומטית לפי ממוצע התנועות מ-3 החודשים האחרונים תחת הקטגוריה שתבחרו (ר' "תנועות"). ההתראה נשלחת למייל, לפי מספר הימים שבחרתם מראש - ודורשת שהתיבה "לקבל התראות תקציב" (בהגדרות) מסומנת, וכתובת מייל מוגדרת בפרופיל.</div>
+          <div class="row" style="margin-top:10px">
+            <div class="field"><label>שם (למשל "כרטיס ויזה")</label><input id="rc_name" class="plain" placeholder="כרטיס ויזה"></div>
+            <div class="field"><label>יום קבוע בחודש</label><input id="rc_day" class="plain" type="number" min="1" max="31" placeholder="10"></div>
+            <div class="field"><label>קטגוריה להערכת סכום (אופציונלי)</label><input id="rc_category" class="plain" list="category-suggestions" placeholder="למשל 'כרטיס ויזה'"></div>
+            <div class="field"><label>ימי התראה מראש</label><input id="rc_days_before" class="plain" type="number" min="0" max="30" value="3"></div>
+            <button class="btn" style="align-self:flex-end" onclick="addRecurringCharge()">הוספה</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3>הכרטיסים/הוראות הקבע שלי</h3>
+          <div id="recurring-charges-list"><div class="empty-state">אין עדיין תשלומים חוזרים רשומים</div></div>
+        </div>
+      </div>
+
       <!-- ---------- MENTORING ---------- -->
       <div class="view" id="view-mentoring">
         <div class="view-header"><h1>חונכות</h1><p>ניהול תלמידים, מפגשים, וטופס "הכנה לשיעור"</p></div>
@@ -745,18 +771,6 @@
             </div>
           </div>
           <button class="btn" onclick="saveProfile()">שמירת שינויים</button>
-        </div>
-        <div class="card">
-          <h3 style="margin-top:0">תשלומים חוזרים (כרטיסי אשראי / הוראות קבע)</h3>
-          <div class="hint">משוב אמיתי: "יש לאנשים כרטיסי אשראי שכל כרטיס יוצא בתאריך אחר או הו"ק בבנק, חשוב לי שיקבל התראה לפני התאריך כמה כסף צריך להכניס לבנק". רושמים כאן כל כרטיס/הוראת קבע פעם אחת (שם + יום קבוע בחודש) - הסכום המוצג לא מוזן ידנית, אלא מוערך אוטומטית לפי ממוצע התנועות מ-3 החודשים האחרונים תחת הקטגוריה שתבחרו (ר' "תנועות"). ההתראה נשלחת למייל, לפי מספר הימים שבחרתם מראש - ודורשת שהתיבה "לקבל התראות תקציב" למעלה מסומנת, וכתובת מייל מוגדרת.</div>
-          <div class="row" style="margin-top:10px">
-            <div class="field"><label>שם (למשל "כרטיס ויזה")</label><input id="rc_name" class="plain" placeholder="כרטיס ויזה"></div>
-            <div class="field"><label>יום קבוע בחודש</label><input id="rc_day" class="plain" type="number" min="1" max="31" placeholder="10"></div>
-            <div class="field"><label>קטגוריה להערכת סכום (אופציונלי)</label><input id="rc_category" class="plain" list="category-suggestions" placeholder="למשל 'כרטיס ויזה'"></div>
-            <div class="field"><label>ימי התראה מראש</label><input id="rc_days_before" class="plain" type="number" min="0" max="30" value="3"></div>
-            <button class="btn" style="align-self:flex-end" onclick="addRecurringCharge()">הוספה</button>
-          </div>
-          <div id="recurring-charges-list" style="margin-top:14px"><div class="empty-state">אין עדיין תשלומים חוזרים רשומים</div></div>
         </div>
         <div class="card">
           <h3 style="margin-top:0">בעל/ת הקו</h3>
@@ -968,7 +982,8 @@ function showView(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   document.getElementById('view-' + name).classList.add('active');
   if (name === 'mentoring') { loadLessonDictionaries(); autofillLessonFormFromProfile(); }
-  if (name === 'settings') { loadProfile(); loadRecurringCharges(); }
+  if (name === 'settings') loadProfile();
+  if (name === 'recurring') loadRecurringCharges();
   if (name === 'wedding') loadWedding();
   if (name === 'apartment') loadApartment();
   if (name === 'loans') loadLoans();
