@@ -1358,6 +1358,34 @@ async function commitImport() {
 
 // רשימת קבצי ייבוא (אצוות) עם אפשרות מחיקה שלמה - משוב אמיתי: "אם הבאתי דפי בנק ואני רוצה למחוק
 // את הקבצים שהועלו שיהיה אופציה לבחור למחוק מהמערכת". ר' src/routes/importTransactions.js.
+// "היסטוריה" - משוב אמיתי: "אני צריך שיהיה לי קטגוריה הסטוריה עם הקבצים שנוכל לראות את מה
+// שייבאתי", בהמשך למפורש: "אחרי שכבר העליתי" - כלומר לא תצוגה מקדימה לפני שמירה (זו כבר קיימת,
+// ר' renderImportPreview/giRenderPreview), אלא לראות בדיעבד אילו תנועות ספציפיות נכנסו מכל קובץ
+// שכבר יובא. "קבצים שיובאו" הציג עד כה רק סיכום (מס' תנועות/טווח תאריכים/סה"כ) - כפתור "צפייה
+// בתנועות" כאן פותח/סוגר רשימה בפועל של התנועות מאותו batchId, כולל "פרטים נוספים מהקובץ" לכל
+// אחת מהן (ר' rawDataDetailsFromJson) - אותה פונקציה משותפת לכל ארבעת כרטיסי הייבוא (רגיל/חתונה/
+// דירה/הלוואות), כדי לא לשכפל אותה ארבע פעמים. שולף מחדש מהשרת (לא מסתמך על lastTxList/וכו' -
+// אלה עלולים להיות ריקים/לא-טעונים תלוי מאיפה המשתמש הגיע לכרטיס הזה).
+async function toggleBatchTransactions(containerId, batchId, endpoint) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.innerHTML = '<div class="empty-state">טוען...</div>';
+  const r = await api('GET', endpoint);
+  if (!r.ok) return;
+  const txs = (r.data.transactions || []).filter(t => t.import_batch_id === batchId);
+  el.innerHTML = txs.length ? txs.map(t => `
+    <div class="list-item">
+      <div>
+        <div class="li-main">${(t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')).replace(/</g, '&lt;')}</div>
+        <div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div>
+        ${rawDataDetailsFromJson(t.raw_data)}
+      </div>
+      <span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span>
+    </div>`).join('') : '<div class="empty-state">לא נמצאו תנועות (אולי נמחקו)</div>';
+}
+
 async function loadImportBatches() {
   const el = document.getElementById('import-batches-list');
   if (!el) return;
@@ -1370,8 +1398,12 @@ async function loadImportBatches() {
         <div class="li-main">${(b.filename || 'קובץ ללא שם').replace(/</g, '&lt;')}</div>
         <div class="li-sub">${b.count} תנועות · ${b.minDate === b.maxDate ? b.minDate : `${b.minDate} עד ${b.maxDate}`} · הכנסות ₪${b.income} · הוצאות ₪${b.expense}</div>
       </div>
-      <button class="btn secondary sm" onclick="deleteImportBatch('${b.batchId}', '${(b.filename || 'קובץ ללא שם').replace(/'/g, "\\'")}', ${b.count})">מחיקת הקובץ</button>
-    </div>`).join('') : '<div class="empty-state">עדיין לא יובא אף קובץ</div>';
+      <div style="display:flex; gap:8px">
+        <button class="btn secondary sm" onclick="toggleBatchTransactions('batch-txs-${b.batchId}', '${b.batchId}', '/api/transactions')">צפייה בתנועות</button>
+        <button class="btn secondary sm" onclick="deleteImportBatch('${b.batchId}', '${(b.filename || 'קובץ ללא שם').replace(/'/g, "\\'")}', ${b.count})">מחיקת הקובץ</button>
+      </div>
+    </div>
+    <div id="batch-txs-${b.batchId}" style="display:none; margin:-4px 0 8px; padding-right:16px"></div>`).join('') : '<div class="empty-state">עדיין לא יובא אף קובץ</div>';
 }
 
 async function deleteImportBatch(batchId, filename, count) {
@@ -1815,14 +1847,21 @@ async function giLoadBatches(uiTarget, apiTarget) {
   const r = await api('GET', `/api/transactions/import/batches?target=${apiTarget}`);
   if (!r.ok) return;
   const batches = r.data.batches || [];
+  // "צפייה בתנועות" (ר' toggleBatchTransactions למעלה) - endpoint לפי apiTarget בפועל (לא uiTarget:
+  // ייבוא "הלוואות" נכנס לתנועות הרגילות, apiTarget='regular', ר' giPreview('loans','regular') בטופס).
+  const listEndpoint = apiTarget === 'wedding' ? '/api/wedding/transactions' : apiTarget === 'apartment' ? '/api/apartment/transactions' : '/api/transactions';
   el.innerHTML = batches.length ? batches.map(b => `
     <div class="list-item">
       <div>
         <div class="li-main">${(b.filename || 'קובץ ללא שם').replace(/</g, '&lt;')}</div>
         <div class="li-sub">${b.count} תנועות · ${b.minDate === b.maxDate ? b.minDate : `${b.minDate} עד ${b.maxDate}`} · הכנסות ₪${b.income} · הוצאות ₪${b.expense}</div>
       </div>
-      <button class="btn secondary sm" onclick="giDeleteBatch('${uiTarget}', '${apiTarget}', '${b.batchId}', '${(b.filename || 'קובץ ללא שם').replace(/'/g, "\\'")}', ${b.count})">מחיקת הקובץ</button>
-    </div>`).join('') : '<div class="empty-state">עדיין לא יובא אף קובץ</div>';
+      <div style="display:flex; gap:8px">
+        <button class="btn secondary sm" onclick="toggleBatchTransactions('${uiTarget}-batch-txs-${b.batchId}', '${b.batchId}', '${listEndpoint}')">צפייה בתנועות</button>
+        <button class="btn secondary sm" onclick="giDeleteBatch('${uiTarget}', '${apiTarget}', '${b.batchId}', '${(b.filename || 'קובץ ללא שם').replace(/'/g, "\\'")}', ${b.count})">מחיקת הקובץ</button>
+      </div>
+    </div>
+    <div id="${uiTarget}-batch-txs-${b.batchId}" style="display:none; margin:-4px 0 8px; padding-right:16px"></div>`).join('') : '<div class="empty-state">עדיין לא יובא אף קובץ</div>';
 }
 
 async function giDeleteBatch(uiTarget, apiTarget, batchId, filename, count) {
