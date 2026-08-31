@@ -486,6 +486,14 @@ async function run() {
       bankImportPreview.data.transactions.every(t => t.alreadyImported === false),
       "לפני הייבוא בפועל, אף תנועה לא מסומנת כ'כבר יובאה'"
     );
+    // משוב אמיתי: "בדפי הבנק יש פרטים שלאחר יבוא לא רואים אותם - אני צריך את כל הנתונים בצד" -
+    // כל עמודות שורת המקור (לא רק date/description/amount/type שנבחרו לתנועה) אמורות להישמר תחת raw.
+    assert(
+      Array.isArray(bankIncomeRow.raw) &&
+      bankIncomeRow.raw.some(c => c.label === "תיאור פעולה" && c.value === "משכורת ינואר") &&
+      bankIncomeRow.raw.some(c => c.label === "זכות" && Number(c.value) === 5000),
+      `התצוגה המקדימה כוללת raw עם כל עמודות השורה המקורית, לא רק את מה שנבחר לתנועה (${JSON.stringify(bankIncomeRow.raw)})`
+    );
 
     const bankImportCommit = await api("POST", "/api/transactions/import/commit", { transactions: bankImportPreview.data.transactions }, token);
     assert(
@@ -497,6 +505,12 @@ async function run() {
       afterBankImport.data.transactions.some(t => t.source === "import" && t.amount === 5000 && t.type === "income" && t.note === "משכורת ינואר") &&
       afterBankImport.data.transactions.some(t => t.source === "import" && t.amount === 120.5 && t.type === "expense"),
       "התנועות שיובאו נשמרו במסד הנתונים עם source='import' והתיאור המקורי כ-note"
+    );
+    const importedIncomeRow = afterBankImport.data.transactions.find(t => t.source === "import" && t.amount === 5000);
+    const savedRaw = importedIncomeRow.raw_data ? JSON.parse(importedIncomeRow.raw_data) : null;
+    assert(
+      Array.isArray(savedRaw) && savedRaw.some(c => c.label === "תיאור פעולה" && c.value === "משכורת ינואר"),
+      `raw_data נשמר גם אחרי הייבוא בפועל (לא רק בתצוגה המקדימה) - נגיש דרך GET /api/transactions (${JSON.stringify(savedRaw)})`
     );
 
     console.log("\n📥 ייבוא אקסל - מניעת כפילויות (אותו קובץ פעמיים)");

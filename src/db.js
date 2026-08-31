@@ -80,6 +80,12 @@ db.exec(`
     -- רגילות (טלפון/אתר) שלא הגיעו מייבוא.
     import_batch_id TEXT,
     import_filename TEXT,
+    -- כל עמודות שורת המקור בקובץ שיובאה (JSON, מערך {label,value}) - משוב אמיתי: "בדפי הבנק יש
+    -- פרטים שלאחר יבוא לא רואים אותם - אני צריך את כל הנתונים בצד". date/amount/description/type
+    -- הם רק תת-קבוצה שנבחרה מתוך השורה לצורך התנועה עצמה (ר' rowsToTransactions ב-importMapping.js) -
+    -- raw_data שומר את השורה *כולה* כפי שהייתה בקובץ, כדי שאפשר יהיה לראות אותה גם אחרי היבוא (לא
+    -- רק בתצוגה המקדימה שנעלמת לאחר השמירה). NULL לתנועות שלא הגיעו מייבוא קובץ (טלפון/אתר/העברה).
+    raw_data TEXT,
     loan_id INTEGER REFERENCES loans(id), -- קישור אופציונלי להלוואה (ר' טבלת loans למטה) - לתשלום שנרשם בפועל
     -- "הועברה" לחתונה/דירה (ר' routes/importTransactions.js /api/transactions/move) - משוב אמיתי:
     -- "כדי לערוך מה שיש בפנים בתוך דפי הבנק, שיהיה לי אפשרות להציג... אני רואה את הפרטים לאן הועבר".
@@ -106,6 +112,7 @@ db.exec(`
     import_hash TEXT,
     import_batch_id TEXT,
     import_filename TEXT,
+    raw_data TEXT, -- ר' הערה מפורטת ב-CREATE TABLE transactions למעלה
     loan_id INTEGER REFERENCES loans(id),
     occurred_at TEXT DEFAULT (datetime('now'))
   );
@@ -122,6 +129,7 @@ db.exec(`
     import_hash TEXT,
     import_batch_id TEXT,
     import_filename TEXT,
+    raw_data TEXT, -- ר' הערה מפורטת ב-CREATE TABLE transactions למעלה
     loan_id INTEGER REFERENCES loans(id),
     occurred_at TEXT DEFAULT (datetime('now'))
   );
@@ -317,6 +325,11 @@ for (const alterSql of [
   "ALTER TABLE apartment_transactions ADD COLUMN loan_id INTEGER REFERENCES loans(id)",
   // "הועברה לחתונה/דירה" - ר' הערה מפורטת ב-CREATE TABLE transactions למעלה.
   "ALTER TABLE transactions ADD COLUMN moved_to TEXT",
+  // כל עמודות שורת המקור המיובאת (משוב אמיתי: "בדפי הבנק יש פרטים שלאחר יבוא לא רואים אותם") -
+  // ר' הערה מפורטת ב-CREATE TABLE transactions למעלה.
+  "ALTER TABLE transactions ADD COLUMN raw_data TEXT",
+  "ALTER TABLE wedding_transactions ADD COLUMN raw_data TEXT",
+  "ALTER TABLE apartment_transactions ADD COLUMN raw_data TEXT",
 ]) {
   try {
     db.exec(alterSql);

@@ -229,7 +229,18 @@ function rowsToTransactions(rows, sourceType) {
     if (!description && cols.descFallbackCol >= 0) {
       description = String(row[cols.descFallbackCol] ?? "").trim();
     }
-    transactions.push({ date, description, amount: Math.round(amount * 100) / 100, type, category: "" });
+
+    // משוב אמיתי: "בדפי הבנק יש פרטים שלאחר יבוא לא רואים אותם - אני צריך את כל הנתונים בצד". עד
+    // כה נבחרו רק עמודות date/description/amount/type מהשורה - כל שאר העמודות המקוריות (מספר
+    // אסמכתא, יתרה, ניסוח מדויק של סוג הפעולה וכו') פשוט הושלכו ולא נשמרו בשום מקום. raw שומר כאן
+    // *כל* עמודה בשורה (לפי תווית הכותרת שלה), כדי שאפשר יהיה להציג אותה תוך כדי עריכה בתצוגה
+    // המקדימה (ר' rawDataDetailsHtml ב-public/app.html) וגם אחרי היבוא בפועל (נשמר כ-raw_data,
+    // ר' routes/importTransactions.js/db.js). מדלגים על תאים ריקים - אין טעם להציג "עמודה 7: " ריק.
+    const raw = headerRow
+      .map((h, ci) => ({ label: String(h ?? "").trim() || `עמודה ${ci + 1}`, value: row[ci] }))
+      .filter(c => c.value !== "" && c.value !== undefined && c.value !== null);
+
+    transactions.push({ date, description, amount: Math.round(amount * 100) / 100, type, category: "", raw });
   }
 
   return { headerIndex, columns: cols, transactions, skippedCount: skipped.length };

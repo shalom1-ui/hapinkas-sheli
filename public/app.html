@@ -1069,11 +1069,21 @@ async function onMoveTargetChange(id) {
   const otherInput = document.getElementById(`move-category-other-${id}`);
   const loanSelect = document.getElementById(`move-loan-${id}`);
   const confirmBtn = document.getElementById(`move-confirm-${id}`);
+  const preview = document.getElementById(`move-preview-${id}`);
   catSelect.style.display = 'none';
   otherInput.style.display = 'none';
   loanSelect.style.display = 'none';
   confirmBtn.style.display = 'none';
-  if (!target) return;
+  if (!target) { preview.style.display = 'none'; return; }
+
+  // תצוגה מקדימה של הפרטים המקוריים מהבנק (קטגוריה חופשית + הערה) - משוב אמיתי: "תצוגה מקדימה
+  // של הבנק תוך כדי עבודה שאני יוכל לראות מה לכתוב". צמודה לבוררים עצמם, כדי שאפשר יהיה לראות
+  // בדיוק במה מדובר תוך כדי בחירת קטגוריית היעד, בלי לחפש את זה בחזרה בתחילת השורה.
+  const tx = lastTxList.find(t => t.id === id);
+  if (tx) {
+    preview.textContent = `מהבנק: "${tx.category || 'ללא קטגוריה'}"${tx.note ? ' · ' + tx.note : ''} · ₪${tx.amount} · ${tx.occurred_at}`;
+    preview.style.display = '';
+  }
 
   if (target === 'loans') {
     if (!loansCache.length) await loadLoans();
@@ -1089,7 +1099,6 @@ async function onMoveTargetChange(id) {
     return;
   }
 
-  const tx = lastTxList.find(t => t.id === id);
   const type = tx ? tx.type : 'expense';
   if (target === 'wedding') {
     if (!weddingCategories.expense.length && !weddingCategories.income.length) await loadWeddingCategories();
@@ -1200,28 +1209,34 @@ function renderTxList() {
       ? `<span class="pill" style="background:var(--border); color:var(--text-secondary)">→ הועברה ל${t.moved_to === 'wedding' ? 'חתונה' : 'דירה'}</span>`
       : '';
     // "העבר ל..." - בחירת יעד חושפת בקרה שנייה (קטגוריית חתונה/דירה, או הלוואה לקישור), ורק אז
-    // כפתור "אישור" מבצע בפועל (ר' onMoveTargetChange/confirmMoveOrLink). שדה "אחר..." מחובר
-    // לאותו datalist הצעות-קטגוריה שכבר קיים בטופס ההוספה של חתונה/דירה עצמן - משוב אמיתי: "תצוגה
-    // מקדימה... שאני אוכל לראות מה לכתוב" - כדי שגם כאן יופיעו הצעות (ביגוד/מתנות/וכו' + ניסוחים
-    // חופשיים קודמים) תוך כדי הקלדה, לא תיבה ריקה בלי שום רמז.
+    // כפתור "אישור" מבצע בפועל (ר' onMoveTargetChange/confirmMoveOrLink). שדה "אחר..." מחובר לאותו
+    // datalist הצעות-קטגוריה שכבר קיים בטופס ההוספה של חתונה/דירה עצמן, כדי שגם כאן יופיעו הצעות
+    // (ביגוד/מתנות/וכו' + ניסוחים חופשיים קודמים) תוך כדי הקלדה.
+    // תוקן (משוב אמיתי: "תצוגה מקדימה של הבנק תוך כדי עבודה שאני יוכל לראות מה לכתוב") - הפרטים
+    // המקוריים מדף הבנק (קטגוריה חופשית + הערה) כבר מופיעים בשורה עצמה (li-sub), אבל ברגע שנפתחים
+    // כמה בוררים לבחירת יעד/קטגוריה זה זז רחוק מהעין - move-preview-${t.id} חוזר ומציג אותם צמוד
+    // לבוררים עצמם (ר' onMoveTargetChange) כדי שאפשר לראות במה מדובר בדיוק תוך כדי בחירת הקטגוריה.
     const moveControl = t.moved_to ? '' : `
-        <span style="display:flex; align-items:center; gap:6px">
-          <select id="move-target-${t.id}" class="plain" style="width:auto; padding:7px 10px; font-size:13px" onchange="onMoveTargetChange(${t.id})">
-            <option value="">העבר ל...</option>
-            <option value="wedding">חתונה</option>
-            <option value="apartment">דירה</option>
-            <option value="loans">הלוואות</option>
-          </select>
-          <select id="move-category-${t.id}" class="plain" style="width:auto; padding:7px 10px; font-size:13px; display:none" onchange="onMoveCategoryChange(${t.id})"></select>
-          <input id="move-category-other-${t.id}" class="plain" style="width:auto; padding:7px 10px; font-size:13px; display:none" placeholder="פירוט הקטגוריה">
-          <select id="move-loan-${t.id}" class="plain" style="width:auto; padding:7px 10px; font-size:13px; display:none"></select>
-          <button id="move-confirm-${t.id}" class="btn secondary sm" style="display:none" onclick="confirmMoveOrLink(${t.id})">אישור</button>
+        <span style="display:flex; flex-direction:column; align-items:flex-end; gap:4px">
+          <div id="move-preview-${t.id}" class="li-sub" style="display:none"></div>
+          <span style="display:flex; align-items:center; gap:6px">
+            <select id="move-target-${t.id}" class="plain" style="width:auto; padding:7px 10px; font-size:13px" onchange="onMoveTargetChange(${t.id})">
+              <option value="">העבר ל...</option>
+              <option value="wedding">חתונה</option>
+              <option value="apartment">דירה</option>
+              <option value="loans">הלוואות</option>
+            </select>
+            <select id="move-category-${t.id}" class="plain" style="width:auto; padding:7px 10px; font-size:13px; display:none" onchange="onMoveCategoryChange(${t.id})"></select>
+            <input id="move-category-other-${t.id}" class="plain" style="width:auto; padding:7px 10px; font-size:13px; display:none" placeholder="פירוט הקטגוריה">
+            <select id="move-loan-${t.id}" class="plain" style="width:auto; padding:7px 10px; font-size:13px; display:none"></select>
+            <button id="move-confirm-${t.id}" class="btn secondary sm" style="display:none" onclick="confirmMoveOrLink(${t.id})">אישור</button>
+          </span>
         </span>`;
     return `
     <div class="list-item">
       <div style="display:flex; align-items:center; gap:10px">
         <input type="checkbox" ${selectedTxIds.has(t.id) ? 'checked' : ''} onchange="this.checked ? selectedTxIds.add(${t.id}) : selectedTxIds.delete(${t.id}); renderTxList()">
-        <div><div class="li-main">${label}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div></div>
+        <div><div class="li-main">${label}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div>${rawDataDetailsFromJson(t.raw_data)}</div>
       </div>
       <div style="display:flex; align-items:center; gap:10px">
         ${movedBadge}
@@ -1238,6 +1253,33 @@ function renderTxList() {
 // תכניס את זה להכנסות והוצאות". שני שלבים בכוונה (תצוגה מקדימה -> ייבוא) - ר' src/routes/importTransactions.js.
 let importPreviewRows = []; // הרשימה האחרונה שהתקבלה מהשרת בתצוגה המקדימה, כולל עריכות המשתמש (סוג/קטגוריה/סימון)
 let importPreviewFilename = ''; // שם הקובץ שמוצג כרגע בתצוגה המקדימה - נשלח שוב ב-commit כדי לתייג את האצווה (ר' loadImportBatches)
+
+// "פרטים נוספים מהקובץ" - משוב אמיתי: "בדפי הבנק יש פרטים שלאחר יבוא לא רואים אותם - אני צריך את
+// כל הנתונים בצד". מנוע הזיהוי (rowsToTransactions ב-importMapping.js) שולף מכל שורה רק את
+// התאריך/סכום/תיאור/סוג הדרושים לתנועה עצמה - שאר עמודות הקובץ המקורי (הפניה, יתרה, סוג פעולה
+// מדויק וכו') לא נראו בשום מקום, לא בתצוגה המקדימה ולא אחרי היבוא. שני שימושים לאותה תבנית תצוגה:
+// rawDataDetailsHtml(t.raw) - בתצוגה המקדימה, לפני שמירה (מערך {label,value} כמו שהתקבל מהשרת);
+// rawDataDetailsFromJson(t.raw_data) - אחרי ייבוא בפועל, ברשימות התנועות (JSON string מה-DB).
+// <details> (לא מוצג כברירת מחדל) כדי לא להציף את הטבלה/הרשימה - "בצד", זמין תוך כדי עריכה, לא כפוי.
+function rawDataDetailsHtml(raw) {
+  if (!raw || !Array.isArray(raw) || !raw.length) return '';
+  const rowsHtml = raw.map(c => `
+    <div style="display:flex; justify-content:space-between; gap:10px">
+      <span style="color:var(--text-secondary)">${String(c.label).replace(/</g, '&lt;')}</span>
+      <span>${String(c.value).replace(/</g, '&lt;')}</span>
+    </div>`).join('');
+  return `
+    <details style="margin-top:4px">
+      <summary style="cursor:pointer; font-size:12px; color:var(--text-secondary)">פרטים נוספים מהקובץ</summary>
+      <div style="display:flex; flex-direction:column; gap:2px; font-size:12px; margin-top:4px; padding:8px; background:var(--surface-2); border-radius:8px; min-width:200px">${rowsHtml}</div>
+    </details>`;
+}
+function rawDataDetailsFromJson(rawDataJson) {
+  if (!rawDataJson) return '';
+  let raw;
+  try { raw = JSON.parse(rawDataJson); } catch (e) { return ''; }
+  return rawDataDetailsHtml(raw);
+}
 
 async function previewImport() {
   const fileInput = document.getElementById('imp_file');
@@ -1279,7 +1321,7 @@ function renderImportPreview(skippedRowsCount) {
           <tr style="${t.alreadyImported ? 'opacity:.55' : ''}">
             <td><input type="checkbox" ${t.included ? 'checked' : ''} onchange="importPreviewRows[${i}].included = this.checked"></td>
             <td>${t.date}</td>
-            <td>${(t.description || '').replace(/</g, '&lt;')}</td>
+            <td>${(t.description || '').replace(/</g, '&lt;')}${rawDataDetailsHtml(t.raw)}</td>
             <td class="num ${t.type}">₪${t.amount}</td>
             <td>
               <select class="plain" onchange="importPreviewRows[${i}].type = this.value">
@@ -1458,7 +1500,7 @@ function renderWeddingList(txs) {
     <div class="list-item">
       <div style="display:flex; align-items:center; gap:10px">
         <input type="checkbox" ${selectedWeddingIds.has(t.id) ? 'checked' : ''} onchange="this.checked ? selectedWeddingIds.add(${t.id}) : selectedWeddingIds.delete(${t.id}); renderWeddingList(lastWeddingList)">
-        <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div></div>
+        <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div>${rawDataDetailsFromJson(t.raw_data)}</div>
       </div>
       <div style="display:flex; align-items:center; gap:10px">
         <span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span>
@@ -1623,7 +1665,7 @@ function renderApartmentList(txs) {
     <div class="list-item">
       <div style="display:flex; align-items:center; gap:10px">
         <input type="checkbox" ${selectedApartmentIds.has(t.id) ? 'checked' : ''} onchange="this.checked ? selectedApartmentIds.add(${t.id}) : selectedApartmentIds.delete(${t.id}); renderApartmentList(lastApartmentList)">
-        <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div></div>
+        <div><div class="li-main">${t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')}</div><div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div>${rawDataDetailsFromJson(t.raw_data)}</div>
       </div>
       <div style="display:flex; align-items:center; gap:10px">
         <span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span>
@@ -1732,7 +1774,7 @@ function giRenderPreview(uiTarget, skippedRowsCount) {
           <tr style="${t.alreadyImported ? 'opacity:.55' : ''}">
             <td><input type="checkbox" ${t.included ? 'checked' : ''} onchange="genericImportState['${uiTarget}'].rows[${i}].included = this.checked"></td>
             <td>${t.date}</td>
-            <td>${(t.description || '').replace(/</g, '&lt;')}</td>
+            <td>${(t.description || '').replace(/</g, '&lt;')}${rawDataDetailsHtml(t.raw)}</td>
             <td class="num ${t.type}">₪${t.amount}</td>
             <td>
               <select class="plain" onchange="genericImportState['${uiTarget}'].rows[${i}].type = this.value">

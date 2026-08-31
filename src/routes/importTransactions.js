@@ -139,10 +139,10 @@ function register(router) {
 
     const insert = importTarget.hasSource
       ? db.prepare(
-          "INSERT INTO transactions (user_id, type, amount, category, note, source, import_hash, import_batch_id, import_filename, loan_id, occurred_at) VALUES (?, ?, ?, ?, ?, 'import', ?, ?, ?, ?, ?)"
+          "INSERT INTO transactions (user_id, type, amount, category, note, source, import_hash, import_batch_id, import_filename, raw_data, loan_id, occurred_at) VALUES (?, ?, ?, ?, ?, 'import', ?, ?, ?, ?, ?, ?)"
         )
       : db.prepare(
-          `INSERT INTO ${importTarget.table} (user_id, type, amount, category, note, import_hash, import_batch_id, import_filename, loan_id, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          `INSERT INTO ${importTarget.table} (user_id, type, amount, category, note, import_hash, import_batch_id, import_filename, raw_data, loan_id, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         );
     let imported = 0;
     let skippedDuplicates = 0;
@@ -162,14 +162,26 @@ function register(router) {
       // בתצוגה המקדימה יכולה לבחור להלוואה איזו היא שייכת (ר' loans.js), נבדק שההלוואה שייכת למשתמש הזה.
       const loanId = raw.loan_id && db.prepare("SELECT id FROM loans WHERE id = ? AND user_id = ?").get(raw.loan_id, ctx.user.userId) ? raw.loan_id : null;
 
+      // כל עמודות שורת המקור (ר' raw ב-lib/importMapping.js/rowsToTransactions) - משוב אמיתי: "בדפי
+      // הבנק יש פרטים שלאחר יבוא לא רואים אותם - אני צריך את כל הנתונים בצד". מגיע מהלקוח (חוזר
+      // מהתצוגה המקדימה כמו שהוא, בלי עריכה) - לא בטוח בגודלו, לכן מגבילים מספר עמודות/אורך כל
+      // תווית/ערך כדי שלא יהיה אפשר לנפח את מסד הנתונים בכוונה עם קובץ עם מאות עמודות מלאכותיות.
+      const rawColumns = Array.isArray(raw.raw)
+        ? raw.raw.slice(0, 60).map(c => ({
+            label: String((c && c.label) || "").slice(0, 100),
+            value: String(c && c.value !== undefined && c.value !== null ? c.value : "").slice(0, 300),
+          }))
+        : null;
+      const rawDataJson = rawColumns && rawColumns.length ? JSON.stringify(rawColumns) : null;
+
       const exists = db.prepare(`SELECT 1 FROM ${importTarget.table} WHERE user_id = ? AND import_hash = ?`).get(ctx.user.userId, hash);
       if (exists) { skippedDuplicates++; continue; }
 
       try {
-        // שני מקרי ה-target משתמשים באותה רשימת פרמטרים מכורכים בדיוק (10) - ההבדל היחיד בין שתי
+        // שני מקרי ה-target משתמשים באותה רשימת פרמטרים מכורכים בדיוק (11) - ההבדל היחיד בין שתי
         // ה-INSERT המוכנות למעלה הוא הטקסט הקבוע 'import' בעמודת source (רק בטבלת transactions
         // הרגילה, שהיא היחידה עם עמודה כזו) - לא פרמטר בפני עצמו, אז אותה קריאת run() מתאימה לשתיהן.
-        insert.run(ctx.user.userId, type, t.amount, category, description || null, hash, batchId, filename, loanId, `${date} 12:00:00`);
+        insert.run(ctx.user.userId, type, t.amount, category, description || null, hash, batchId, filename, rawDataJson, loanId, `${date} 12:00:00`);
         imported++;
       } catch (e) {
         // התנגשות באינדקס הייחודי (idx_..._import_hash, ר' db.js) - מרוץ תזמון נדיר בין ה-SELECT
