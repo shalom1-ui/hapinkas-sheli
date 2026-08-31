@@ -1112,6 +1112,81 @@ async function run() {
     const loanRowAfterImport = loanAfterImport.data.loans.find(l => l.id === loanForImportId);
     assert(loanRowAfterImport.linkedPaymentsCount === 1, `להלוואה מוצג עכשיו תשלום אחד אמיתי מהקובץ שיובא (${JSON.stringify(loanRowAfterImport)})`);
 
+    console.log("\n📄 ייבוא לוח סילוקין הלוואה (PDF) - זיהוי אוטומטי של פרטי ההלוואה + קישור תשלומים שעברו");
+    // משוב אמיתי: "צריך לדעת לקרוא גם קובץ [לוח סילוקין הלוואה]", ולשאלת הבהרה: "שניהם יחד - גם
+    // רישום הלוואה וגם קישור תשלומים שעברו". ר' src/lib/pdfParser.js (parseLoanAmortizationPdf),
+    // src/routes/loans.js (/parse-amortization, /commit-amortization). מדמה (buildTestPdf, לא הקובץ
+    // האמיתי - לא נשמר בריפו) את המבנה המדויק שנצפה בקובץ אמיתי (מזרחי-טפחות): הכותרת מתפצלת על
+    // פני *שלוש* שורות פיזיות (לא שתיים) - "מספר"/"תשלום","תאריך"/"חיוב" וכו' על שתי שורות, אבל
+    // "יתרת הקרן" בלי פיצול, כשורה שלישית שיושבת (לפי y) *בין* שתי שורות ההמשך של שאר העמודות.
+    const yesterdayIso = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const [yy, mm, dd] = yesterdayIso.split("-");
+    const pastPaymentDate = `${dd}/${mm}/${yy.slice(2)}`; // dd/mm/yy - כמו בקובץ האמיתי
+    const amortPdf = buildTestPdf([
+      // בלוק הכותרת - שלוש שורות פיזיות, אותם מיקומי x/y בדיוק כמו שנצפו בקובץ האמיתי
+      { text: "מספר", x: 504.0, y: 766.2 }, { text: "תאריך", x: 442.5, y: 766.2 },
+      { text: "תשלום על חשבון", x: 330.4, y: 766.2 }, { text: "תשלום על חשבון", x: 231.6, y: 766.2 },
+      { text: "סך החזר", x: 165.2, y: 766.2 },
+      { text: "יתרת הקרן", x: 88.3, y: 758.0 },
+      { text: "תשלום", x: 498.5, y: 749.7 }, { text: "חיוב", x: 451.6, y: 749.7 },
+      { text: "הקרן", x: 387.2, y: 749.7 }, { text: "הריבית", x: 278.7, y: 749.7 }, { text: "חודשי", x: 177.4, y: 749.7 },
+      // שורת תשלום 1 - תאריך עבר (אתמול) - צריכה להיקשר כתנועה בפועל
+      { text: "1", x: 523.8, y: 717.4 }, { text: pastPaymentDate, x: 420.9, y: 717.4 },
+      { text: "368.88", x: 372.3, y: 717.4 }, { text: "406.77", x: 273.6, y: 717.4 },
+      { text: "775.65", x: 167.5, y: 717.4 }, { text: "74,631.12", x: 83.4, y: 717.4 },
+      // שורת תשלום 2 - תאריך עתידי - לא אמורה להיקשר (משוב אמיתי מדגיש רק "תשלומים שעברו")
+      { text: "2", x: 523.8, y: 685.2 }, { text: "22/09/40", x: 420.9, y: 685.2 },
+      { text: "352.75", x: 372.3, y: 685.2 }, { text: "359.16", x: 273.6, y: 685.2 },
+      { text: "711.91", x: 167.5, y: 685.2 }, { text: "74,278.37", x: 83.4, y: 685.2 },
+    ]);
+    const amortParse = await api(
+      "POST", "/api/loans/parse-amortization",
+      { data_base64: amortPdf.toString("base64"), filename: "loan-amort-test.pdf" },
+      token
+    );
+    assert(
+      amortParse.status === 200 && amortParse.data.totalInstallments === 2 && amortParse.data.startDate === yesterdayIso,
+      `לוח סילוקין עם כותרת מתפצלת על שלוש שורות פיזיות זוהה נכון - 2 תשלומים, תאריך התחלה נכון (${JSON.stringify(amortParse.data)})`
+    );
+    assert(
+      amortParse.data.payments[0].isPast === true && amortParse.data.payments[1].isPast === false,
+      "תשלום עם תאריך שעבר מסומן isPast, ותשלום עתידי לא"
+    );
+    assert(
+      amortParse.data.payments[0].principal === 368.88 && amortParse.data.payments[0].interest === 406.77 &&
+      amortParse.data.payments[0].totalPayment === 775.65 && amortParse.data.payments[0].remainingBalance === 74631.12,
+      `כל שדות התשלום הראשון זוהו נכון מתוך שש העמודות (קרן/ריבית/סה"כ/יתרה) (${JSON.stringify(amortParse.data.payments[0])})`
+    );
+
+    const amortCommit = await api(
+      "POST", "/api/loans/commit-amortization",
+      {
+        name: amortParse.data.suggestedName, total_installments: amortParse.data.totalInstallments,
+        start_date: amortParse.data.startDate, monthly_amount: amortParse.data.monthlyAmount,
+        payments: amortParse.data.payments.map(p => ({ ...p, included: p.isPast })),
+      },
+      token
+    );
+    assert(
+      amortCommit.status === 201 && amortCommit.data.linkedPayments === 1,
+      `יצירת ההלוואה + קישור תשלום אחד שעבר (לא השני, עתידי) הצליחה (${JSON.stringify(amortCommit.data)})`
+    );
+    const amortLoanId = amortCommit.data.loan.id;
+    assert(
+      amortCommit.data.loan.linkedPaymentsCount === 1 && amortCommit.data.loan.remainingInstallments === 1,
+      `ההלוואה שנוצרה מציגה תשלום אחד מקושר בפועל ותשלום אחד שנותר (${JSON.stringify(amortCommit.data.loan)})`
+    );
+    const txsAfterAmort = await api("GET", "/api/transactions", null, token);
+    const amortLinkedTx = txsAfterAmort.data.transactions.find(t => t.loan_id === amortLoanId);
+    assert(
+      amortLinkedTx && amortLinkedTx.amount === 775.65 && amortLinkedTx.occurred_at.startsWith(yesterdayIso),
+      `התשלום שעבר נשמר כתנועה רגילה מקושרת להלוואה, עם הסכום והתאריך הנכונים מהלוח (${JSON.stringify(amortLinkedTx)})`
+    );
+
+    // ניקוי
+    await api("DELETE", `/api/transactions/${amortLinkedTx.id}`, null, token);
+    await api("DELETE", `/api/loans/${amortLoanId}`, null, token);
+
     console.log("\n💳 תשלומים חוזרים (כרטיסי אשראי/הו\"ק) + התראה לפני תאריך החיוב");
     // משוב אמיתי: "יש לאנשים כרטיסי אשראי שכל כרטיס יוצא בתאריך אחר או הו\"ק בבנק, חשוב לי שיקבל
     // התראה לפני התאריך כמה כסף צריך להכניס לבנק". ר' src/routes/recurringCharges.js.

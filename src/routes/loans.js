@@ -10,6 +10,12 @@
 const db = require("../db");
 const { json } = require("../router");
 const { requireAuth } = require("../middleware/auth");
+const { parseLoanAmortizationPdf } = require("../lib/pdfParser");
+
+function decodeBase64File(data_base64) {
+  const base64Only = String(data_base64 || "").includes(",") ? String(data_base64).split(",").pop() : data_base64;
+  return Buffer.from(base64Only, "base64");
+}
 
 // כמה "חודשי תשלום" חלפו מאז תאריך ההתחלה (כולל התשלום של חודש ההתחלה עצמו כתשלום #1). אם עוד לא
 // הגיע היום-בחודש המקביל לתאריך ההתחלה, לא סופרים את החודש הנוכחי עדיין (התשלום עוד לא "הגיע").
@@ -97,6 +103,77 @@ function register(router) {
     }
     db.prepare("DELETE FROM loans WHERE id = ?").run(row.id);
     return json(ctx.res, 200, { message: "ההלוואה נמחקה" });
+  }));
+
+  // ---------- ייבוא לוח סילוקין (PDF) - זיהוי אוטומטי של הלוואה + קישור תשלומים שכבר בוצעו ----------
+  // משוב אמיתי: "צריך לדעת לקרוא גם קובץ [לוח סילוקין הלוואה]", ולשאלת הבהרה - "שניהם יחד: גם רישום
+  // הלוואה וגם קישור תשלומים שעברו". שני שלבים בכוונה (כמו כל ייבוא אחר בפרויקט - ר' importTransactions.js):
+  // (1) parse - קורא את הקובץ, לא שומר כלום, מחזיר הצעה לפרטי ההלוואה + כל שורות התשלום (עם דגל
+  //     isPast לפי תאריך). (2) commit - שומר בפועל את ההלוואה (עם השדות כפי שהמשתמש אישר/ערך) ואת
+  //     התשלומים שסומנו כ"כלול" כתנועות רגילות מקושרות (loan_id), בדיוק כמו קישור תנועה ידני להלוואה.
+  router.post("/api/loans/parse-amortization", requireAuth(async (ctx) => {
+    const { data_base64, filename } = ctx.body;
+    if (!data_base64) return json(ctx.res, 400, { error: "לא התקבל תוכן קובץ (data_base64)" });
+    let buffer;
+    try {
+      buffer = decodeBase64File(data_base64);
+    } catch (e) {
+      return json(ctx.res, 400, { error: "תוכן הקובץ אינו base64 תקין" });
+    }
+    if (!buffer.length) return json(ctx.res, 400, { error: "הקובץ ריק" });
+    if (!(buffer.length >= 5 && buffer.toString("latin1", 0, 5) === "%PDF-")) {
+      return json(ctx.res, 400, { error: "רק קובצי PDF נתמכים כרגע לייבוא לוח סילוקין הלוואה" });
+    }
+
+    let result;
+    try {
+      result = parseLoanAmortizationPdf(buffer);
+    } catch (e) {
+      return json(ctx.res, 400, { error: e.message });
+    }
+
+    // תשלומים "שכבר עברו" (תאריך חיוב עד היום כולל) - אלה שמומלץ לקשר כתנועות בפועל (משוב אמיתי:
+    // "קישור תשלומים שעברו"). תשלומים עתידיים מוצגים גם הם בתצוגה המקדימה, אבל לא מיועדים לקישור
+    // (עדיין לא שולמו בפועל - "לרשום" אותם כתנועה עכשיו יהיה שקר לגבי המצב הכספי בפועל).
+    const today = new Date().toISOString().slice(0, 10);
+    const payments = result.payments.map((p) => ({ ...p, isPast: p.date <= today, included: p.date <= today }));
+    const first = payments[0];
+
+    return json(ctx.res, 200, {
+      suggestedName: filename ? String(filename).replace(/\.[^.]+$/, "").trim().slice(0, 200) || "הלוואה מיובאת" : "הלוואה מיובאת",
+      totalInstallments: payments.length,
+      startDate: first.date,
+      monthlyAmount: first.totalPayment,
+      payments,
+    });
+  }));
+
+  router.post("/api/loans/commit-amortization", requireAuth(async (ctx) => {
+    const v = validateLoanFields(ctx.body, {});
+    if (v.error) return json(ctx.res, 400, { error: v.error });
+    const info = db
+      .prepare("INSERT INTO loans (user_id, name, total_installments, monthly_amount, start_date, note) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(ctx.user.userId, v.name, v.totalInstallments, v.monthlyAmount, v.startDate, v.note);
+    const loanId = info.lastInsertRowid;
+
+    // מקשרים בפועל רק את התשלומים שסומנו "included" (ברירת מחדל: כל תשלום שעבר, ר' /parse-amortization
+    // למעלה) - כתנועות רגילות לכל דבר, עם loan_id, בדיוק כמו קישור ידני של תנועה קיימת להלוואה.
+    const list = Array.isArray(ctx.body.payments) ? ctx.body.payments : [];
+    const insert = db.prepare(
+      "INSERT INTO transactions (user_id, type, amount, category, note, source, loan_id, occurred_at) VALUES (?, 'expense', ?, 'הלוואות', ?, 'import', ?, ?)"
+    );
+    let linkedPayments = 0;
+    for (const p of list) {
+      if (!p || !p.included) continue;
+      const amount = Number(p.totalPayment);
+      const date = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || "")) ? p.date : null;
+      if (!date || !Number.isFinite(amount) || amount <= 0) continue;
+      insert.run(ctx.user.userId, Math.round(amount * 100) / 100, `תשלום מס' ${p.paymentNumber || "?"} - יובא מלוח סילוקין`, loanId, `${date} 12:00:00`);
+      linkedPayments++;
+    }
+
+    const loan = db.prepare("SELECT * FROM loans WHERE id = ?").get(loanId);
+    return json(ctx.res, 201, { loan: withProgress(loan, ctx.user.userId), linkedPayments });
   }));
 }
 

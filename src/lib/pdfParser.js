@@ -2,6 +2,11 @@
 // htmlTableParser), בלי שום ספרייה חיצונית - עקרון הפרויקט. נבנה ונבדק מול קובץ אמיתי (דף פירוט
 // דיגיטלי של כאל - חברת אשראי ישראלית), ר' README, "ייבוא תנועות מאקסל/CSV/PDF".
 //
+// גם קורא **לוחות סילוקין הלוואה** (parseLoanAmortizationPdf, ר' למטה) - משוב אמיתי: "צריך לדעת
+// לקרוא גם קובץ [לוח סילוקין]". זה מבנה מסמך שונה לגמרי מדף בנק/אשראי (כל שורה היא תשלום הלוואה
+// עתידי, לא תנועה עם תיאור חופשי) - חולק את שכבת חילוץ הטקסט הגולמי (extractPdfPageRowGroups)
+// עם parsePdf, אבל עם זיהוי כותרות/עמודות שונה לגמרי מעליה (ר' הערה מפורטת שם).
+//
 // PDF הוא פורמט הרבה יותר מורכב מ-ZIP/XML/HTML: אין בו מושג מובנה של "טבלה" בכלל - יש רק טקסט
 // ממוקם בקואורדינטות (x,y) על העמוד, וצריך לשחזר מבנה טבלה מהמיקומים בעצמנו. שלבי העבודה:
 //   1) מפרקים את מבנה האובייקטים של ה-PDF (סריקת "N 0 obj ... endobj" ישירות בקובץ - טכניקת
@@ -21,6 +26,7 @@
 //      זה בדיוק ההפך מהטקסט העברי הסובב אותו, שכבר נכון בסדר ההופעה הרגיל (ר' reorderRowRuns למטה).
 "use strict";
 const zlib = require("zlib");
+const { parseAmountValue, normalizeDateValue } = require("./importMapping");
 
 // ---------- שכבה 1: איתור אובייקטים וזרמים (בלי לפענח xref פורמלי - סריקה ישירה, עמידה יותר) ----------
 function findObjectStart(pdfText, objNum) {
@@ -441,10 +447,15 @@ function columnIndexForX(columns, x) {
   return best;
 }
 
-// ---------- נקודת הכניסה ----------
-// מחזיר { rows: string[][] } - אותו פורמט בדיוק כמו xlsxParser/csvParser/htmlTableParser, מוכן
-// להזנה ל-importMapping.rowsToTransactions. זורק שגיאה עברית ברורה במקרים לא-נתמכים (מוצפן/סרוק).
-function parsePdf(buffer) {
+// ---------- שכבה משותפת: PDF -> שורות של "ריצות טקסט" עם מיקום, לפני כל זיהוי כותרות/עמודות ----------
+// תוקן (משוב אמיתי: "צריך לדעת לקרוא גם קובץ [לוח סילוקין הלוואה]") - שלב חילוץ הטקסט הגולמי מה-PDF
+// (איתור עמודים, פענוח גופן/CMap, פירוק זרם תוכן ל"ריצות" עם מיקום, קיבוץ לשורות לפי y) זהה לגמרי
+// בין דף בנק/אשראי רגיל לבין לוח סילוקין הלוואה - ההבדל היחיד הוא *אילו כותרות* מחפשים ואיך בונים
+// מהן עמודות. הופרד לפונקציה משותפת כדי ש-parsePdf (דפי בנק/אשראי) ו-parseLoanAmortizationPdf
+// (לוח סילוקין) ישתמשו באותה תשתית חילוץ בדיוק, בלי לשכפל אותה - רק שכבת זיהוי-הכותרות שונה מעליה.
+// מחזיר מערך של "שורות עמוד" (rows[] per page, כל rows הוא groupIntoRows של אותו עמוד) - עדיין לא
+// מפוצל לעמודות/כותרות.
+function extractPdfPageRowGroups(buffer) {
   const pdfText = buffer.toString("latin1");
 
   if (/\/Encrypt\s+\d+\s+0\s+R/.test(pdfText)) {
@@ -482,9 +493,8 @@ function parsePdf(buffer) {
     throw new Error("לא נמצאו עמודים תקינים בקובץ ה-PDF");
   }
 
-  let headerColumns = null;
-  const allRows = [];
   const fontCache = new Map();
+  const pageRowGroups = [];
   for (const page of pages) {
     const runs = [];
     const ctx = { buffer, pdfText, fontCache, runsOut: runs, fallbackCmap: cmap };
@@ -497,8 +507,20 @@ function parsePdf(buffer) {
       // q/cm/Q (CTM מצטבר) ופותרת קריאות Do רקורסיבית - בלי זה כל הטקסט "נעלם" (0 ריצות, 0 שורות).
       walkContentStream(ctx, bytes.toString("latin1"), MAT_IDENTITY, page.resources, 0, new Set());
     }
-    const rows = groupIntoRows(runs);
+    pageRowGroups.push(groupIntoRows(runs));
+  }
+  return pageRowGroups;
+}
 
+// ---------- נקודת הכניסה: דפי בנק/אשראי ----------
+// מחזיר { rows: string[][] } - אותו פורמט בדיוק כמו xlsxParser/csvParser/htmlTableParser, מוכן
+// להזנה ל-importMapping.rowsToTransactions. זורק שגיאה עברית ברורה במקרים לא-נתמכים (מוצפן/סרוק).
+function parsePdf(buffer) {
+  const pageRowGroups = extractPdfPageRowGroups(buffer);
+
+  let headerColumns = null;
+  const allRows = [];
+  for (const rows of pageRowGroups) {
     // מזהים את שורת הכותרות *של העמוד הזה* בנפרד, בכל עמוד (לא רק בעמוד הראשון) - שני שימושים:
     // (1) אם עדיין אין headerColumns גלובלי, בונים אותו מכאן. (2) יודעים איפה בעמוד הזה מתחיל התוכן
     // האמיתי, כדי לדלג על שורות "פתיח" (שם בנק/בעל חשבון/כותרת דוח/"יתרה קודמת" וכו'). תוקן (נבדק
@@ -550,4 +572,131 @@ function parsePdf(buffer) {
   return { rows: [headerColumns.map(c => c.label), ...allRows] };
 }
 
-module.exports = { parsePdf, reorderRunsForReading, parseToUnicodeCMap };
+// ---------- נקודת כניסה נוספת: לוח סילוקין הלוואה (לא דף בנק/אשראי!) ----------
+// משוב אמיתי: "צריך לדעת לקרוא גם קובץ [לוח סילוקין הלוואה]". שישה עמודות קבועות (מימין לשמאל):
+// מספר תשלום, תאריך חיוב, תשלום ע"ח קרן, תשלום ע"ח ריבית, סך החזר חודשי, יתרת קרן. בניגוד לדף בנק/
+// אשראי - לא מזהים עמודות לפי התאמת מילות-מפתח בתווית (importMapping.HEADER_KEYWORDS), אלא לפי
+// *מיקום קבוע* - כי הפורמט הזה (בניגוד לדפי בנק, ששונים מבנק לבנק) קבוע-מבנה, וזיהוי-מילים היה
+// שביר יותר כאן: נבדק מול קובץ אמיתי (מזרחי-טפחות) שהכותרת מתפצלת על פני *שלוש* שורות פיזיות שונות
+// (לא שתיים כמו בדפי בנק) - "מספר"/"תשלום", "תאריך"/"חיוב" וכו' על שתי שורות, אבל "יתרת הקרן" בלי
+// פיצול בכלל, כשורה שלישית נפרדת שיושבת (לפי y) *בין* שתי שורות ההמשך של שאר העמודות. איתור לפי
+// עוגן: המילה "יתרת" נדירה וייחודית מספיק ללוח סילוקין (לא צפויה בדף בנק/אשראי רגיל) - מוצאים אותה,
+// ואז מרחיבים לכל השורות הצמודות (למעלה/למטה) שאין בהן אף ספרה, כדי לתפוס את כל שברי הכותרת יחד
+// (גם אם מתפצלת לשתיים, שלוש, או אפילו יותר שורות בקובץ עתידי אחר) - בלי להניח מספר שורות קבוע.
+function parseLoanAmortizationPdf(buffer) {
+  const pageRowGroups = extractPdfPageRowGroups(buffer);
+  const AMORT_ANCHOR = "יתרת";
+  const EXPECTED_COLUMNS = 6;
+  const rowHasDigit = (row) => row.runs.some((r) => /\d/.test(r.text));
+  const rowText = (row) => reorderRunsForReading([...row.runs].sort((a, b) => b.x - a.x));
+
+  const payments = [];
+  let sawAnyAnchor = false;
+
+  for (const rows of pageRowGroups) {
+    let anchorIdx = -1;
+    const limit = Math.min(rows.length, 40);
+    for (let i = 0; i < limit; i++) {
+      if (rowText(rows[i]).includes(AMORT_ANCHOR)) { anchorIdx = i; break; }
+    }
+    if (anchorIdx < 0) continue; // עמוד בלי טבלת נתונים (למשל עמוד תנאים/סיכום) - מדלגים
+    sawAnyAnchor = true;
+
+    // מרחיבים את "בלוק הכותרת" לכל השורות הצמודות (למעלה ולמטה מהעוגן) שאין בהן אף ספרה.
+    let blockStart = anchorIdx;
+    while (blockStart > 0 && !rowHasDigit(rows[blockStart - 1])) blockStart--;
+    let blockEnd = anchorIdx;
+    while (blockEnd < rows.length - 1 && !rowHasDigit(rows[blockEnd + 1])) blockEnd++;
+
+    // בונים את מרכזי העמודות בשני שלבים - "זריעה" משורת הבלוק הראשונה, ואז "הוספת עמודות חדשות
+    // בלבד" משאר שורות הבלוק (בלי למזג/לעדכן את המרכזים שכבר נזרעו). תוקן (נבדק מול קובץ אמיתי -
+    // מזרחי-טפחות): ניסיון ראשון קיבץ את *כל* ריצות הבלוק יחד (בדיוק כמו buildColumnBoundaries) -
+    // זה נכשל, כי שברי-המשך (כמו "חיוב" בשורה נפרדת מתחת ל"תאריך") לא בהכרח קרובים ב-x לשבר הראשי
+    // שלהם מספיק כדי להתאחד תחת סף קבוע (CLUSTER_X_GAP=8) בלי גם ליצור אשכולות-שווא נוספים בטעות.
+    // הפתרון: שורה ראשונה (blockStart, בפועל תמיד מכילה תווית ראשית אחת לכל עמודה שלא מתפצלת-מייד)
+    // נותנת את מרכזי העמודות ה"אמיתיים" (זריעה, אשכול-לפי-מרחק-8 רגיל). כל ריצה בשאר שורות הבלוק
+    // (כולל שורת העוגן "יתרת" עצמה, אם היא לא blockStart) שקרובה לאחד המרכזים הקיימים (מרחק <
+    // NEW_COLUMN_DIST_THRESHOLD) היא כנראה שבר-המשך של עמודה קיימת - **מתעלמים ממנה** (לא מזיזים/
+    // ממזגים את המרכז - הוא כבר במקום הנכון מהזריעה, וכאן ממילא לא בונים תוויות טקסט לעמודות בכלל,
+    // רק ממפים נתונים לפי מיקום/סדר קבוע). ריצה *רחוקה* מכל המרכזים הקיימים (כמו "יתרת הקרן", עמודה
+    // שלמה שלא הופיעה כלל בשורה הראשונה) פותחת עמודה חדשה. הסף (65) נבחר בין המרחק הגדול ביותר
+    // שנצפה בפועל עבור שבר-המשך לגיטימי (56.8, "הקרן" תחת "תשלום על חשבון") לבין המרחק שנצפה עבור
+    // עמודה חדשה אמיתית (76.9, "יתרת הקרן") - שוליים סבירים משני הצדדים.
+    const NEW_COLUMN_DIST_THRESHOLD = 65;
+    function seedClusters(runs) {
+      const sorted = [...runs].sort((a, b) => b.x - a.x);
+      const clusters = [];
+      for (const r of sorted) {
+        const last = clusters[clusters.length - 1];
+        if (last && last.minX - r.x <= CLUSTER_X_GAP) {
+          last.minX = Math.min(last.minX, r.x);
+          last.maxX = Math.max(last.maxX, r.x);
+        } else {
+          clusters.push({ minX: r.x, maxX: r.x });
+        }
+      }
+      return clusters.map((c) => (c.minX + c.maxX) / 2);
+    }
+    let centers = seedClusters(rows[blockStart].runs);
+    for (let i = blockStart; i <= blockEnd; i++) {
+      if (i === blockStart) continue;
+      for (const r of rows[i].runs) {
+        const nearestDist = Math.min(...centers.map((c) => Math.abs(c - r.x)));
+        if (nearestDist > NEW_COLUMN_DIST_THRESHOLD) centers.push(r.x);
+      }
+    }
+    centers.sort((a, b) => b - a); // מימין לשמאל
+
+    if (centers.length !== EXPECTED_COLUMNS) {
+      throw new Error(
+        `זוהתה שורת כותרות של לוח סילוקין, אבל עם ${centers.length} עמודות במקום ${EXPECTED_COLUMNS} הצפויות - ייתכן שזהו פורמט לוח סילוקין שונה שעדיין לא נתמך.`
+      );
+    }
+    const colIndexForX = (x) => {
+      let best = 0, bestDist = Infinity;
+      for (let i = 0; i < centers.length; i++) {
+        const dist = Math.abs(x - centers[i]);
+        if (dist < bestDist) { bestDist = dist; best = i; }
+      }
+      return best;
+    };
+
+    for (let ri = blockEnd + 1; ri < rows.length; ri++) {
+      const row = rows[ri];
+      if (!rowHasDigit(row)) break; // סוף הטבלה - שורת סיכום ("סה"כ תשלומים...") או הערה מתחת
+      const cells = new Array(EXPECTED_COLUMNS).fill("");
+      const byCol = new Map();
+      for (const r of row.runs) {
+        const idx = colIndexForX(r.x);
+        if (!byCol.has(idx)) byCol.set(idx, []);
+        byCol.get(idx).push(r);
+      }
+      for (const [idx, runs] of byCol) {
+        cells[idx] = reorderRunsForReading([...runs].sort((a, b) => b.x - a.x));
+      }
+      const [paymentNumberRaw, dateRaw, principalRaw, interestRaw, totalRaw, balanceRaw] = cells;
+      const paymentNumber = parseInt(paymentNumberRaw, 10);
+      const date = normalizeDateValue(dateRaw);
+      if (!Number.isFinite(paymentNumber) || !date) continue; // שורה לא תקינה - מדלגים בלי לקרוס
+      payments.push({
+        paymentNumber,
+        date,
+        principal: parseAmountValue(principalRaw),
+        interest: parseAmountValue(interestRaw),
+        totalPayment: parseAmountValue(totalRaw),
+        remainingBalance: parseAmountValue(balanceRaw),
+      });
+    }
+  }
+
+  if (!sawAnyAnchor) {
+    throw new Error('לא זוהה לוח סילוקין בקובץ (לא נמצאה עמודת "יתרת הקרן") - ודאו שזהו קובץ לוח סילוקין הלוואה תקין.');
+  }
+  if (!payments.length) {
+    throw new Error("זוהה לוח סילוקין, אבל לא נמצאה בו אף שורת תשלום תקינה.");
+  }
+  payments.sort((a, b) => a.paymentNumber - b.paymentNumber);
+  return { payments };
+}
+
+module.exports = { parsePdf, reorderRunsForReading, parseToUnicodeCMap, parseLoanAmortizationPdf };

@@ -563,6 +563,32 @@
           <h3>ההלוואות שלי</h3>
           <div id="loans-list"><div class="empty-state">אין עדיין הלוואות רשומות</div></div>
         </div>
+        <div class="card">
+          <h3>ייבוא לוח סילוקין הלוואה (PDF)</h3>
+          <!-- משוב אמיתי: "צריך לדעת לקרוא גם קובץ [לוח סילוקין הלוואה]", ולשאלת הבהרה: "שניהם יחד -
+               גם רישום הלוואה וגם קישור תשלומים שעברו". שונה לגמרי מכרטיס "ייבוא תנועות" הרגיל -
+               לוח סילוקין הוא קובץ *של הלוואה עצמה* (טבלת תשלומים עתידיים/שכבר בוצעו), לא דף בנק/
+               אשראי עם תנועות שונות - לכן קורא ל-/api/loans/parse-amortization ייעודי, לא למנוע
+               הייבוא הגנרי (giPreview/giCommit). ר' src/lib/pdfParser.js (parseLoanAmortizationPdf). -->
+          <div class="hint" style="margin-bottom:10px">מעלים קובץ PDF של לוח סילוקין הלוואה (כמו שהבנק שולח) - המערכת קוראת ממנו את שם/מספר התשלומים/תאריך התחלה/סכום, ומציעה לקשר גם את התשלומים שכבר בוצעו כתנועות בפועל (במקום להסתמך על הערכה לפי חודשים שחלפו).</div>
+          <div class="row">
+            <div class="dropzone-wrap" id="loan-amort-file_zone"><input id="loan-amort-file" class="plain" type="file" accept=".pdf"></div>
+            <button class="btn secondary" onclick="parseLoanAmortization()">קריאת קובץ</button>
+          </div>
+          <div id="loan-amort-result" style="display:none; margin-top:14px">
+            <div class="row">
+              <div class="field"><label>שם ההלוואה</label><input id="amort_name" class="plain"></div>
+              <div class="field"><label>מס' תשלומים כולל</label><input id="amort_total" class="plain" type="number"></div>
+              <div class="field"><label>תאריך תשלום ראשון</label><input id="amort_start" class="plain" type="date"></div>
+              <div class="field"><label>סכום תשלום (לתצוגה)</label><input id="amort_monthly" class="plain" type="number"></div>
+            </div>
+            <div class="hint" style="margin-top:8px" id="amort-past-summary"></div>
+            <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:500; margin-top:6px">
+              <input type="checkbox" id="amort_link_past" checked> לקשר את התשלומים שכבר בוצעו כתנועות בפועל (במקום הערכה לפי חודשים שחלפו)
+            </label>
+            <button class="btn" style="margin-top:10px" onclick="commitLoanAmortization()">יצירת ההלוואה</button>
+          </div>
+        </div>
         <!-- משוב אמיתי: "אני צריך מעוגל... צריך שזה יהיה בכל המקומות: הלוואות, חתונה, דירה, ותנועות" -
              אותו רכיב עיגול (donut) בדיוק, כאן מפולח לפי הלוואה (תשלומים שנותרו לכל הלוואה) במקום קטגוריה. -->
         <div class="card">
@@ -1980,6 +2006,62 @@ async function addLoan() {
   }
 }
 
+// ---------- ייבוא לוח סילוקין הלוואה (PDF) ----------
+// משוב אמיתי: "צריך לדעת לקרוא גם קובץ [לוח סילוקין הלוואה]", ולשאלת הבהרה: "שניהם יחד - גם רישום
+// הלוואה וגם קישור תשלומים שעברו". ר' /api/loans/parse-amortization ו-/api/loans/commit-amortization
+// ב-src/routes/loans.js. שני שלבים (כמו כל ייבוא אחר) - lastAmortParse שומר את מה שהתקבל מהשרת
+// (כולל כל שורות התשלום) בין הקריאה המקדימה לשמירה בפועל.
+let lastAmortParse = null;
+
+async function parseLoanAmortization() {
+  const fileInput = document.getElementById('loan-amort-file');
+  if (!fileInput.files.length) { toast('יש לבחור קובץ קודם', 'error'); return; }
+  const file = fileInput.files[0];
+  const dataUrl = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const r = await api('POST', '/api/loans/parse-amortization', { data_base64: dataUrl, filename: file.name });
+  if (!r.ok) return;
+  lastAmortParse = r.data;
+  document.getElementById('amort_name').value = r.data.suggestedName;
+  document.getElementById('amort_total').value = r.data.totalInstallments;
+  document.getElementById('amort_start').value = r.data.startDate;
+  document.getElementById('amort_monthly').value = r.data.monthlyAmount;
+  const pastCount = r.data.payments.filter(p => p.isPast).length;
+  document.getElementById('amort-past-summary').textContent =
+    `זוהו ${r.data.payments.length} תשלומים בסך הכל, מתוכם ${pastCount} כבר עברו (עד היום) ומועמדים לקישור כתנועות בפועל.`;
+  document.getElementById('amort_link_past').checked = pastCount > 0;
+  document.getElementById('loan-amort-result').style.display = 'block';
+  toast('הקובץ נקרא בהצלחה - אפשר לערוך את הפרטים לפני היצירה', 'success');
+}
+
+async function commitLoanAmortization() {
+  if (!lastAmortParse) { toast('יש לקרוא קובץ קודם', 'error'); return; }
+  const name = document.getElementById('amort_name').value.trim();
+  const total = Number(document.getElementById('amort_total').value);
+  const start = document.getElementById('amort_start').value;
+  const monthly = document.getElementById('amort_monthly').value ? Number(document.getElementById('amort_monthly').value) : undefined;
+  if (!name) { toast('יש להזין שם להלוואה', 'error'); return; }
+  if (!total || total <= 0) { toast('יש להזין מספר תשלומים תקין', 'error'); return; }
+  if (!start) { toast('יש להזין תאריך תשלום ראשון', 'error'); return; }
+  const linkPast = document.getElementById('amort_link_past').checked;
+  const payments = lastAmortParse.payments.map(p => ({ ...p, included: linkPast && p.isPast }));
+  const r = await api('POST', '/api/loans/commit-amortization', {
+    name, total_installments: total, start_date: start, monthly_amount: monthly, payments,
+  });
+  if (r.ok) {
+    toast(`ההלוואה נוצרה בהצלחה${r.data.linkedPayments ? `, ${r.data.linkedPayments} תשלומים שכבר בוצעו קושרו כתנועות` : ''}`, 'success');
+    lastAmortParse = null;
+    document.getElementById('loan-amort-result').style.display = 'none';
+    document.getElementById('loan-amort-file').value = '';
+    loadLoans();
+    loadTransactions();
+  }
+}
+
 function renderLoansList() {
   const el = document.getElementById('loans-list');
   if (!loansCache.length) { el.innerHTML = '<div class="empty-state">אין עדיין הלוואות רשומות</div>'; return; }
@@ -2985,7 +3067,7 @@ function setupFileDropZone(inputId) {
     }
   });
 }
-['imp_file', 'wedding-imp-file', 'apartment-imp-file', 'loans-imp-file', 'recurring-imp-file'].forEach(setupFileDropZone);
+['imp_file', 'wedding-imp-file', 'apartment-imp-file', 'loans-imp-file', 'recurring-imp-file', 'loan-amort-file'].forEach(setupFileDropZone);
 </script>
 </body>
 </html>
