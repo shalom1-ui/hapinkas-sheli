@@ -1187,6 +1187,52 @@ async function run() {
     await api("DELETE", `/api/transactions/${amortLinkedTx.id}`, null, token);
     await api("DELETE", `/api/loans/${amortLoanId}`, null, token);
 
+    console.log("\n🔗 מיזוג הלוואות כפולות - משוב אמיתי: 'הכנסתי שלושה קבצים שהם מהלוואה אחת, המערכת חישבה את זה כשלושה, אפשר למזג'");
+    // מדמים בדיוק את התרחיש שדווח: אותו לוח סילוקין מיובא (ומאושר/נשמר) שלוש פעמים נפרדות - כמו
+    // שקורה כשמורידים/מעלים כמה ייצואים שונים של אותה הלוואה - כל ייבוא יוצר הלוואה נפרדת משלו.
+    const dupLoanIds = [];
+    for (let i = 0; i < 3; i++) {
+      const p = await api(
+        "POST", "/api/loans/parse-amortization",
+        { data_base64: amortPdf.toString("base64"), filename: `loan-amort-dup-${i}.pdf` },
+        token
+      );
+      const c = await api(
+        "POST", "/api/loans/commit-amortization",
+        {
+          name: `${p.data.suggestedName} ${i}`, total_installments: p.data.totalInstallments,
+          start_date: p.data.startDate, monthly_amount: p.data.monthlyAmount,
+          payments: p.data.payments.map(pay => ({ ...pay, included: pay.isPast })),
+        },
+        token
+      );
+      dupLoanIds.push(c.data.loan.id);
+    }
+    const txsBeforeMerge = await api("GET", "/api/transactions", null, token);
+    const linkedBeforeMerge = txsBeforeMerge.data.transactions.filter(t => dupLoanIds.includes(t.loan_id));
+    assert(linkedBeforeMerge.length === 3, `לפני המיזוג - שלוש תנועות זהות (אחת לכל ייבוא כפול) (${linkedBeforeMerge.length})`);
+
+    const mergeResult = await api("POST", "/api/loans/merge", { target_id: dupLoanIds[0], source_ids: [dupLoanIds[1], dupLoanIds[2]] }, token);
+    assert(
+      mergeResult.status === 200 && mergeResult.data.mergedLoans === 2 && mergeResult.data.deletedDuplicateTransactions === 2,
+      `המיזוג הצליח - 2 הלוואות מוזגו, ו-2 תנועות כפולות (אותו תאריך+סכום) נמחקו אוטומטית (${JSON.stringify(mergeResult.data)})`
+    );
+    assert(mergeResult.data.loan.linkedPaymentsCount === 1, "אחרי המיזוג נשארה תנועה אחת בלבד מקושרת להלוואה הראשית - לא שלוש");
+
+    const loansAfterMerge = await api("GET", "/api/loans", null, token);
+    assert(
+      !loansAfterMerge.data.loans.some(l => l.id === dupLoanIds[1] || l.id === dupLoanIds[2]) &&
+      loansAfterMerge.data.loans.some(l => l.id === dupLoanIds[0]),
+      "ההלוואות שמוזגו (המקור) נמחקו, ורק הראשית נשארה"
+    );
+    const txsAfterMerge = await api("GET", "/api/transactions", null, token);
+    const linkedAfterMerge = txsAfterMerge.data.transactions.filter(t => t.loan_id === dupLoanIds[0]);
+    assert(linkedAfterMerge.length === 1, `אחרי המיזוג - תנועה אחת בלבד מקושרת בפועל להלוואה הראשית (${linkedAfterMerge.length})`);
+
+    // ניקוי
+    await api("DELETE", `/api/transactions/${linkedAfterMerge[0].id}`, null, token);
+    await api("DELETE", `/api/loans/${dupLoanIds[0]}`, null, token);
+
     console.log("\n💳 תשלומים חוזרים (כרטיסי אשראי/הו\"ק) + התראה לפני תאריך החיוב");
     // משוב אמיתי: "יש לאנשים כרטיסי אשראי שכל כרטיס יוצא בתאריך אחר או הו\"ק בבנק, חשוב לי שיקבל
     // התראה לפני התאריך כמה כסף צריך להכניס לבנק". ר' src/routes/recurringCharges.js.

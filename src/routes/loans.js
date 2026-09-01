@@ -93,6 +93,64 @@ function register(router) {
     return json(ctx.res, 200, { loan: withProgress(updated, ctx.user.userId) });
   }));
 
+  // מיזוג כמה רשומות הלוואה לאחת - משוב אמיתי: "הכנסתי שלושה קבצים שהם מהלוואה אחת, המערכת חישבה
+  // את זה כשלושה, אפשר למזג נתונים לפי מספר הלוואה". קורה כי לוח סילוקין הוא קובץ *של ההלוואה
+  // עצמה* (ר' /parse-amortization/commit-amortization למעלה) - כל קובץ שמייבאים יוצר הלוואה חדשה
+  // משלו, גם אם זו בפועל אותה הלוואה בדיוק (למשל שלושה ייצואים/עדכונים שונים של אותו לוח סילוקין).
+  // הפרסר לא מחלץ "מספר הלוואה" מהקובץ (לא תמיד מודפס, ואין עדיין קובץ אמיתי לבדוק מולו) - במקום
+  // זיהוי-כפילות אוטומטי לא-מוכח, זו פעולת מיזוג *ידנית*: המשתמש בוחר אילו הלוואות שייכות יחד
+  // ואיזו מהן "ראשית" (target_id) - נשארת; שאר (source_ids) נמחקות אחרי שהתנועות שלהן מועברות אליה.
+  router.post("/api/loans/merge", requireAuth(async (ctx) => {
+    const targetId = Number(ctx.body.target_id);
+    const sourceIds = Array.isArray(ctx.body.source_ids) ? [...new Set(ctx.body.source_ids.map(Number))].filter((id) => id !== targetId) : [];
+    if (!targetId || !sourceIds.length) {
+      return json(ctx.res, 400, { error: "יש לבחור הלוואה ראשית (target_id) ולפחות הלוואה אחת נוספת למיזוג אליה (source_ids)" });
+    }
+    const allIds = [targetId, ...sourceIds];
+    const placeholders = allIds.map(() => "?").join(",");
+    const loans = db.prepare(`SELECT id FROM loans WHERE user_id = ? AND id IN (${placeholders})`).all(ctx.user.userId, ...allIds);
+    if (loans.length !== allIds.length) return json(ctx.res, 404, { error: "אחת ההלוואות לא נמצאה" });
+
+    // תשלום הלוואה שיובא מלוח סילוקין תמיד נכנס ל-transactions הרגילה (ר' commit-amortization) -
+    // אבל תנועה יכולה עקרונית להיות מקושרת להלוואה גם מחתונה/דירה (קישור ידני) - מעבירות קישור,
+    // בלי דדופ (לא נוצרות שם מייבוא כפול של אותו לוח סילוקין, אז אין חשש כפילות אמיתי).
+    for (const table of ["wedding_transactions", "apartment_transactions"]) {
+      db.prepare(`UPDATE ${table} SET loan_id = ? WHERE loan_id IN (${sourceIds.map(() => "?").join(",")})`).run(targetId, ...sourceIds);
+    }
+
+    // דדופ בתנועות הרגילות: כשאותו לוח סילוקין מיובא כמה פעמים (כל פעם כ"הלוואה" נפרדת), כל תשלום
+    // עבר נוצר כתנועת expense בפועל *בכל ייבוא בנפרד* - מיזוג-קישור גרידא (בלי דדופ) היה משאיר את
+    // כל ההעתקים, מנפח פי-כמה גם את סך ההוצאות הכללי (לא רק את מעקב ההלוואה). תנועה עם אותו תאריך
+    // (יום בלבד) וסכום זהה, מקושרת לאחת ההלוואות שממוזגות - נחשבת אותו תשלום שיובא כמה פעמים;
+    // נשארת רק אחת, השאר נמחקות (לא רק מנותקות - הן כפילויות אמיתיות, לא תנועות עצמאיות).
+    const linked = db
+      .prepare(`SELECT * FROM transactions WHERE user_id = ? AND loan_id IN (${placeholders}) ORDER BY id`)
+      .all(ctx.user.userId, ...allIds);
+    const seen = new Set();
+    let deletedDuplicateTransactions = 0;
+    for (const t of linked) {
+      const key = `${String(t.occurred_at).slice(0, 10)}|${t.amount}`;
+      if (seen.has(key)) {
+        db.prepare("DELETE FROM transactions WHERE id = ?").run(t.id);
+        deletedDuplicateTransactions++;
+      } else {
+        seen.add(key);
+        if (t.loan_id !== targetId) db.prepare("UPDATE transactions SET loan_id = ? WHERE id = ?").run(targetId, t.id);
+      }
+    }
+
+    for (const sid of sourceIds) {
+      db.prepare("DELETE FROM loans WHERE id = ?").run(sid);
+    }
+
+    const targetLoan = db.prepare("SELECT * FROM loans WHERE id = ?").get(targetId);
+    return json(ctx.res, 200, {
+      loan: withProgress(targetLoan, ctx.user.userId),
+      mergedLoans: sourceIds.length,
+      deletedDuplicateTransactions,
+    });
+  }));
+
   router.delete("/api/loans/:id", requireAuth(async (ctx) => {
     const row = db.prepare("SELECT * FROM loans WHERE id = ? AND user_id = ?").get(ctx.params.id, ctx.user.userId);
     if (!row) return json(ctx.res, 404, { error: "הלוואה לא נמצאה" });

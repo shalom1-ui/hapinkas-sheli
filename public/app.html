@@ -561,6 +561,21 @@
         </div>
         <div class="card">
           <h3>ההלוואות שלי</h3>
+          <!-- מיזוג הלוואות - משוב אמיתי: "הכנסתי שלושה קבצים שהם מהלוואה אחת, המערכת חישבה את זה
+               כשלושה, אפשר למזג נתונים לפי מספר הלוואה" - קורה כי כל ייבוא לוח סילוקין יוצר הלוואה
+               חדשה משלו, גם אם זו בפועל אותה הלוואה. פעולה ידנית (לא זיהוי-כפילות אוטומטי) - מסמנים
+               כמה הלוואות, בוחרים איזו מהן "ראשית" (נשארת), והשאר ממוזגות אליה ונמחקות. -->
+          <div class="row" style="margin-bottom:10px">
+            <button class="btn secondary sm" onclick="openLoanMergePanel()">מיזוג הלוואות מסומנות</button>
+          </div>
+          <div id="loan-merge-panel" style="display:none; margin-bottom:10px; padding:12px; border:1.5px solid var(--border); border-radius:10px">
+            <div class="hint" style="margin-bottom:8px">איזו מההלוואות המסומנות היא "הראשית"? כל תשלום שקושר לשאר ההלוואות יעבור אליה (תשלומים כפולים - אותו תאריך וסכום - יימחקו אוטומטית, לא יישארו כפולים), והשאר יימחקו.</div>
+            <div id="loan-merge-options" style="display:flex; flex-direction:column; gap:6px"></div>
+            <div class="row" style="margin-top:10px">
+              <button class="btn" onclick="confirmMergeLoans()">מיזוג</button>
+              <button class="btn secondary" onclick="closeLoanMergePanel()">ביטול</button>
+            </div>
+          </div>
           <div id="loans-list"><div class="empty-state">אין עדיין הלוואות רשומות</div></div>
         </div>
         <div class="card">
@@ -1966,6 +1981,7 @@ async function giDeleteBatch(uiTarget, apiTarget, batchId, filename, count) {
 // קישור תנועות בפועל אם יש). loansCache משמש גם למלא את בורר "לקשר להלוואה" בטפסי ההוספה (ר' למטה).
 let loansCache = [];
 let loanEditingId = null;
+let selectedLoanIds = new Set(); // מיזוג הלוואות מסומנות - ר' openLoanMergePanel למטה
 
 async function loadLoans() {
   const r = await api('GET', '/api/loans');
@@ -2080,6 +2096,7 @@ function renderLoansList() {
     const pct = l.total_installments ? Math.min(100, Math.round(l.paidInstallments / l.total_installments * 100)) : 0;
     return `
     <div class="list-item" style="flex-wrap:wrap">
+      <input type="checkbox" ${selectedLoanIds.has(l.id) ? 'checked' : ''} onchange="this.checked ? selectedLoanIds.add(${l.id}) : selectedLoanIds.delete(${l.id})">
       <div style="flex:1; min-width:220px">
         <div class="li-main">${l.name.replace(/</g, '&lt;')}</div>
         <div class="li-sub">
@@ -2101,6 +2118,44 @@ function renderLoansList() {
 
 function startLoanEdit(id) { loanEditingId = id; renderLoansList(); }
 function cancelLoanEdit() { loanEditingId = null; renderLoansList(); }
+
+// מיזוג הלוואות מסומנות - משוב אמיתי: "הכנסתי שלושה קבצים שהם מהלוואה אחת, המערכת חישבה את זה
+// כשלושה, אפשר למזג נתונים לפי מספר הלוואה". פאנל בחירת "הלוואה ראשית" (רדיו, לא window.prompt() -
+// ר' [[netfree-content-filter-blocking]], אותו חשש שכבר גרם לתקלה דומה עם ה"אחר" בעבר) - לא נבנה
+// ב-HTML הסטטי (התלות ב-selectedLoanIds הנוכחי) אלא ב-JS, ברגע שפותחים את הפאנל.
+function openLoanMergePanel() {
+  if (selectedLoanIds.size < 2) { toast('יש לסמן לפחות שתי הלוואות למיזוג', 'error'); return; }
+  const selected = loansCache.filter(l => selectedLoanIds.has(l.id));
+  const optionsEl = document.getElementById('loan-merge-options');
+  optionsEl.innerHTML = selected.map((l, i) => `
+    <label style="display:flex; align-items:center; gap:8px; font-size:14px">
+      <input type="radio" name="loan-merge-target" value="${l.id}" ${i === 0 ? 'checked' : ''}>
+      ${l.name.replace(/</g, '&lt;')} (${l.total_installments} תשלומים, שולמו ${l.paidInstallments})
+    </label>`).join('');
+  document.getElementById('loan-merge-panel').style.display = 'block';
+}
+function closeLoanMergePanel() {
+  document.getElementById('loan-merge-panel').style.display = 'none';
+}
+async function confirmMergeLoans() {
+  const targetInput = document.querySelector('input[name="loan-merge-target"]:checked');
+  if (!targetInput) { toast('יש לבחור הלוואה ראשית', 'error'); return; }
+  const targetId = Number(targetInput.value);
+  const sourceIds = [...selectedLoanIds].filter(id => id !== targetId);
+  if (!confirm(`למזג ${sourceIds.length} הלוואות לתוך ההלוואה הראשית שנבחרה? ההלוואות האחרות יימחקו (התשלומים שלהן יעברו אליה).`)) return;
+  const r = await api('POST', '/api/loans/merge', { target_id: targetId, source_ids: sourceIds });
+  if (r.ok) {
+    toast(
+      `מוזגו ${r.data.mergedLoans} הלוואות בהצלחה` +
+      (r.data.deletedDuplicateTransactions ? ` · ${r.data.deletedDuplicateTransactions} תשלומים כפולים נמחקו` : ''),
+      'success'
+    );
+    selectedLoanIds = new Set();
+    closeLoanMergePanel();
+    loadLoans();
+    loadTransactions();
+  }
+}
 
 async function saveLoanEdit(id) {
   const name = document.getElementById(`loan-edit-name-${id}`).value.trim();
