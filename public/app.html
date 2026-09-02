@@ -2025,6 +2025,9 @@ async function loadLoans() {
   const r = await api('GET', '/api/loans');
   if (!r.ok) return;
   loansCache = r.data.loans;
+  // מנקים סימונים של הלוואות שכבר לא ברשימה (נמחקו/מוזגו) - בדיוק כמו selectedTxIds/וכו' - כדי
+  // שסימון ישן לעולם לא "יידבק" בטעות. ר' גם ה-id הייחודי שנוסף לכל checkbox, למעלה.
+  selectedLoanIds = new Set([...selectedLoanIds].filter(id => loansCache.some(l => l.id === id)));
   renderLoansList();
   refreshLoanLinkSelects();
   giLoadBatches('loans', 'regular');
@@ -2142,7 +2145,11 @@ function renderLoansList() {
     const pct = l.total_installments ? Math.min(100, Math.round(l.paidInstallments / l.total_installments * 100)) : 0;
     return `
     <div class="list-item" style="flex-wrap:wrap">
-      <input type="checkbox" ${selectedLoanIds.has(l.id) ? 'checked' : ''} onchange="this.checked ? selectedLoanIds.add(${l.id}) : selectedLoanIds.delete(${l.id})">
+      <!-- תוקן (משוב אמיתי: "הוספתי הלוואה חדשה, הוא רוצה למזג לי הכל בבת אחת... צריך שיהיה מקוטלג")
+           - id ייחודי לכל checkbox (לא היה בכלל) - בלעדיו, כמה דפדפנים "משחזרים" checked על תיבה
+           חדשה שתופסת את אותו מיקום ברשימה (למשל הלוואה חדשה שמופיעה ראשונה, במקום תיבה שהייתה
+           מסומנת שם קודם) - נראה בדיוק כאילו התיבה "מסתמנת לבד" בלי שנגעו בה. -->
+      <input type="checkbox" id="loan-checkbox-${l.id}" ${selectedLoanIds.has(l.id) ? 'checked' : ''} onchange="this.checked ? selectedLoanIds.add(${l.id}) : selectedLoanIds.delete(${l.id})">
       <div style="flex:1; min-width:220px">
         <div class="li-main">${l.name.replace(/</g, '&lt;')}</div>
         <div class="li-sub">
@@ -2182,6 +2189,10 @@ function openLoanMergePanel() {
 }
 function closeLoanMergePanel() {
   document.getElementById('loan-merge-panel').style.display = 'none';
+  // ביטול = "לא רוצה למזג בכלל" - מנקים גם את הסימון עצמו, לא רק סוגרים את הפאנל, כדי שסימון ישן
+  // לא יישאר "תלוי באוויר" ויבלבל בפעם הבאה (ר' משוב אמיתי ליד ה-checkbox id הייחודי, למעלה).
+  selectedLoanIds = new Set();
+  renderLoansList();
 }
 async function confirmMergeLoans() {
   const targetInput = document.querySelector('input[name="loan-merge-target"]:checked');
@@ -2200,8 +2211,7 @@ async function confirmMergeLoans() {
       (r.data.deletedDuplicateTransactions ? ` · ${r.data.deletedDuplicateTransactions} תשלומים כפולים נמחקו` : ''),
       'success'
     );
-    selectedLoanIds = new Set();
-    closeLoanMergePanel();
+    closeLoanMergePanel(); // כבר מנקה selectedLoanIds בעצמו, ר' הערה שם
     loadLoans();
     loadTransactions();
   }
