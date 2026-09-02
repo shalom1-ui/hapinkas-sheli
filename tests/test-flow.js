@@ -1233,6 +1233,67 @@ async function run() {
     await api("DELETE", `/api/transactions/${linkedAfterMerge[0].id}`, null, token);
     await api("DELETE", `/api/loans/${dupLoanIds[0]}`, null, token);
 
+    console.log("\n🧩 לוח סילוקין מפוצל לכמה קבצים (טווחי מספרי תשלום שונים) - זוהי אותה הלוואה, לא כפילות");
+    // משוב אמיתי חי (אחרי מיזוג שהראה "נותרו 2" על הלוואה שבפועל רחוקה מסיום): המשתמש שיתף 3 קבצים
+    // אמיתיים מאותה הלוואה בדיוק - "1-50", "51-100", "101-144" (בנק שמפצל לוח סילוקין ארוך לפי טווח
+    // מספרי תשלום). "מספר תשלום" בכל קובץ הוא המספר *האמיתי/מוחלט* של ההלוואה - לא מתחיל מ-1 בכל
+    // קובץ - אז total_installments לא יכול פשוט להיות payments.length (מספר השורות בקובץ הזה בלבד).
+    // מדמים כאן קובץ "מקטע מאוחר" (payments 101-102, השורה האחרונה עם יתרת קרן 0 - "זו באמת הסיום").
+    const laterSegmentPdf = buildTestPdf([
+      { text: "מספר", x: 504.0, y: 766.2 }, { text: "תאריך", x: 442.5, y: 766.2 },
+      { text: "תשלום על חשבון", x: 330.4, y: 766.2 }, { text: "תשלום על חשבון", x: 231.6, y: 766.2 },
+      { text: "סך החזר", x: 165.2, y: 766.2 },
+      { text: "יתרת הקרן", x: 88.3, y: 758.0 },
+      { text: "תשלום", x: 498.5, y: 749.7 }, { text: "חיוב", x: 451.6, y: 749.7 },
+      { text: "הקרן", x: 387.2, y: 749.7 }, { text: "הריבית", x: 278.7, y: 749.7 }, { text: "חודשי", x: 177.4, y: 749.7 },
+      { text: "101", x: 523.8, y: 717.4 }, { text: "22/01/31", x: 420.9, y: 717.4 },
+      { text: "603.75", x: 372.3, y: 717.4 }, { text: "176.08", x: 273.6, y: 717.4 },
+      { text: "779.83", x: 167.5, y: 717.4 }, { text: "29,582.07", x: 83.4, y: 717.4 },
+      { text: "102", x: 523.8, y: 685.2 }, { text: "23/02/31", x: 420.9, y: 685.2 },
+      { text: "775.26", x: 372.3, y: 685.2 }, { text: "4.57", x: 273.6, y: 685.2 },
+      { text: "779.83", x: 167.5, y: 685.2 }, { text: "0.00", x: 83.4, y: 685.2 },
+    ]);
+    const laterParse = await api(
+      "POST", "/api/loans/parse-amortization",
+      { data_base64: laterSegmentPdf.toString("base64"), filename: "loan-amort-late-segment.pdf" },
+      token
+    );
+    assert(
+      laterParse.status === 200 && laterParse.data.totalInstallments === 102 && laterParse.data.scheduleComplete === true,
+      `מקטע מאוחר (תשלומים 101-102, יתרה 0 בשורה האחרונה) מזוהה עם total_installments=102 (לא 2 - מספר השורות בקובץ), ומסומן schedule complete (${JSON.stringify({ totalInstallments: laterParse.data.totalInstallments, scheduleComplete: laterParse.data.scheduleComplete })})`
+    );
+    assert(
+      amortParse.data.scheduleComplete === false,
+      `לעומת זאת מקטע מוקדם (תשלומים 1-2, יתרת קרן עדיין לא 0 בשורה האחרונה) מסומן schedule *לא* complete - יש להזהיר את המשתמש שזה כנראה רק חלק מהלוח (${JSON.stringify(amortParse.data.scheduleComplete)})`
+    );
+
+    const earlySegmentLoan = await api(
+      "POST", "/api/loans/commit-amortization",
+      { name: "מקטע מוקדם", total_installments: amortParse.data.totalInstallments, start_date: amortParse.data.startDate, monthly_amount: amortParse.data.monthlyAmount, payments: [] },
+      token
+    );
+    const laterSegmentLoan = await api(
+      "POST", "/api/loans/commit-amortization",
+      { name: "מקטע מאוחר", total_installments: laterParse.data.totalInstallments, start_date: laterParse.data.startDate, monthly_amount: laterParse.data.monthlyAmount, payments: [] },
+      token
+    );
+    const segmentsMerge = await api(
+      "POST", "/api/loans/merge",
+      { target_id: earlySegmentLoan.data.loan.id, source_ids: [laterSegmentLoan.data.loan.id] },
+      token
+    );
+    assert(
+      segmentsMerge.status === 200 && segmentsMerge.data.loan.total_installments === 102,
+      `מיזוג שני מקטעים לוקח את total_installments הגדול מביניהם (102, לא 2 מה"ראשית" כמו שהייתה לפני התיקון) (${JSON.stringify(segmentsMerge.data.loan)})`
+    );
+    assert(
+      segmentsMerge.data.loan.start_date === amortParse.data.startDate,
+      `ומיזוג לוקח את start_date המוקדם מביניהם (${segmentsMerge.data.loan.start_date})`
+    );
+
+    // ניקוי
+    await api("DELETE", `/api/loans/${earlySegmentLoan.data.loan.id}`, null, token);
+
     console.log("\n💳 תשלומים חוזרים (כרטיסי אשראי/הו\"ק) + התראה לפני תאריך החיוב");
     // משוב אמיתי: "יש לאנשים כרטיסי אשראי שכל כרטיס יוצא בתאריך אחר או הו\"ק בבנק, חשוב לי שיקבל
     // התראה לפני התאריך כמה כסף צריך להכניס לבנק". ר' src/routes/recurringCharges.js.

@@ -613,6 +613,11 @@
               <div class="field"><label>סכום תשלום (לתצוגה)</label><input id="amort_monthly" class="plain" type="number"></div>
             </div>
             <div class="hint" style="margin-top:8px" id="amort-past-summary"></div>
+            <!-- משוב אמיתי (בדיקה חיה): בנקים מסוימים מפצלים לוח סילוקין ארוך לכמה קבצים לפי טווח
+                 מספרי תשלום ("1-50","51-100","101-144") - "מס' תשלומים כולל" שהוצע כאן משקף רק את
+                 מה שהקובץ הזה בעצמו רואה, ועלול להיות נמוך משמעותית מהאמת אם זה לא הקטע האחרון
+                 (יתרת הקרן עדיין לא 0 בשורה האחרונה) - ר' scheduleComplete מהשרת. -->
+            <div id="amort-incomplete-warning" class="hint" style="display:none; margin-top:8px; padding:10px; border-radius:8px; background:#fff8db; border:1px solid #e8d675; color:#7a5c00"></div>
             <label style="display:flex; align-items:center; gap:6px; font-size:13.5px; font-weight:500; margin-top:6px">
               <input type="checkbox" id="amort_link_past" checked> לקשר את התשלומים שכבר בוצעו כתנועות בפועל (במקום הערכה לפי חודשים שחלפו)
             </label>
@@ -2078,8 +2083,16 @@ async function parseLoanAmortization() {
   document.getElementById('amort_monthly').value = r.data.monthlyAmount;
   const pastCount = r.data.payments.filter(p => p.isPast).length;
   document.getElementById('amort-past-summary').textContent =
-    `זוהו ${r.data.payments.length} תשלומים בסך הכל, מתוכם ${pastCount} כבר עברו (עד היום) ומועמדים לקישור כתנועות בפועל.`;
+    `זוהו ${r.data.payments.length} תשלומים בקובץ הזה, מתוכם ${pastCount} כבר עברו (עד היום) ומועמדים לקישור כתנועות בפועל.`;
   document.getElementById('amort_link_past').checked = pastCount > 0;
+  const warningEl = document.getElementById('amort-incomplete-warning');
+  if (r.data.scheduleComplete === false) {
+    warningEl.style.display = 'block';
+    warningEl.textContent =
+      `⚠️ שימו לב: הקובץ הזה מסתיים עם יתרת קרן שעדיין לא אפס (₪${r.data.remainingBalanceInFile}) - כנראה שזה רק חלק מלוח הסילוקין המלא (יש בנקים שמפצלים לוח ארוך לכמה קבצים לפי טווח מספרי תשלום). "מס' תשלומים כולל" שהוצע כאן (${r.data.totalInstallments}) עלול להיות נמוך מהאמת. אם יש לכם קבצים נוספים מאותה הלוואה - ייבאו גם אותם ומזגו יחד (במסך הזה, "מיזוג הלוואות מסומנות") - המיזוג ייקח אוטומטית את מספר התשלומים הגבוה ביותר מביניהם.`;
+  } else {
+    warningEl.style.display = 'none';
+  }
   document.getElementById('loan-amort-result').style.display = 'block';
   toast('הקובץ נקרא בהצלחה - אפשר לערוך את הפרטים לפני היצירה', 'success');
 }

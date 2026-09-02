@@ -96,10 +96,14 @@ function register(router) {
   // מיזוג כמה רשומות הלוואה לאחת - משוב אמיתי: "הכנסתי שלושה קבצים שהם מהלוואה אחת, המערכת חישבה
   // את זה כשלושה, אפשר למזג נתונים לפי מספר הלוואה". קורה כי לוח סילוקין הוא קובץ *של ההלוואה
   // עצמה* (ר' /parse-amortization/commit-amortization למעלה) - כל קובץ שמייבאים יוצר הלוואה חדשה
-  // משלו, גם אם זו בפועל אותה הלוואה בדיוק (למשל שלושה ייצואים/עדכונים שונים של אותו לוח סילוקין).
-  // הפרסר לא מחלץ "מספר הלוואה" מהקובץ (לא תמיד מודפס, ואין עדיין קובץ אמיתי לבדוק מולו) - במקום
-  // זיהוי-כפילות אוטומטי לא-מוכח, זו פעולת מיזוג *ידנית*: המשתמש בוחר אילו הלוואות שייכות יחד
-  // ואיזו מהן "ראשית" (target_id) - נשארת; שאר (source_ids) נמחקות אחרי שהתנועות שלהן מועברות אליה.
+  // משלו, גם אם זו בפועל אותה הלוואה בדיוק. **חשוב** (נתפס בבדיקה חיה עם 3 קבצים אמיתיים): לפעמים
+  // אלה לא שלושה ייצואים זהים, אלא שלושה *קטעים* שונים של אותו לוח סילוקין ארוך (בנק שמפצל לפי טווח
+  // מספרי תשלום - למשל "1-50", "51-100", "101-144") - אז גם total_installments/start_date בכל
+  // אחת מהן בנפרד יכולים להיות שגויים (רק החלק שראה אותו הקובץ הזה). המיזוג לוקח את total_installments
+  // הגדול ביותר (סביר שהקובץ שמכיל את התשלום האחרון בפועל ידע את המספר האמיתי) ואת start_date
+  // המוקדם ביותר (סביר שמשקף את תחילת ההלוואה האמיתית) מבין כל ההלוואות שממוזגות יחד - לא רק
+  // משאיר את הערכים של ה"ראשית" כמו שהם. הפרסר לא מחלץ "מספר הלוואה" מהקובץ עצמו - זו עדיין פעולת
+  // מיזוג *ידנית*, לא זיהוי-כפילות אוטומטי: המשתמש בוחר אילו הלוואות שייכות יחד ואיזו "ראשית".
   router.post("/api/loans/merge", requireAuth(async (ctx) => {
     const targetId = Number(ctx.body.target_id);
     const sourceIds = Array.isArray(ctx.body.source_ids) ? [...new Set(ctx.body.source_ids.map(Number))].filter((id) => id !== targetId) : [];
@@ -108,8 +112,12 @@ function register(router) {
     }
     const allIds = [targetId, ...sourceIds];
     const placeholders = allIds.map(() => "?").join(",");
-    const loans = db.prepare(`SELECT id FROM loans WHERE user_id = ? AND id IN (${placeholders})`).all(ctx.user.userId, ...allIds);
+    const loans = db.prepare(`SELECT * FROM loans WHERE user_id = ? AND id IN (${placeholders})`).all(ctx.user.userId, ...allIds);
     if (loans.length !== allIds.length) return json(ctx.res, 404, { error: "אחת ההלוואות לא נמצאה" });
+
+    const bestTotalInstallments = Math.max(...loans.map((l) => l.total_installments));
+    const earliestStartDate = loans.map((l) => l.start_date).sort()[0];
+    db.prepare("UPDATE loans SET total_installments = ?, start_date = ? WHERE id = ?").run(bestTotalInstallments, earliestStartDate, targetId);
 
     // תשלום הלוואה שיובא מלוח סילוקין תמיד נכנס ל-transactions הרגילה (ר' commit-amortization) -
     // אבל תנועה יכולה עקרונית להיות מקושרת להלוואה גם מחתונה/דירה (קישור ידני) - מעבירות קישור,
@@ -196,10 +204,26 @@ function register(router) {
     const today = new Date().toISOString().slice(0, 10);
     const payments = result.payments.map((p) => ({ ...p, isPast: p.date <= today, included: p.date <= today }));
     const first = payments[0];
+    const last = payments[payments.length - 1];
+
+    // תוקן (משוב אמיתי חי, אחרי מיזוג שהראה "נותרו 2" על הלוואה שרחוקה מסיום בפועל): total_installments
+    // היה payments.length - נכון רק אם הקובץ מכיל את *כל* לוח הסילוקין. בפועל התברר (3 קבצים אמיתיים
+    // מאותה הלוואה) שחלק מהבנקים מפצלים לוח סילוקין ארוך לכמה קבצים נפרדים לפי טווח מספרי תשלום
+    // ("144-101", "100-51", "50-1") - "מספר תשלום" בכל קובץ הוא **המספר האמיתי/מוחלט** של ההלוואה
+    // (לא מתחיל מ-1 מחדש בכל קובץ), אז Math.max על payments.length (=מס' השורות בקובץ הזה בלבד) היה
+    // מחזיר 44/50/50 - שלושה מספרים שגויים - במקום 144 (המספר האמיתי, שמופיע רק בקובץ שמכיל את
+    // התשלום האחרון בפועל). לוקחים את מספר התשלום הגבוה ביותר שמופיע בקובץ הזה, לא את כמות השורות.
+    const totalInstallments = Math.max(...payments.map((p) => p.paymentNumber));
+    // מזהים אם הקובץ הזה כן מכיל את התשלום האחרון בפועל (יתרת קרן ~0 בשורה האחרונה) - אם לא, ה-
+    // total_installments שהוצע כאן עדיין עלול להיות רק חלק מהלוח האמיתי (בדיוק המצב שתואר למעלה),
+    // וצריך להזהיר את המשתמש במפורש במקום להציג מספר שנראה בטוח אבל עלול להטעות.
+    const scheduleComplete = Math.abs(last.remainingBalance) < 1;
 
     return json(ctx.res, 200, {
       suggestedName: filename ? String(filename).replace(/\.[^.]+$/, "").trim().slice(0, 200) || "הלוואה מיובאת" : "הלוואה מיובאת",
-      totalInstallments: payments.length,
+      totalInstallments,
+      scheduleComplete,
+      remainingBalanceInFile: last.remainingBalance,
       startDate: first.date,
       monthlyAmount: first.totalPayment,
       payments,
