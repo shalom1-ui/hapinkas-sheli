@@ -1643,7 +1643,12 @@ async function addWeddingTransaction() {
 
 async function loadWedding() {
   if (!weddingCategories.expense.length) await loadWeddingCategories();
+  // תוקן (משוב אמיתי: "בדירה ובכל מקום אחר אין אופציה... שזה ישמר כקטגוריה") - onWeddingTypeChange
+  // (שמרענן גם את loadWeddingCategoryDictionary) רץ רק בפעם הראשונה (כש-select עוד ריק) כדי לא לדרוס
+  // בחירה קיימת של המשתמש - אבל זה השאיר את מילון ה"אחר" תקוע על המצב הראשוני, בלי לרענן אחרי הוספת
+  // ניסוח "אחר" חדש (עד רענון מלא של הדף). מרעננים את המילון בנפרד, בלי תלות בזה אם ה-select כבר מלא.
   if (document.getElementById('wed_category') && !document.getElementById('wed_category').options.length) onWeddingTypeChange();
+  else loadWeddingCategoryDictionary();
   giLoadBatches('wedding');
   loadWeddingTrend();
 
@@ -1808,7 +1813,11 @@ async function addApartmentTransaction() {
 
 async function loadApartment() {
   if (!apartmentCategories.expense.length) await loadApartmentCategories();
+  // תוקן (משוב אמיתי: "בדירה ובכל מקום אחר אין אופציה... שזה ישמר כקטגוריה") - ר' הערה מקבילה
+  // ב-loadWedding: onApartmentTypeChange רץ רק בפעם הראשונה, אז מילון ה"אחר" לא התרענן אחרי הוספת
+  // ניסוח חדש - מרעננים אותו בנפרד, בלי תלות במצב ה-select.
   if (document.getElementById('apt_category') && !document.getElementById('apt_category').options.length) onApartmentTypeChange();
+  else loadApartmentCategoryDictionary();
   giLoadBatches('apartment');
   loadApartmentTrend();
 
