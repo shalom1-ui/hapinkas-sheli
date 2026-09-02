@@ -600,7 +600,10 @@
                לוח סילוקין הוא קובץ *של הלוואה עצמה* (טבלת תשלומים עתידיים/שכבר בוצעו), לא דף בנק/
                אשראי עם תנועות שונות - לכן קורא ל-/api/loans/parse-amortization ייעודי, לא למנוע
                הייבוא הגנרי (giPreview/giCommit). ר' src/lib/pdfParser.js (parseLoanAmortizationPdf). -->
-          <div class="hint" style="margin-bottom:10px">מעלים קובץ PDF של לוח סילוקין הלוואה (כמו שהבנק שולח) - המערכת קוראת ממנו את שם/מספר התשלומים/תאריך התחלה/סכום, ומציעה לקשר גם את התשלומים שכבר בוצעו כתנועות בפועל (במקום להסתמך על הערכה לפי חודשים שחלפו).</div>
+          <!-- תוקן (משוב אמיתי: "שיהיה אפשר לגרור את המסמכים") - הגרירה עצמה כבר עבדה (loan-amort-file
+               כבר ברשימת setupFileDropZone), רק לא הוזכרה כאן בטקסט - בניגוד לשאר כרטיסי הייבוא
+               שכן אומרים "או גוררים" - אז המשתמש לא ידע שזו אפשרות בכלל. -->
+          <div class="hint" style="margin-bottom:10px">מעלים (או גוררים) קובץ PDF של לוח סילוקין הלוואה (כמו שהבנק שולח) - המערכת קוראת ממנו את שם/מספר התשלומים/תאריך התחלה/סכום, ומציעה לקשר גם את התשלומים שכבר בוצעו כתנועות בפועל (במקום להסתמך על הערכה לפי חודשים שחלפו).</div>
           <div class="row">
             <div class="dropzone-wrap" id="loan-amort-file_zone"><input id="loan-amort-file" class="plain" type="file" accept=".pdf"></div>
             <button class="btn secondary" onclick="parseLoanAmortization()">קריאת קובץ</button>
