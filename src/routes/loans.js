@@ -11,6 +11,7 @@ const db = require("../db");
 const { json } = require("../router");
 const { requireAuth } = require("../middleware/auth");
 const { parseLoanAmortizationPdf } = require("../lib/pdfParser");
+const { moveToTrash } = require("../lib/trash");
 
 function decodeBase64File(data_base64) {
   const base64Only = String(data_base64 || "").includes(",") ? String(data_base64).split(",").pop() : data_base64;
@@ -139,6 +140,7 @@ function register(router) {
     for (const t of linked) {
       const key = `${String(t.occurred_at).slice(0, 10)}|${t.amount}`;
       if (seen.has(key)) {
+        moveToTrash(ctx.user.userId, "transaction", "transactions", `תנועה כפולה (מיזוג הלוואות): ${t.category || "הוצאה"} ₪${t.amount}`, t);
         db.prepare("DELETE FROM transactions WHERE id = ?").run(t.id);
         deletedDuplicateTransactions++;
       } else {
@@ -148,6 +150,8 @@ function register(router) {
     }
 
     for (const sid of sourceIds) {
+      const sourceLoan = loans.find((l) => l.id === sid);
+      if (sourceLoan) moveToTrash(ctx.user.userId, "loan", "loans", `הלוואה (מוזגה לתוך אחרת): ${sourceLoan.name}`, sourceLoan);
       db.prepare("DELETE FROM loans WHERE id = ?").run(sid);
     }
 
@@ -167,6 +171,7 @@ function register(router) {
     for (const table of ["transactions", "wedding_transactions", "apartment_transactions"]) {
       db.prepare(`UPDATE ${table} SET loan_id = NULL WHERE loan_id = ?`).run(row.id);
     }
+    moveToTrash(ctx.user.userId, "loan", "loans", `הלוואה: ${row.name}`, row);
     db.prepare("DELETE FROM loans WHERE id = ?").run(row.id);
     return json(ctx.res, 200, { message: "ההלוואה נמחקה" });
   }));

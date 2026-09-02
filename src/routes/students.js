@@ -6,6 +6,7 @@ const { json } = require("../router");
 const { requireAuth } = require("../middleware/auth");
 const { isGuardian, isOwnerOrProfessional } = require("../lib/access");
 const { rememberPhrase } = require("../lib/dictionary");
+const { moveToTrash } = require("../lib/trash");
 
 function register(router) {
   // רשימת תלמידים של המשתמש המחובר
@@ -34,6 +35,10 @@ function register(router) {
     const student = getOwnedStudent(ctx.params.id, ctx.user.userId);
     if (!student) return json(ctx.res, 404, { error: "תלמיד לא נמצא" });
     db.prepare("UPDATE students SET active = 0 WHERE id = ?").run(student.id);
+    // "סל מחזור" - התלמיד עצמו כבר לא נמחק בפועל (active=0 בלבד, ר' הערה למעלה) - רק מסומן שם, כדי
+    // שיופיע יחד עם שאר הפריטים המחוקים ב"סל מחזור" (ר' routes/trash.js - entity_type='student'
+    // משוחזר ע"י active=1 בחזרה, לא INSERT כמו שאר הסוגים - השורה עצמה מעולם לא נעלמה).
+    moveToTrash(ctx.user.userId, "student", "students", `תלמיד: ${student.name}`, { id: student.id });
     return json(ctx.res, 200, { ok: true });
   }));
 

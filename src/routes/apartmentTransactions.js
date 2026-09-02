@@ -8,6 +8,7 @@
 const db = require("../db");
 const { json } = require("../router");
 const { requireAuth } = require("../middleware/auth");
+const { moveToTrash } = require("../lib/trash");
 const { rememberPhrase, getDictionary } = require("../lib/dictionary");
 
 const APARTMENT_EXPENSE_CATEGORIES = [
@@ -101,6 +102,7 @@ function register(router) {
   router.delete("/api/apartment/transactions/:id", requireAuth(async (ctx) => {
     const row = db.prepare("SELECT * FROM apartment_transactions WHERE id = ? AND user_id = ?").get(ctx.params.id, ctx.user.userId);
     if (!row) return json(ctx.res, 404, { error: "תנועה לא נמצאה" });
+    moveToTrash(ctx.user.userId, "apartment_transaction", "apartment_transactions", `דירה: ${row.category || (row.type === "income" ? "הכנסה" : "הוצאה")} ₪${row.amount}`, row);
     db.prepare("DELETE FROM apartment_transactions WHERE id = ?").run(row.id);
     return json(ctx.res, 200, { message: "התנועה נמחקה" });
   }));

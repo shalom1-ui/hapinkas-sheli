@@ -8,6 +8,7 @@ const { requireAuth } = require("../middleware/auth");
 const { sendEmail } = require("../services/email");
 const { isOwnerOrProfessional } = require("../lib/access");
 const { rememberPhrase, getDictionary } = require("../lib/dictionary");
+const { moveToTrash } = require("../lib/trash");
 
 // אלה הן קטגוריות מוצעות בתפריט הנפתח, לנוחות ולסטטיסטיקה - אבל role_type בפועל יכול
 // להיות כל טקסט חופשי אחר (למשל כשבוחרים "אחר" ומקלידים סוג טיפול שלא ברשימה), בדיוק כמו trend.
@@ -141,6 +142,7 @@ function register(router) {
   router.delete("/api/reports/:id", requireAuth(async (ctx) => {
     const row = db.prepare("SELECT * FROM therapy_reports WHERE id = ? AND professional_user_id = ?").get(ctx.params.id, ctx.user.userId);
     if (!row) return json(ctx.res, 404, { error: "דוח לא נמצא" });
+    moveToTrash(ctx.user.userId, "report", "therapy_reports", `דוח (${row.role_type}): ${String(row.note || "").slice(0, 60)}`, row);
     db.prepare("DELETE FROM therapy_reports WHERE id = ?").run(row.id);
     return json(ctx.res, 200, { message: "הדוח נמחק" });
   }));

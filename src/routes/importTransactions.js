@@ -20,6 +20,7 @@ const { parseCsv } = require("../lib/csvParser");
 const { looksLikeHtml, looksLikeLegacyBinaryXls, parseHtmlTable } = require("../lib/htmlTableParser");
 const { parsePdf } = require("../lib/pdfParser");
 const { rowsToTransactions } = require("../lib/importMapping");
+const { moveToTrash } = require("../lib/trash");
 
 const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_ROWS_PER_IMPORT = 2000; // רשת ביטחון - קובץ תקין של דף בנק/כרטיס לא אמור לחרוג מזה בפועל
@@ -217,8 +218,14 @@ function register(router) {
   // אפשר היה למחוק רק תנועה-תנועה (DELETE /api/transactions/:id), מה שלא מעשי לקובץ עם עשרות שורות.
   router.delete("/api/transactions/import/batches/:batchId", requireAuth(async (ctx) => {
     const importTarget = resolveImportTarget(ctx.query.target);
+    const rows = db
+      .prepare(`SELECT * FROM ${importTarget.table} WHERE user_id = ? AND import_batch_id = ?`)
+      .all(ctx.user.userId, ctx.params.batchId);
+    if (!rows.length) return json(ctx.res, 404, { error: "קובץ ייבוא לא נמצא" });
+    // "סל מחזור" - מחיקת קובץ שלם היא הרבה שורות בבת אחת, לא אחת - נשמרות יחד כמערך JSON אחד
+    // (entity_type='import_batch'), ומשוחזרות יחד (ר' routes/trash.js).
+    moveToTrash(ctx.user.userId, "import_batch", importTarget.table, `קובץ ייבוא: ${rows[0].import_filename || "ללא שם"} (${rows.length} תנועות)`, rows);
     const info = db.prepare(`DELETE FROM ${importTarget.table} WHERE user_id = ? AND import_batch_id = ?`).run(ctx.user.userId, ctx.params.batchId);
-    if (!info.changes) return json(ctx.res, 404, { error: "קובץ ייבוא לא נמצא" });
     return json(ctx.res, 200, { deleted: info.changes });
   }));
 

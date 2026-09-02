@@ -169,6 +169,21 @@ db.exec(`
     created_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- "סל מחזור" - משוב אמיתי: "אני צריך שיהיה סוג של ספאם במידה ונמחק לי שיהיה לי אפשרות להחזיר אותו"
+  -- (לבירור: כל דבר באפליקציה, כולל קבצי ייבוא/תלמידים/דוחות). גנרי לגמרי - לא טבלה נפרדת לכל סוג
+  -- ישות, אלא JSON snapshot של השורה (או כמה שורות, לייבוא קובץ שלם) לפני שהיא נמחקת בפועל, כדי
+  -- שאפשר יהיה לשחזר. table_name (לא מגיע אף פעם מקלט משתמש - תמיד קבוע מהצד שקורא ל-moveToTrash,
+  -- ר' lib/trash.js) הוא איך בונים INSERT דינמי בשחזור בלי לשכפל את רשימת העמודות של כל טבלה כאן.
+  CREATE TABLE IF NOT EXISTS trash (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    entity_type TEXT NOT NULL,   -- 'transaction' | 'wedding_transaction' | 'apartment_transaction' | 'loan' | 'recurring_charge' | 'report' | 'document' | 'import_batch'
+    table_name TEXT NOT NULL,
+    summary TEXT NOT NULL,       -- תיאור קצר קריא לתצוגה בסל המחזור (למשל "תנועה: מזון ₪120")
+    data TEXT NOT NULL,          -- JSON - אובייקט (שורה בודדת) או מערך אובייקטים (מחיקת אצווה שלמה)
+    deleted_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_user_id INTEGER NOT NULL REFERENCES users(id), -- מי יצר/מנהל את התלמיד (חונך/מטפל ראשי)

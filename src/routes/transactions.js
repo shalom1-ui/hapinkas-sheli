@@ -4,6 +4,7 @@ const db = require("../db");
 const { json } = require("../router");
 const { requireAuth } = require("../middleware/auth");
 const { rememberPhrase, getDictionary } = require("../lib/dictionary");
+const { moveToTrash } = require("../lib/trash");
 
 function register(router) {
   // רשימת תנועות + סיכומים
@@ -115,6 +116,9 @@ function register(router) {
   router.delete("/api/transactions/:id", requireAuth(async (ctx) => {
     const row = db.prepare("SELECT * FROM transactions WHERE id = ? AND user_id = ?").get(ctx.params.id, ctx.user.userId);
     if (!row) return json(ctx.res, 404, { error: "תנועה לא נמצאה" });
+    // "סל מחזור" - משוב אמיתי: "אני צריך שיהיה סוג של ספאם במידה ונמחק לי שיהיה לי אפשרות להחזיר
+    // אותו" - צילום של השורה לפני המחיקה, ר' lib/trash.js.
+    moveToTrash(ctx.user.userId, "transaction", "transactions", `תנועה: ${row.category || (row.type === "income" ? "הכנסה" : "הוצאה")} ₪${row.amount}`, row);
     db.prepare("DELETE FROM transactions WHERE id = ?").run(row.id);
     return json(ctx.res, 200, { message: "התנועה נמחקה" });
   }));

@@ -52,6 +52,7 @@ require("./routes/subscription").register(router);
 require("./routes/ivr").register(router);
 require("./routes/yemot").register(router);
 require("./routes/systemAdmin").register(router);
+require("./routes/trash").register(router);
 
 const PORT = process.env.PORT || 3000;
 const server = http.createServer((req, res) => router.handle(req, res));

@@ -12,6 +12,7 @@ const db = require("../db");
 const { json } = require("../router");
 const { requireAuth } = require("../middleware/auth");
 const { sendEmail } = require("../services/email");
+const { moveToTrash } = require("../lib/trash");
 
 // מספר הימים בחודש נתון (month: 1-12) - new Date(year, month, 0) "גולש" ליום האחרון של החודש הקודם,
 // כלומר בפועל היום האחרון של month.
@@ -178,6 +179,7 @@ function register(router) {
   router.delete("/api/recurring-charges/:id", requireAuth(async (ctx) => {
     const row = db.prepare("SELECT * FROM recurring_charges WHERE id = ? AND user_id = ?").get(ctx.params.id, ctx.user.userId);
     if (!row) return json(ctx.res, 404, { error: "מחויב חוזר לא נמצא" });
+    moveToTrash(ctx.user.userId, "recurring_charge", "recurring_charges", `תשלום חוזר: ${row.name}`, row);
     db.prepare("DELETE FROM recurring_charges WHERE id = ?").run(row.id);
     return json(ctx.res, 200, { message: "נמחק" });
   }));

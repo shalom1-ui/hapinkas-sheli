@@ -1369,6 +1369,92 @@ async function run() {
     await api("DELETE", `/api/recurring-charges/${rcId}`, null, token);
     await api("DELETE", `/api/recurring-charges/${rcNoCategory.data.charge.id}`, null, token);
 
+    console.log("\n🗑️ סל מחזור - שחזור אחרי מחיקה, בכל סוגי הישויות");
+    // משוב אמיתי: "אני צריך שיהיה סוג של ספאם במידה ונמחק לי שיהיה לי אפשרות להחזיר אותו" (לבירור:
+    // כל דבר באפליקציה, כולל קבצי ייבוא/תלמידים/דוחות). ר' src/lib/trash.js, src/routes/trash.js.
+    const trashBefore = await api("GET", "/api/trash", null, token);
+    const trashCountBefore = trashBefore.data.items.length;
+
+    // --- תנועה רגילה: מחיקה -> מופיעה בסל -> שחזור -> קיימת שוב עם אותם נתונים ---
+    const trTx = await api("POST", "/api/transactions", { type: "expense", amount: 321, category: "בדיקת סל מחזור" }, token);
+    await api("DELETE", `/api/transactions/${trTx.data.transaction.id}`, null, token);
+    const trashAfterTxDelete = await api("GET", "/api/trash", null, token);
+    const txTrashItem = trashAfterTxDelete.data.items.find(i => i.entity_type === "transaction" && i.summary.includes("321"));
+    assert(!!txTrashItem, `תנועה שנמחקה מופיעה בסל המחזור עם תקציר קריא (${JSON.stringify(trashAfterTxDelete.data.items[0])})`);
+    const txRestore = await api("POST", `/api/trash/${txTrashItem.id}/restore`, null, token);
+    assert(txRestore.status === 200, "שחזור תנועה מסל המחזור הצליח");
+    const txsAfterRestore = await api("GET", "/api/transactions", null, token);
+    const restoredTx = txsAfterRestore.data.transactions.find(t => t.category === "בדיקת סל מחזור");
+    assert(
+      restoredTx && restoredTx.amount === 321 && restoredTx.id !== trTx.data.transaction.id,
+      `התנועה ששוחזרה קיימת שוב עם אותם נתונים (מזהה חדש, לא בהכרח אותו הישן) (${JSON.stringify(restoredTx)})`
+    );
+    const trashAfterTxRestore = await api("GET", "/api/trash", null, token);
+    assert(!trashAfterTxRestore.data.items.some(i => i.id === txTrashItem.id), "אחרי שחזור, הפריט נעלם מסל המחזור (לא כפול)");
+
+    // --- הלוואה: מחיקה -> סל -> שחזור ---
+    const trLoan = await api("POST", "/api/loans", { name: "הלוואת בדיקת סל מחזור", total_installments: 12, start_date: "2026-01-01" }, token);
+    await api("DELETE", `/api/loans/${trLoan.data.loan.id}`, null, token);
+    const trashAfterLoanDelete = await api("GET", "/api/trash", null, token);
+    const loanTrashItem = trashAfterLoanDelete.data.items.find(i => i.entity_type === "loan" && i.summary.includes("הלוואת בדיקת סל מחזור"));
+    assert(!!loanTrashItem, "הלוואה שנמחקה מופיעה בסל המחזור");
+    await api("POST", `/api/trash/${loanTrashItem.id}/restore`, null, token);
+    const loansAfterRestore = await api("GET", "/api/loans", null, token);
+    const restoredLoan = loansAfterRestore.data.loans.find(l => l.name === "הלוואת בדיקת סל מחזור");
+    assert(!!restoredLoan && restoredLoan.total_installments === 12, `ההלוואה ששוחזרה קיימת שוב עם הנתונים הנכונים (${JSON.stringify(restoredLoan)})`);
+
+    // --- קובץ ייבוא שלם (כמה תנועות בבת אחת) - נמחק ומשוחזר יחד, לא תנועה-תנועה ---
+    const trImportCsv = "תאריך,תיאור פעולה,זכות,חובה\n01/09/2026,בדיקת סל א,0,10\n02/09/2026,בדיקת סל ב,0,20\n";
+    const trImportPreview = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: Buffer.from(trImportCsv, "utf8").toString("base64"), filename: "trash-batch-test.csv", source_type: "bank" },
+      token
+    );
+    const trImportCommit = await api("POST", "/api/transactions/import/commit", { transactions: trImportPreview.data.transactions, filename: "trash-batch-test.csv" }, token);
+    assert(trImportCommit.data.imported === 2, "שתי התנועות מהקובץ יובאו בהצלחה (הכנה לבדיקת מחיקת-אצווה)");
+    await api("DELETE", `/api/transactions/import/batches/${trImportCommit.data.batchId}`, null, token);
+    const trashAfterBatchDelete = await api("GET", "/api/trash", null, token);
+    const batchTrashItem = trashAfterBatchDelete.data.items.find(i => i.entity_type === "import_batch" && i.summary.includes("trash-batch-test.csv"));
+    assert(!!batchTrashItem && batchTrashItem.summary.includes("2"), `מחיקת קובץ ייבוא שלם נשמרת כפריט *אחד* בסל המחזור (לא 2 נפרדים), עם ציון מספר התנועות (${JSON.stringify(batchTrashItem)})`);
+    await api("POST", `/api/trash/${batchTrashItem.id}/restore`, null, token);
+    const txsAfterBatchRestore = await api("GET", "/api/transactions", null, token);
+    const restoredBatchTxs = txsAfterBatchRestore.data.transactions.filter(t => t.note === "בדיקת סל א" || t.note === "בדיקת סל ב");
+    assert(restoredBatchTxs.length === 2, `שחזור פריט אצווה מחזיר את *כל* התנועות שהיו בקובץ (${restoredBatchTxs.length})`);
+
+    // --- תלמיד: "מחיקה" היא כבר soft-delete (active=0) - שחזור מחזיר לרשימה הפעילה, לא INSERT חדש ---
+    const trStudent = await api("POST", "/api/students", { name: "תלמיד בדיקת סל מחזור" }, token);
+    await api("DELETE", `/api/students/${trStudent.data.student.id}`, null, token);
+    const trStudentsAfterRemove = await api("GET", "/api/students", null, token);
+    assert(!trStudentsAfterRemove.data.students.some(s => s.id === trStudent.data.student.id), "תלמיד שהוסר לא מופיע ברשימה הפעילה");
+    const trashAfterStudentDelete = await api("GET", "/api/trash", null, token);
+    const studentTrashItem = trashAfterStudentDelete.data.items.find(i => i.entity_type === "student" && i.summary.includes("תלמיד בדיקת סל מחזור"));
+    assert(!!studentTrashItem, "תלמיד שהוסר מופיע בסל המחזור");
+    await api("POST", `/api/trash/${studentTrashItem.id}/restore`, null, token);
+    const studentsAfterRestore = await api("GET", "/api/students", null, token);
+    assert(
+      studentsAfterRestore.data.students.some(s => s.id === trStudent.data.student.id),
+      "אחרי שחזור, התלמיד חוזר לרשימה הפעילה עם אותו מזהה בדיוק (לא נוצר תלמיד כפול)"
+    );
+
+    // --- מחיקה לצמיתות מסל המחזור (בלי שחזור) ---
+    const trTxForPurge = await api("POST", "/api/transactions", { type: "expense", amount: 55, category: "בדיקת מחיקה לצמיתות" }, token);
+    await api("DELETE", `/api/transactions/${trTxForPurge.data.transaction.id}`, null, token);
+    const trashBeforePurge = await api("GET", "/api/trash", null, token);
+    const purgeItem = trashBeforePurge.data.items.find(i => i.summary.includes("בדיקת מחיקה לצמיתות"));
+    const purgeResult = await api("DELETE", `/api/trash/${purgeItem.id}`, null, token);
+    assert(purgeResult.status === 200, "מחיקה לצמיתות מסל המחזור הצליחה");
+    const trashAfterPurge = await api("GET", "/api/trash", null, token);
+    assert(!trashAfterPurge.data.items.some(i => i.id === purgeItem.id), "אחרי מחיקה לצמיתות, הפריט נעלם גם מסל המחזור עצמו (לא רק משוחזר)");
+    const restoreAfterPurge = await api("POST", `/api/trash/${purgeItem.id}/restore`, null, token);
+    assert(restoreAfterPurge.status === 404, "אי אפשר לשחזר פריט שכבר נמחק לצמיתות מסל המחזור");
+
+    // --- בידוד בין משתמשים ---
+    const otherUserTrashSignup = await api("POST", "/api/auth/signup", {
+      full_name: "משתמש זר לסל מחזור", username: `stranger_trash_${Date.now()}`, password: "1234", phone: `+97250${Date.now().toString().slice(-7)}`,
+    });
+    const strangerTrashList = await api("GET", "/api/trash", null, otherUserTrashSignup.data.token);
+    assert(strangerTrashList.data.items.length === 0, "סל המחזור של משתמש אחר ריק - לא רואים פריטים ששייכים למשתמש הזה");
+
     console.log("\n🎓 חונכות ותלמידים");
     const student = await api("POST", "/api/students", { name: "תלמיד בדיקה" }, token);
     assert(student.status === 201, "הוספת תלמיד הצליחה");

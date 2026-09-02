@@ -276,6 +276,7 @@
       <button class="nav-item" data-view="parents" onclick="showView('parents')"><span class="ic">👪</span> אזור הורים</button>
       <button class="nav-item" data-view="subscription" onclick="showView('subscription')"><span class="ic">💎</span> מנוי ותרומה</button>
       <button class="nav-item" data-view="settings" onclick="showView('settings')"><span class="ic">⚙️</span> הגדרות</button>
+      <button class="nav-item" data-view="trash" onclick="showView('trash')"><span class="ic">🗑️</span> סל מחזור</button>
     </div>
 
     <div class="main">
@@ -920,6 +921,20 @@
         </div>
       </div>
 
+      <!-- ---------- סל מחזור ---------- -->
+      <!-- משוב אמיתי: "אני צריך שיהיה סוג של ספאם במידה ונמחק לי שיהיה לי אפשרות להחזיר אותו"
+           (לבירור: כל דבר באפליקציה). ר' src/routes/trash.js. -->
+      <div class="view" id="view-trash">
+        <div class="view-header"><h1>סל מחזור</h1><p>כל מה שנמחק בחודש האחרון - ניתן לשחזור בלחיצה אחת</p></div>
+        <div class="card">
+          <div class="row" style="justify-content:space-between; align-items:center">
+            <h3 style="margin:0">פריטים שנמחקו</h3>
+            <button class="btn secondary sm" onclick="emptyTrash()">ריקון הסל</button>
+          </div>
+          <div id="trash-list" style="margin-top:10px"><div class="empty-state">הסל ריק</div></div>
+        </div>
+      </div>
+
     </div>
   </div>
 </div>
@@ -1094,6 +1109,7 @@ function showView(name) {
   if (name === 'mentoring') { loadLessonDictionaries(); autofillLessonFormFromProfile(); }
   if (name === 'settings') loadProfile();
   if (name === 'recurring') loadRecurringCharges();
+  if (name === 'trash') loadTrash();
   if (name === 'wedding') loadWedding();
   if (name === 'apartment') loadApartment();
   if (name === 'loans') loadLoans();
@@ -3154,6 +3170,38 @@ async function changePassword() {
     document.getElementById('st_current_password').value = '';
     document.getElementById('st_new_password').value = '';
   }
+}
+
+// ---------- סל מחזור ----------
+// משוב אמיתי: "אני צריך שיהיה סוג של ספאם במידה ונמחק לי שיהיה לי אפשרות להחזיר אותו" (לבירור:
+// כל דבר באפליקציה). ר' src/routes/trash.js לפרטי השרת - כאן רק תצוגה/שחזור/מחיקה לצמיתות.
+async function loadTrash() {
+  const r = await api('GET', '/api/trash');
+  if (!r.ok) return;
+  const el = document.getElementById('trash-list');
+  if (!r.data.items.length) { el.innerHTML = '<div class="empty-state">הסל ריק</div>'; return; }
+  el.innerHTML = r.data.items.map(item => `
+    <div class="list-item">
+      <div><div class="li-main">${item.summary.replace(/</g, '&lt;')}</div><div class="li-sub">נמחק ב-${item.deleted_at}</div></div>
+      <div style="display:flex; align-items:center; gap:10px">
+        <button class="btn sm" onclick="restoreTrashItem(${item.id})">שחזור</button>
+        <button class="btn secondary sm" onclick="deleteTrashItemForever(${item.id})">מחיקה לצמיתות</button>
+      </div>
+    </div>`).join('');
+}
+async function restoreTrashItem(id) {
+  const r = await api('POST', `/api/trash/${id}/restore`);
+  if (r.ok) { toast('שוחזר בהצלחה', 'success'); loadTrash(); }
+}
+async function deleteTrashItemForever(id) {
+  if (!(await appConfirm('למחוק את הפריט הזה לצמיתות? לא ניתן לשחזר אחרי זה.'))) return;
+  const r = await api('DELETE', `/api/trash/${id}`);
+  if (r.ok) { toast('נמחק לצמיתות', 'success'); loadTrash(); }
+}
+async function emptyTrash() {
+  if (!(await appConfirm('לרוקן את כל סל המחזור? כל הפריטים שבו יימחקו לצמיתות, לא ניתן יהיה לשחזר אותם.'))) return;
+  const r = await api('POST', '/api/trash/empty');
+  if (r.ok) { toast('סל המחזור רוקן', 'success'); loadTrash(); }
 }
 
 // ---------- גרירה-ושחרור של קבצים לייבוא ----------
