@@ -78,7 +78,11 @@ function buildZip(files, { deflate = false } = {}) {
 // בונה .xlsx עם גיליון יחיד, מרשימת שורות (מערך של מערכי מחרוזות/מספרים), ועמודת תאריך אחת
 // (dateColIndex, 0-based) שמעוצבת בפועל כתאריך (numFmtId=14, פורמט מובנה) - כדי לבדוק גם את
 // זיהוי סגנון-התא, לא רק את ערך התא הגולמי.
-function buildTestXlsx(rows, dateColIndex, { deflate = false } = {}) {
+// namespacePrefix (אופציונלי, למשל "x") - בונה את כל ה-XML עם קידומת namespace על כל תגית
+// (<x:row>/<x:c>/<x:v>/<x:sheetData>/<x:sheet>/...) במקום ברירת המחדל בלי קידומת - כדי לבדוק את
+// הסבלנות ל-namespace ב-xlsxParser.js (נבדק מול קובץ אמיתי - מזרחי-טפחות, כרטיס ויזה - שכתוב כך).
+function buildTestXlsx(rows, dateColIndex, { deflate = false, namespacePrefix = "" } = {}) {
+  const p = namespacePrefix ? `${namespacePrefix}:` : "";
   const sharedStrings = [];
   function sharedStringIndex(text) {
     let idx = sharedStrings.indexOf(text);
@@ -97,35 +101,36 @@ function buildTestXlsx(rows, dateColIndex, { deflate = false } = {}) {
       const cellsXml = row
         .map((cell, cIdx) => {
           const ref = `${colLetters(cIdx)}${rIdx + 1}`;
+          if (cell === null) return `<${p}c r="${ref}" t="s" />`; // תא ריק לגמרי - בלי <v> בכלל (ר' הערה ב-xlsxParser.js)
           if (typeof cell === "number") {
             const style = cIdx === dateColIndex ? ' s="1"' : "";
-            return `<c r="${ref}"${style}><v>${cell}</v></c>`;
+            return `<${p}c r="${ref}"${style}><${p}v>${cell}</${p}v></${p}c>`;
           }
           const s = sharedStringIndex(String(cell));
-          return `<c r="${ref}" t="s"><v>${s}</v></c>`;
+          return `<${p}c r="${ref}" t="s"><${p}v>${s}</${p}v></${p}c>`;
         })
         .join("");
-      return `<row r="${rIdx + 1}">${cellsXml}</row>`;
+      return `<${p}row r="${rIdx + 1}">${cellsXml}</${p}row>`;
     })
     .join("");
 
   const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rowsXml}</sheetData></worksheet>`;
+<${p}worksheet xmlns${namespacePrefix ? `:${namespacePrefix}` : ""}="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><${p}sheetData>${rowsXml}</${p}sheetData></${p}worksheet>`;
 
   const sstXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${sharedStrings.length}" uniqueCount="${sharedStrings.length}">${sharedStrings
-    .map(s => `<si><t>${s.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</t></si>`)
-    .join("")}</sst>`;
+<${p}sst xmlns${namespacePrefix ? `:${namespacePrefix}` : ""}="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="${sharedStrings.length}" uniqueCount="${sharedStrings.length}">${sharedStrings
+    .map(s => `<${p}si><${p}t>${s.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</${p}t></${p}si>`)
+    .join("")}</${p}sst>`;
 
   const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
-<cellXfs count="2"><xf numFmtId="0"/><xf numFmtId="14"/></cellXfs>
-</styleSheet>`;
+<${p}styleSheet xmlns${namespacePrefix ? `:${namespacePrefix}` : ""}="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+<${p}cellXfs count="2"><${p}xf numFmtId="0"/><${p}xf numFmtId="14"/></${p}cellXfs>
+</${p}styleSheet>`;
 
   const workbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
-<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets>
-</workbook>`;
+<${p}workbook xmlns${namespacePrefix ? `:${namespacePrefix}` : ""}="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+<${p}sheets><${p}sheet name="Sheet1" sheetId="1" r:id="rId1"/></${p}sheets>
+</${p}workbook>`;
 
   const workbookRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">

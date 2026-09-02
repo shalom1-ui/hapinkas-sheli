@@ -43,16 +43,22 @@ function findColumn(headerRow, keywords) {
 // כמו findColumn, אבל כשיש כמה עמודות שתואמות (למשל כרטיס אשראי עם "סכום עסקה" *וגם* "סכום חיוב" -
 // ר' pdfParser.js, נבדק מול קובץ אמיתי) מעדיפים את זו שמכילה גם אחת ממילות ה-preferKeywords.
 // "סכום חיוב" (הסכום שבפועל מחויב החודש) עדיף בבירור על "סכום עסקה" (הסכום המקורי - יכול לכלול
-// תשלומים עתידיים/המרת מטבע שלא רלוונטיים לחודש הנוכחי) לצורך מעקב תקציב.
+// תשלומים עתידיים/המרת מטבע שלא רלוונטיים לחודש הנוכחי) לצורך מעקב תקציב. מחזיר גם את העמודה
+// השנייה (לא-מועדפת) בתור fallback - נבדק מול קובץ אמיתי (מזרחי-טפחות, כרטיס ויזה) שבו "סכום חיוב"
+// דווקא **ריק** בשורות "עסקה בתהליך קליטה" (עדיין לא סוכם חיוב סופי) - שם "סכום עסקה" הוא הסכום
+// היחיד שקיים בפועל לאותה שורה ספציפית, אז כדאי ליפול חזרה אליו רק לשורות כאלה (ר' rowsToTransactions).
 function findColumnPreferred(headerRow, keywords, preferKeywords) {
   let firstMatch = -1;
+  let preferredMatch = -1;
   for (let i = 0; i < headerRow.length; i++) {
     const cell = normalizeHeaderCell(headerRow[i]);
     if (!cell || !keywords.some(k => cell.includes(k.toLowerCase()))) continue;
     if (firstMatch < 0) firstMatch = i;
-    if (preferKeywords.some(k => cell.includes(k.toLowerCase()))) return i;
+    if (preferredMatch < 0 && preferKeywords.some(k => cell.includes(k.toLowerCase()))) preferredMatch = i;
   }
-  return firstMatch;
+  const col = preferredMatch >= 0 ? preferredMatch : firstMatch;
+  const fallbackCol = preferredMatch >= 0 && firstMatch >= 0 && firstMatch !== preferredMatch ? firstMatch : -1;
+  return { col, fallbackCol };
 }
 
 // מזהה איזו שורה בקובץ היא שורת הכותרות: סורקים את 15 השורות הראשונות (חלק מהבנקים מוסיפים כמה
@@ -75,6 +81,8 @@ function findHeaderRowIndex(rows) {
 }
 
 function detectColumns(headerRow) {
+  // מעדיפים "סכום חיוב" (הסכום שבפועל מחויב) על "סכום עסקה" (הסכום המקורי) אם שתיהן קיימות - ר' הערה ב-findColumnPreferred.
+  const amount = findColumnPreferred(headerRow, HEADER_KEYWORDS.amount, ["חיוב"]);
   return {
     dateCol: findColumn(headerRow, HEADER_KEYWORDS.date),
     descCol: findColumn(headerRow, HEADER_KEYWORDS.description),
@@ -82,8 +90,8 @@ function detectColumns(headerRow) {
     descExtendedCol: findColumn(headerRow, HEADER_KEYWORDS.descriptionExtended),
     creditCol: findColumn(headerRow, HEADER_KEYWORDS.credit),
     debitCol: findColumn(headerRow, HEADER_KEYWORDS.debit),
-    // מעדיפים "סכום חיוב" (הסכום שבפועל מחויב) על "סכום עסקה" (הסכום המקורי) אם שתיהן קיימות - ר' הערה ב-findColumnPreferred.
-    amountCol: findColumnPreferred(headerRow, HEADER_KEYWORDS.amount, ["חיוב"]),
+    amountCol: amount.col,
+    amountFallbackCol: amount.fallbackCol,
     balanceCol: findColumn(headerRow, HEADER_KEYWORDS.balance),
   };
 }
@@ -181,7 +189,11 @@ function rowsToTransactions(rows, sourceType) {
   }
   if (cols.creditCol < 0 && cols.debitCol < 0 && cols.amountCol < 0) {
     // ר' הערה מפורטת ב-guessUnlabeledAmountColumn - חלק מהבנקים משאירים כותרת עמודת הסכום ריקה.
-    const claimed = new Set([cols.dateCol, cols.descCol, cols.descFallbackCol, cols.descExtendedCol, cols.balanceCol].filter(c => c >= 0));
+    const claimed = new Set(
+      [cols.dateCol, cols.descCol, cols.descFallbackCol, cols.descExtendedCol, cols.amountFallbackCol, cols.balanceCol].filter(
+        (c) => c >= 0
+      )
+    );
     cols.amountCol = guessUnlabeledAmountColumn(rows, headerIndex, claimed);
     if (cols.amountCol < 0) {
       return { error: "לא נמצאה עמודת סכום (או זכות/חובה) בקובץ." };
@@ -210,7 +222,14 @@ function rowsToTransactions(rows, sourceType) {
       else if (debit > 0) { amount = Math.abs(debit); type = "expense"; }
       else continue; // שתי העמודות ריקות/אפס - לא תנועה אמיתית (למשל שורת סיכום)
     } else {
-      const raw = parseAmountValue(row[cols.amountCol]);
+      let raw = parseAmountValue(row[cols.amountCol]);
+      // עמודת הסכום המועדפת ריקה לשורה הזו ספציפית (למשל "סכום חיוב" עוד לא נקבע - עסקה "בתהליך
+      // קליטה" שטרם סוכם החיוב הסופי שלה) - נופלים חזרה לעמודת הסכום השנייה (למשל "סכום עסקה"),
+      // בדיוק כמו ש-descFallbackCol עובד לתיאור: לא כל שורה מכריעה איזו עמודה "מנצחת" ברמת הקובץ
+      // כולו, אלא כל שורה בפני עצמה. ר' הערה ב-findColumnPreferred.
+      if (Number.isNaN(raw) && cols.amountFallbackCol >= 0) {
+        raw = parseAmountValue(row[cols.amountFallbackCol]);
+      }
       if (Number.isNaN(raw) || raw === 0) continue;
       if (sourceType === "card") {
         type = raw < 0 ? "income" : "expense";

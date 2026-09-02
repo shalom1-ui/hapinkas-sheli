@@ -62,6 +62,11 @@ function readZip(buf) {
 }
 
 // ---------- שכבה 2: פענוח XML מינימלי (ביטויים רגולריים בלבד, בלי DOM) ----------
+// כל תגית XML כאן (row/c/v/t/si/sheetData/...) מותרת עם קידומת namespace אופציונלית (`(?:\w+:)?`) -
+// למשל <x:row>/<x:c>/<x:v> ולא רק <row>/<c>/<v>. רוב מחוללי ה-xlsx (כולל Excel עצמו) כותבים בלי
+// קידומת, אבל התגלה קובץ ייצוא אמיתי (מזרחי-טפחות, כרטיס ויזה) שכל התגיות שלו מוקדמות ב-"x:" (ה-XML
+// עדיין מוגדר עם `xmlns:x="...spreadsheetml..."` תקני, פשוט לא כברירת מחדל ללא קידומת) - בלי הסבלנות
+// הזו הפרסר פשוט לא מוצא אף שורה/תא, ומחזיר בשקט מטריצה ריקה (0 שורות) במקום שגיאה ברורה.
 function decodeXmlEntities(s) {
   return String(s)
     .replace(/&lt;/g, "<")
@@ -76,11 +81,11 @@ function decodeXmlEntities(s) {
 function parseSharedStrings(xml) {
   if (!xml) return [];
   const items = [];
-  const siRegex = /<si[^>]*>([\s\S]*?)<\/si>/g;
+  const siRegex = /<(?:\w+:)?si\b[^>]*>([\s\S]*?)<\/(?:\w+:)?si>/g;
   let m;
   while ((m = siRegex.exec(xml))) {
     const texts = [];
-    const tRegex = /<t[^>]*>([\s\S]*?)<\/t>/g;
+    const tRegex = /<(?:\w+:)?t\b[^>]*>([\s\S]*?)<\/(?:\w+:)?t>/g;
     let tm;
     while ((tm = tRegex.exec(m[1]))) texts.push(decodeXmlEntities(tm[1]));
     items.push(texts.join(""));
@@ -103,15 +108,15 @@ function looksLikeDateFormatCode(code) {
 function parseStyles(xml) {
   if (!xml) return [];
   const customFormats = {};
-  const numFmtRegex = /<numFmt[^>]*numFmtId="(\d+)"[^>]*formatCode="([^"]*)"[^>]*\/>/g;
+  const numFmtRegex = /<(?:\w+:)?numFmt\b[^>]*numFmtId="(\d+)"[^>]*formatCode="([^"]*)"[^>]*\/>/g;
   let m;
   while ((m = numFmtRegex.exec(xml))) {
     customFormats[m[1]] = looksLikeDateFormatCode(decodeXmlEntities(m[2]));
   }
 
-  const cellXfsMatch = /<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/.exec(xml);
+  const cellXfsMatch = /<(?:\w+:)?cellXfs\b[^>]*>([\s\S]*?)<\/(?:\w+:)?cellXfs>/.exec(xml);
   if (!cellXfsMatch) return [];
-  const xfRegex = /<xf\b[^>]*\/?>/g;
+  const xfRegex = /<(?:\w+:)?xf\b[^>]*\/?>/g;
   const styleIsDate = [];
   let xm;
   while ((xm = xfRegex.exec(cellXfsMatch[1]))) {
@@ -142,14 +147,14 @@ function colLettersToIndex(letters) {
 }
 
 function parseSheetRows(xml, sharedStrings, styleIsDate) {
-  const sheetDataMatch = /<sheetData[^>]*>([\s\S]*?)<\/sheetData>/.exec(xml);
+  const sheetDataMatch = /<(?:\w+:)?sheetData\b[^>]*>([\s\S]*?)<\/(?:\w+:)?sheetData>/.exec(xml);
   if (!sheetDataMatch) return [];
   const rows = [];
-  const rowRegex = /<row[^>]*>([\s\S]*?)<\/row>/g;
+  const rowRegex = /<(?:\w+:)?row\b[^>]*>([\s\S]*?)<\/(?:\w+:)?row>/g;
   let rm;
   while ((rm = rowRegex.exec(sheetDataMatch[1]))) {
     const cells = [];
-    const cellRegex = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+    const cellRegex = /<(?:\w+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:\w+:)?c>)/g;
     let cm;
     while ((cm = cellRegex.exec(rm[1]))) {
       const attrs = cm[1] || "";
@@ -164,14 +169,18 @@ function parseSheetRows(xml, sharedStrings, styleIsDate) {
 
       let value = "";
       if (type === "inlineStr") {
-        const isMatch = /<is>([\s\S]*?)<\/is>/.exec(inner);
-        const tMatch = isMatch ? /<t[^>]*>([\s\S]*?)<\/t>/.exec(isMatch[1]) : null;
+        const isMatch = /<(?:\w+:)?is\b[^>]*>([\s\S]*?)<\/(?:\w+:)?is>/.exec(inner);
+        const tMatch = isMatch ? /<(?:\w+:)?t\b[^>]*>([\s\S]*?)<\/(?:\w+:)?t>/.exec(isMatch[1]) : null;
         value = tMatch ? decodeXmlEntities(tMatch[1]) : "";
       } else {
-        const vMatch = /<v>([\s\S]*?)<\/v>/.exec(inner);
+        const vMatch = /<(?:\w+:)?v\b[^>]*>([\s\S]*?)<\/(?:\w+:)?v>/.exec(inner);
         const raw = vMatch ? decodeXmlEntities(vMatch[1]) : "";
         if (type === "s") {
-          value = sharedStrings[Number(raw)] ?? "";
+          // תא מסוג "מחרוזת משותפת" בלי <v> בכלל (למשל תא ריק בתוך טווח ממוזג, `<c t="s" />`) -
+          // בלי הבדיקה הזו, `Number("")` הוא 0 ו"-אז נחזרה בטעות המחרוזת המשותפת מספר 0 (בד"כ
+          // הכותרת/כותרת עליונה של הקובץ) לכל תא ריק כזה - נראה בפועל בקובץ ייצוא אמיתי (מזרחי-
+          // טפחות, כרטיס ויזה) עם תאים ממוזגים מעל טבלת הנתונים עצמה.
+          value = vMatch ? sharedStrings[Number(raw)] ?? "" : "";
         } else if (type === "b") {
           value = raw === "1" ? "TRUE" : "FALSE";
         } else if (type === "str" || type === "e") {
@@ -203,7 +212,8 @@ function findFirstSheetPath(zip) {
     const workbookXml = zip.readEntry("xl/workbook.xml")?.toString("utf8");
     const relsXml = zip.readEntry("xl/_rels/workbook.xml.rels")?.toString("utf8");
     if (workbookXml && relsXml) {
-      const sheetMatch = /<sheet\b[^>]*r:id="([^"]+)"[^>]*\/>/.exec(workbookXml) || /<sheet\b[^>]*\/>/.exec(workbookXml);
+      const sheetMatch =
+        /<(?:\w+:)?sheet\b[^>]*r:id="([^"]+)"[^>]*\/>/.exec(workbookXml) || /<(?:\w+:)?sheet\b[^>]*\/>/.exec(workbookXml);
       const ridMatch = sheetMatch ? /r:id="([^"]+)"/.exec(sheetMatch[0]) : null;
       if (ridMatch) {
         const relRegex = new RegExp(`<Relationship[^>]*Id="${ridMatch[1]}"[^>]*Target="([^"]+)"[^>]*/>`);

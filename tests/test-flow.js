@@ -625,6 +625,46 @@ async function run() {
       "כש'תאור מורחב' מלא, הוא מחליף את התיאור הראשי הגנרי ('הע. אינטרנט') - לא רק גיבוי לכשהראשי ריק, אלא עדיפות כשהוא כן מלא"
     );
 
+    console.log("\n📥 ייבוא אקסל עם namespace על כל תגית XML + נפילה חזרה ל'סכום עסקה' כש'סכום חיוב' ריק (כרטיס ויזה, קובץ אמיתי)");
+    // משוב אמיתי: "צריך שגם זה יוכל לפענח" + קובץ אקסל אמיתי (ייצוא כרטיס ויזה, מזרחי-טפחות) שנכשל
+    // בלי אף שגיאה - parseXlsx החזיר בשקט 0 שורות. אובחן: כל תגית XML בקובץ הזה מוקדמת ב-"x:"
+    // (<x:worksheet>/<x:row>/<x:c>/<x:v>...) - כל הרג'קסים ב-xlsxParser.js חיפשו תגיות בלי קידומת
+    // בכלל, אז שום <row>/<c> לא נמצא. ר' התיקון (קידומת namespace אופציונלית בכל רג'קס) ב-xlsxParser.js.
+    // אותו קובץ אמיתי גם חשף באג שני, עצמאי: תאים ריקים בתוך טווח ממוזג (מעל טבלת הנתונים עצמה)
+    // מגיעים כ-`<c t="s" />` בלי <v> בכלל - `Number("")` הוא 0, אז נקראה בטעות המחרוזת המשותפת מספר 0
+    // (כותרת הקובץ) לכל תא כזה, במקום "". ותוקן שלישי, ב-importMapping.js: כרטיס האשראי הזה מפרסם שתי
+    // עמודות סכום - "סכום עסקה" (הסכום המקורי) ו"סכום חיוב" (מה שבפועל מחויב) - ול"סכום חיוב" *אין
+    // ערך בכלל* בשורות "עסקה בתהליך קליטה" (חיוב סופי טרם נקבע) - נופלים חזרה ל"סכום עסקה" רק לשורה
+    // הספציפית הזו (amountFallbackCol), לא ברמת הקובץ כולו.
+    const visaRows = [
+      ["תאריך\r\nעסקה", "שם בית עסק", "סכום\r\nעסקה", "סכום\r\nחיוב"],
+      [45658, "RENDER.COM +14158304762 US", 8.39, null], // עסקה בתהליך קליטה - "סכום חיוב" ריק לגמרי (בלי <v>)
+      [45659, "סופר גבריאל", 308.1, 308.1], // עסקה רגילה - שתי העמודות זהות, "סכום חיוב" נשאר הראשי
+      [45660, "הראל ביטוח חובה חדש", 2207, 183], // "תשלומים" - התשלום החודשי (183) עדיף על סך ההלוואה (2207)
+    ];
+    const visaXlsxBuf = buildTestXlsx(visaRows, 0, { namespacePrefix: "x" });
+    const visaImportPreview = await api(
+      "POST", "/api/transactions/import/parse",
+      { data_base64: visaXlsxBuf.toString("base64"), filename: "visa.xlsx", source_type: "card" },
+      token
+    );
+    assert(
+      visaImportPreview.status === 200 && visaImportPreview.data.transactions.length === 3,
+      `ייבוא קובץ עם namespace על כל תגית XML הצליח וזיהה את שלוש השורות (${visaImportPreview.status}, ${JSON.stringify(visaImportPreview.data)})`
+    );
+    const visaPendingRow = visaImportPreview.data.transactions.find(t => t.description.includes("RENDER"));
+    assert(
+      visaPendingRow && visaPendingRow.amount === 8.39,
+      `שורה עם 'סכום חיוב' ריק לגמרי נופלת חזרה ל'סכום עסקה' (8.39), לא נופלת בשקט מהייבוא (${JSON.stringify(visaPendingRow)})`
+    );
+    const visaNormalRow = visaImportPreview.data.transactions.find(t => t.description.includes("סופר גבריאל"));
+    assert(visaNormalRow && visaNormalRow.amount === 308.1, "שורה עם שתי עמודות הסכום מלאות זהות משתמשת בסכום הנכון");
+    const visaInstallmentRow = visaImportPreview.data.transactions.find(t => t.description.includes("הראל"));
+    assert(
+      visaInstallmentRow && visaInstallmentRow.amount === 183,
+      `שורת 'תשלומים' משתמשת ב'סכום חיוב' (183, התשלום החודשי בפועל) ולא ב'סכום עסקה' (2207, סך ההלוואה) - העמודה המועדפת קיימת ומלאה, אין סיבה ליפול ל-fallback (${JSON.stringify(visaInstallmentRow)})`
+    );
+
     console.log("\n📥 ייבוא אקסל - טיפול בשגיאות (קובץ לא תקין / בלי עמודות מוכרות)");
     const badBase64Import = await api("POST", "/api/transactions/import/parse", { data_base64: "not-a-real-file!!", filename: "x.xlsx", source_type: "bank" }, token);
     assert(badBase64Import.status === 400, "קובץ xlsx לא תקין (לא ZIP אמיתי) מחזיר שגיאה ברורה, לא קורס");
