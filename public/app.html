@@ -129,6 +129,9 @@
   .chart-legend-row:last-child{border-bottom:none;}
   .chart-legend-row .chart-swatch{border-radius:50%;}
   .chart-legend-amount{font-weight:700; font-size:12.5px; white-space:nowrap;}
+  /* שורה שנייה במקרא ה-donut (ר' opts.legendExtra/renderCategoryDonut) - למשל "כמה כסף מתוך כמה"
+     להלוואות (ר' loadLoans). מוזחת מתחת לתווית, לא מתחת לצבע (17px = רוחב ה-swatch + ה-gap שלו). */
+  .chart-legend-extra{font-size:11.5px; color:var(--text-secondary); margin-inline-start:17px; margin-top:2px;}
 
   .empty-state{color:var(--text-muted); font-size:13.5px; padding:14px 4px;}
   .hint{font-size:12.5px; color:var(--text-muted); margin:-4px 0 12px; line-height:1.6;}
@@ -2061,11 +2064,29 @@ async function loadLoans() {
   // אותו רכיב donut בדיוק, מפולח לפי הלוואה (תשלומים שנותרו) במקום לפי קטגוריה.
   const byLoan = {};
   loansCache.forEach(l => { if (l.remainingInstallments > 0) byLoan[l.name] = l.remainingInstallments; });
+  // משוב אמיתי (המשך ישיר): "אני רוצה שיהיה בצד חוץ מהאחוזים כמה כסף כל הלוואה מתוך כמה" - העיגול
+  // עצמו מבוסס על מספר תשלומים (כי לא לכל הלוואה יש בהכרח תשלום חודשי קבוע ידוע), אז סכום הכסף
+  // מחושב בנפרד ומוצג כשורה שנייה במקרא - רק להלוואות עם monthly_amount ידוע (בדיוק כמו "₪X לחודש"
+  // ברשימת ההלוואות עצמה, ר' renderLoansList - מדלגים בשקט כשהוא לא קיים, לא מציגים "לא ידוע").
+  const loanMoneyByName = {};
+  loansCache.forEach(l => {
+    if (l.remainingInstallments > 0 && l.monthly_amount) {
+      loanMoneyByName[l.name] = {
+        remaining: l.remainingInstallments * l.monthly_amount,
+        total: l.total_installments * l.monthly_amount,
+      };
+    }
+  });
   renderCategoryDonut(byLoan, 'loans-categories', {
     unit: '',
     centerLabel: 'סה"כ תשלומים שנותרו',
     ariaLabel: 'פילוח תשלומים שנותרו לפי הלוואה',
     emptyMessage: 'אין עדיין הלוואות עם תשלומים שנותרו',
+    legendExtra: (name) => {
+      const m = loanMoneyByName[name];
+      if (!m) return null;
+      return `₪${m.remaining.toLocaleString('he-IL')} מתוך ₪${m.total.toLocaleString('he-IL')}`;
+    },
   });
 }
 
@@ -2548,6 +2569,10 @@ function renderCategoryDonut(byCategory, elId, options) {
   const centerLabel = opts.centerLabel || 'סה"כ הוצאות';
   const ariaLabel = opts.ariaLabel || 'פילוח הוצאות לפי קטגוריה';
   const emptyMessage = opts.emptyMessage || 'אין עדיין הוצאות להצגה';
+  // legendExtra (אופציונלי) - פונקציה (name) => טקסט נוסף להצגה בשורת המקרא, מתחת לאחוזים. נוסף
+  // עבור "מעוגל" ההלוואות (ר' loadLoans) - שם amt הוא *מספר תשלומים*, לא ₪, אז אי אפשר להראות סכום
+  // כסף מהעיגול עצמו; ה-donut הכללי (קטגוריות הוצאה רגילות) לא מעביר את זה בכלל, אז לא משתנה.
+  const legendExtra = typeof opts.legendExtra === 'function' ? opts.legendExtra : null;
   const el = document.getElementById(elId || 'tx-category-donut');
   if (!el) return;
   const sorted = Object.entries(byCategory).sort((a, b) => b[1] - a[1]);
@@ -2574,7 +2599,9 @@ function renderCategoryDonut(byCategory, elId, options) {
   legendList.className = 'chart-legend-list';
   entries.forEach(([cat, amt], i) => {
     const row = document.createElement('div');
-    row.className = 'chart-legend-item chart-legend-row';
+    row.className = 'chart-legend-row';
+    const mainLine = document.createElement('div');
+    mainLine.className = 'chart-legend-item';
     const swatch = document.createElement('span');
     swatch.className = 'chart-swatch';
     swatch.style.background = CATEGORY_COLORS[i % CATEGORY_COLORS.length];
@@ -2584,7 +2611,18 @@ function renderCategoryDonut(byCategory, elId, options) {
     const amountEl = document.createElement('span');
     amountEl.className = 'chart-legend-amount';
     amountEl.textContent = `${unit}${amt.toLocaleString('he-IL')} · ${Math.round(amt / total * 100)}%`;
-    row.append(swatch, label, amountEl);
+    mainLine.append(swatch, label, amountEl);
+    row.appendChild(mainLine);
+    // שורה שנייה, אופציונלית - "כמה כסף מתוך כמה" להלוואה הזו (ר' opts.legendExtra/loadLoans).
+    // משוב אמיתי: "אני רוצה שיהיה בצד חוץ מהאחוזים כמה כסף כל הלוואה מתוך כמה" - העיגול עצמו מבוסס
+    // על *מספר תשלומים* (לא ₪, ר' הערה ב-loadLoans), אז סכום הכסף לא נגזר מ-amt/total כאן.
+    const extraText = legendExtra ? legendExtra(cat) : null;
+    if (extraText) {
+      const extraEl = document.createElement('div');
+      extraEl.className = 'chart-legend-extra';
+      extraEl.textContent = extraText;
+      row.appendChild(extraEl);
+    }
     legendList.appendChild(row);
   });
   wrap.appendChild(legendList);
