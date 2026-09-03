@@ -1100,19 +1100,40 @@ async function run() {
     const loanList = await api("GET", "/api/loans", null, token);
     assert(loanList.status === 200 && loanList.data.loans.some(l => l.id === loanId), "רשימת ההלוואות כוללת את ההלוואה שנוצרה");
 
-    // עכשיו מקשרים תנועת "הלוואות" אמיתית להלוואה - מהרגע הזה, המספר *האמיתי* של תשלומים שקושרו
-    // גובר על ההערכה האוטומטית (לפי משוב "גם וגם" - מעדיפים מציאות על הערכה כשיש מציאות בפועל).
+    // תוקן (משוב אמיתי: "אני רוצה לוודא שמרגע שמכניסים נתונים המערכת יודעת איזה יום היום... אחרי חודש
+    // אני מגיע ואחד מהו"ק שהיה חודש שעבר עמד על 96 תשלומים יהיה עכשיו 95?") - קישור תנועה אמיתית
+    // *בודדת* לא אמור להקפיא/להנמיך את המונה מתחת להערכה לפי זמן שכבר עבר (התנהגות ישנה: המספר
+    // האמיתי גבר תמיד, גם כשהוא נמוך בהרבה - אז לוח הזמנים "נתקע" בין ייבוא לייבוא). עכשיו לוקחים
+    // את הגבוה מבין השניים - קישור תשלום בודד לא מוריד את המונה מתחת ל-20 (ההערכה לפי הזמן שעבר).
     const loanPayment = await api("POST", "/api/transactions", { type: "expense", amount: 1200, category: "הלוואות", loan_id: loanId }, token);
     assert(loanPayment.status === 201 && loanPayment.data.transaction.loan_id == loanId, "תנועת תשלום הלוואה נשמרה עם קישור להלוואה");
     const loanAfterPayment = await api("GET", "/api/loans", null, token);
     const loanRowAfterPayment = loanAfterPayment.data.loans.find(l => l.id === loanId);
     assert(
-      loanRowAfterPayment.linkedPaymentsCount === 1 && loanRowAfterPayment.paidInstallments === 1 && loanRowAfterPayment.remainingInstallments === 35,
-      `אחרי קישור תשלום אחד בפועל, המספר האמיתי (1) גובר על ההערכה האוטומטית (${expectedElapsed}) (${JSON.stringify(loanRowAfterPayment)})`
+      loanRowAfterPayment.linkedPaymentsCount === 1 && loanRowAfterPayment.paidInstallments === expectedElapsed,
+      `קישור תשלום אמיתי בודד לא מקפיא את המונה מתחת להערכה לפי הזמן שעבר (${expectedElapsed}) - נשאר גם הוא הגבוה מבין השניים, לא צונח ל-1 (${JSON.stringify(loanRowAfterPayment)})`
+    );
+
+    // אבל אם באמת קושרו יותר תשלומים אמיתיים מההערכה (למשל תשלומים מראש, או שההלוואה נגמרה מוקדם
+    // מהצפוי) - המספר האמיתי עדיין "עוקף" את ההערכה, לא נעצר בה מלמעלה.
+    for (let i = 0; i < expectedElapsed; i++) {
+      await api("POST", "/api/transactions", { type: "expense", amount: 1200, category: "הלוואות", loan_id: loanId }, token);
+    }
+    const loanAfterManyPayments = await api("GET", "/api/loans", null, token);
+    const loanRowAfterManyPayments = loanAfterManyPayments.data.loans.find(l => l.id === loanId);
+    assert(
+      loanRowAfterManyPayments.linkedPaymentsCount === expectedElapsed + 1 && loanRowAfterManyPayments.paidInstallments === expectedElapsed + 1,
+      `כשקושרו בפועל יותר תשלומים אמיתיים מההערכה, המספר האמיתי (${expectedElapsed + 1}) עדיין עוקף אותה - לא נשאר תקוע על ${expectedElapsed} (${JSON.stringify(loanRowAfterManyPayments)})`
     );
 
     const loanEdit = await api("PUT", `/api/loans/${loanId}`, { total_installments: 24 }, token);
-    assert(loanEdit.status === 200 && loanEdit.data.loan.total_installments === 24 && loanEdit.data.loan.remainingInstallments === 23, "עריכת מספר התשלומים הכולל של ההלוואה הצליחה ועדכנה את הנותרים");
+    // עכשיו יש (expectedElapsed + 1) תשלומים מקושרים בפועל (מהבלוק למעלה) - עשוי לעלות על 24, אז
+    // מחושב דינמית (לא ספרה קשיחה) בדיוק כמו expectedElapsed עצמו, כדי לא להיות תלוי בזמן שעבר בפועל.
+    const expectedPaidAfterEdit = Math.min(24, expectedElapsed + 1);
+    assert(
+      loanEdit.status === 200 && loanEdit.data.loan.total_installments === 24 && loanEdit.data.loan.remainingInstallments === 24 - expectedPaidAfterEdit,
+      `עריכת מספר התשלומים הכולל של ההלוואה הצליחה ועדכנה את הנותרים (${JSON.stringify(loanEdit.data.loan)}, צפוי נותרו ${24 - expectedPaidAfterEdit})`
+    );
 
     const otherUserLoanSignup = await api("POST", "/api/auth/signup", {
       full_name: "משתמש זר להלוואה", username: `stranger_loan_${Date.now()}`, password: "1234", phone: `+97250${Date.now().toString().slice(-7)}`,

@@ -39,7 +39,14 @@ function countLinkedPayments(userId, loanId) {
 function withProgress(loan, userId) {
   const linkedPaymentsCount = countLinkedPayments(userId, loan.id);
   const estimatedByDate = Math.max(0, Math.min(loan.total_installments, monthsElapsedSinceStart(loan.start_date)));
-  const paidInstallments = linkedPaymentsCount > 0 ? Math.min(linkedPaymentsCount, loan.total_installments) : estimatedByDate;
+  // תוקן (משוב אמיתי: "אני רוצה לוודא שמרגע שמכניסים נתונים המערכת יודעת איזה יום היום... אחרי חודש
+  // אני מגיע ואחד מהו"ק שהיה חודש שעבר עמד על 96 תשלומים יהיה עכשיו 95?") - עד כה, ברגע שקושרה ולו
+  // תנועה אחת בפועל, המספר *האמיתי* גבר על ההערכה **תמיד**, גם אם הוא נמוך בהרבה ממנה - כך שהמונה
+  // "נתקע" בין ייבוא לייבוא: אם עברו החודש עוד לא ייבאת/קישרת בפועל את התשלום האחרון, מספר התשלומים
+  // שנותרו לא היה יורד בכלל, אפילו שבפועל הזמן עבר וההוראת הקבע כנראה בוצעה בבנק בין כה וכה. עכשיו
+  // לוקחים את ה**גבוה מבין השניים** - מספר קישורים אמיתי יכול עדיין "לעקוף" את ההערכה (למשל תשלום
+  // מראש שקושר לפני זמנו), אבל הוא לעולם לא "מקפיא" את המונה מתחת למה שהזמן שעבר כבר מצדיק.
+  const paidInstallments = Math.min(loan.total_installments, Math.max(linkedPaymentsCount, estimatedByDate));
   return {
     ...loan,
     linkedPaymentsCount,
