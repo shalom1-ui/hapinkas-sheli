@@ -130,8 +130,10 @@
   .chart-legend-row .chart-swatch{border-radius:50%;}
   .chart-legend-amount{font-weight:700; font-size:12.5px; white-space:nowrap;}
   /* שורה שנייה במקרא ה-donut (ר' opts.legendExtra/renderCategoryDonut) - למשל "כמה כסף מתוך כמה"
-     להלוואות (ר' loadLoans). מוזחת מתחת לתווית, לא מתחת לצבע (17px = רוחב ה-swatch + ה-gap שלו). */
-  .chart-legend-extra{font-size:11.5px; color:var(--text-secondary); margin-inline-start:17px; margin-top:2px;}
+     להלוואות (ר' loadLoans). מוזחת מתחת לתווית, לא מתחת לצבע (17px = רוחב ה-swatch + ה-gap שלו).
+     תוקן (משוב אמיתי: "צריך שכל ההוראות שכתוב מתחת לכל דבר שיהיה בולט יותר וגדול יותר") - היה
+     11.5px/text-secondary (עדין מדי, נבלע ליד chart-legend-amount) - עכשיו גדול ומודגש בדיוק כמוה. */
+  .chart-legend-extra{font-size:13px; font-weight:700; color:var(--text-primary); margin-inline-start:17px; margin-top:3px;}
 
   .empty-state{color:var(--text-muted); font-size:13.5px; padding:14px 4px;}
   .hint{font-size:12.5px; color:var(--text-muted); margin:-4px 0 12px; line-height:1.6;}
@@ -2071,12 +2073,17 @@ async function loadLoans() {
   // עצמו מבוסס על מספר תשלומים (כי לא לכל הלוואה יש בהכרח תשלום חודשי קבוע ידוע), אז סכום הכסף
   // מחושב בנפרד ומוצג כשורה שנייה במקרא - רק להלוואות עם monthly_amount ידוע (בדיוק כמו "₪X לחודש"
   // ברשימת ההלוואות עצמה, ר' renderLoansList - מדלגים בשקט כשהוא לא קיים, לא מציגים "לא ידוע").
+  // משוב אמיתי (המשך נוסף): "אני רוצה ליד כל הלוואה שיהיה כתוב סכום חוץ ממה שכתבת סכום הכולל למעלה" -
+  // בנוסף ל"נותר מתוך סה"כ" (למעלה) ולממוצע ה*משותף* לכל ההלוואות ביחד (#loans-monthly-avg, ר'
+  // loanMonthlyAverageText) - עכשיו גם ממוצע חודשי ל-6 החודשים הקרובים *לכל הלוואה בנפרד*, אותו
+  // חישוב min(remainingInstallments,6)/6 בדיוק, רק לא מסוכם על פני כל ההלוואות.
   const loanMoneyByName = {};
   loansCache.forEach(l => {
     if (l.remainingInstallments > 0 && l.monthly_amount) {
       loanMoneyByName[l.name] = {
         remaining: l.remainingInstallments * l.monthly_amount,
         total: l.total_installments * l.monthly_amount,
+        avg6: Math.round(Math.min(l.remainingInstallments, 6) * l.monthly_amount / 6),
       };
     }
   });
@@ -2088,7 +2095,7 @@ async function loadLoans() {
     legendExtra: (name) => {
       const m = loanMoneyByName[name];
       if (!m) return null;
-      return `₪${m.remaining.toLocaleString('he-IL')} מתוך ₪${m.total.toLocaleString('he-IL')}`;
+      return `₪${m.remaining.toLocaleString('he-IL')} מתוך ₪${m.total.toLocaleString('he-IL')} · ממוצע ל-6 חודשים: ₪${m.avg6.toLocaleString('he-IL')}`;
     },
   });
 
