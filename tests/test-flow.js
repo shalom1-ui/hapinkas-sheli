@@ -1334,6 +1334,55 @@ async function run() {
     // ניקוי
     await api("DELETE", `/api/loans/${earlySegmentLoan.data.loan.id}`, null, token);
 
+    console.log("\n🧩 תוקן: מיזוג הלוואות איבד את הסכום החודשי אם ל'ראשית' לא היה סכום מוגדר");
+    // משוב אמיתי (המשך ישיר): "לא רואה את זה" - על הממוצע החודשי החדש שמוצג רק להלוואות עם
+    // monthly_amount ידוע. תרחיש אמיתי סביר: הלוואה "ראשית" נרשמה/יובאה בלי סכום חודשי, וקטע נוסף
+    // של אותו לוח סילוקין (עם סכום חודשי אמיתי) מוזג לתוכה - עד כה המיזוג עדכן רק total_installments/
+    // start_date, בלי לגעת ב-monthly_amount בכלל, כך שהסכום החודשי הידוע פשוט אבד אחרי המיזוג.
+    const noAmountTarget = await api(
+      "POST", "/api/loans",
+      { name: "הלוואה בלי סכום חודשי", total_installments: 50, start_date: "2026-01-01" },
+      token
+    );
+    const withAmountSource = await api(
+      "POST", "/api/loans",
+      { name: "קטע עם סכום חודשי", total_installments: 30, monthly_amount: 777, start_date: "2026-03-01" },
+      token
+    );
+    const backfillMerge = await api(
+      "POST", "/api/loans/merge",
+      { target_id: noAmountTarget.data.loan.id, source_ids: [withAmountSource.data.loan.id] },
+      token
+    );
+    assert(
+      backfillMerge.status === 200 && backfillMerge.data.loan.monthly_amount === 777,
+      `כשל'ראשית' אין סכום חודשי משלה, המיזוג ממלא אותו מהסכום החודשי של ההלוואה הממוזגת פנימה, לא משאיר null (${JSON.stringify(backfillMerge.data.loan.monthly_amount)})`
+    );
+
+    const targetWithAmount = await api(
+      "POST", "/api/loans",
+      { name: "ראשית עם סכום קבוע", total_installments: 50, monthly_amount: 555, start_date: "2026-01-01" },
+      token
+    );
+    const anotherSource = await api(
+      "POST", "/api/loans",
+      { name: "קטע עם סכום שונה", total_installments: 30, monthly_amount: 999, start_date: "2026-03-01" },
+      token
+    );
+    const preserveMerge = await api(
+      "POST", "/api/loans/merge",
+      { target_id: targetWithAmount.data.loan.id, source_ids: [anotherSource.data.loan.id] },
+      token
+    );
+    assert(
+      preserveMerge.status === 200 && preserveMerge.data.loan.monthly_amount === 555,
+      `כשל'ראשית' כבר יש סכום חודשי משלה, המיזוג לא דורס אותו בסכום של ההלוואה הממוזגת (${JSON.stringify(preserveMerge.data.loan.monthly_amount)})`
+    );
+
+    // ניקוי
+    await api("DELETE", `/api/loans/${backfillMerge.data.loan.id}`, null, token);
+    await api("DELETE", `/api/loans/${preserveMerge.data.loan.id}`, null, token);
+
     console.log("\n💳 תשלומים חוזרים (כרטיסי אשראי/הו\"ק) + התראה לפני תאריך החיוב");
     // משוב אמיתי: "יש לאנשים כרטיסי אשראי שכל כרטיס יוצא בתאריך אחר או הו\"ק בבנק, חשוב לי שיקבל
     // התראה לפני התאריך כמה כסף צריך להכניס לבנק". ר' src/routes/recurringCharges.js.

@@ -118,7 +118,19 @@ function register(router) {
 
     const bestTotalInstallments = Math.max(...loans.map((l) => l.total_installments));
     const earliestStartDate = loans.map((l) => l.start_date).sort()[0];
-    db.prepare("UPDATE loans SET total_installments = ?, start_date = ? WHERE id = ?").run(bestTotalInstallments, earliestStartDate, targetId);
+    // תוקן (משוב אמיתי: "לא רואה את זה" - על הממוצע החודשי החדש שמוצג רק להלוואות עם monthly_amount
+    // ידוע, ר' README): המיזוג עדכן עד כה רק total_installments/start_date, בלי לגעת ב-monthly_amount
+    // בכלל - אם ההלוואה ה"ראשית" שנבחרה במיזוג נוצרה בלי סכום חודשי (למשל נרשמה ידנית, לפני שקטע
+    // לוח-הסילוקין עם הסכום יובא ומוזג לתוכה), הסכום החודשי שכן קיים באחת ההלוואות שמוזגות פנימה
+    // פשוט אבד. שומרים על הסכום החודשי של הראשית אם כבר מוגדר לה אחד (לא דורסים ערך שהמשתמש הזין/
+    // ערך בכוונה) - נופלים לסכום החודשי הראשון שנמצא בין שאר ההלוואות הממוזגות רק כשלראשית עצמה אין.
+    const monthlyAmount = loans.find((l) => l.id === targetId)?.monthly_amount ?? loans.map((l) => l.monthly_amount).find((v) => v != null) ?? null;
+    db.prepare("UPDATE loans SET total_installments = ?, start_date = ?, monthly_amount = ? WHERE id = ?").run(
+      bestTotalInstallments,
+      earliestStartDate,
+      monthlyAmount,
+      targetId
+    );
 
     // תשלום הלוואה שיובא מלוח סילוקין תמיד נכנס ל-transactions הרגילה (ר' commit-amortization) -
     // אבל תנועה יכולה עקרונית להיות מקושרת להלוואה גם מחתונה/דירה (קישור ידני) - מעבירות קישור,
