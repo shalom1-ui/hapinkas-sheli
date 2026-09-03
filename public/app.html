@@ -635,6 +635,9 @@
              אותו רכיב עיגול (donut) בדיוק, כאן מפולח לפי הלוואה (תשלומים שנותרו לכל הלוואה) במקום קטגוריה. -->
         <div class="card">
           <h3>תשלומים שנותרו לפי הלוואה</h3>
+          <!-- משוב אמיתי (המשך ישיר): "ליד זה לתקופה הקרובה של 6 חודשים מה הסכום החודשי הממוצע כל
+               חודש" - ר' loanMonthlyAverageText/loadLoans. מתעדכן מתוך אותו loansCache, לא שאילתה נפרדת. -->
+          <div id="loans-monthly-avg" class="hint" style="display:none; margin-bottom:10px"></div>
           <div id="loans-categories"><div class="empty-state">אין עדיין הלוואות עם תשלומים שנותרו</div></div>
         </div>
         <div class="card">
@@ -2088,6 +2091,36 @@ async function loadLoans() {
       return `₪${m.remaining.toLocaleString('he-IL')} מתוך ₪${m.total.toLocaleString('he-IL')}`;
     },
   });
+
+  // משוב אמיתי (המשך ישיר): "ליד זה לתקופה הקרובה של 6 חודשים מה הסכום החודשי הממוצע כל חודש".
+  const avgEl = document.getElementById('loans-monthly-avg');
+  if (avgEl) {
+    const avgText = loanMonthlyAverageText(loansCache);
+    avgEl.style.display = avgText ? '' : 'none';
+    avgEl.textContent = avgText || '';
+  }
+}
+
+// ממוצע חודשי משוער ל-6 החודשים הקרובים, על פני כל ההלוואות יחד: הלוואה עם פחות מ-6 תשלומים
+// שנותרו לה "נגמרת" באמצע התקופה, ולא ממשיכה לתרום לחודשים שאחריה (min(remainingInstallments, 6)
+// לכל הלוואה, לא סתם monthly_amount×6) - כך שהממוצע משקף ירידה צפויה בעומס כשהלוואות מסתיימות, לא
+// מניח בטעות שכל ההלוואות הנוכחיות ימשיכו להיות רלוונטיות לכל אורך התקופה. רק הלוואות עם
+// monthly_amount ידוע נכללות (בדיוק כמו legendExtra למעלה) - אם יש הלוואות פעילות בלי תשלום חודשי
+// מוגדר, זה מצוין בטקסט במפורש (לא רק מוחסר בשקט), כדי שהממוצע לא ייראה שלם יותר משהוא באמת.
+function loanMonthlyAverageText(loans) {
+  const active = loans.filter(l => l.remainingInstallments > 0);
+  const withAmount = active.filter(l => l.monthly_amount);
+  if (!withAmount.length) return null;
+  const totalOverPeriod = withAmount.reduce((sum, l) => sum + Math.min(l.remainingInstallments, 6) * l.monthly_amount, 0);
+  const average = Math.round(totalOverPeriod / 6);
+  const missingCount = active.length - withAmount.length;
+  let text = `ממוצע חודשי משוער ל-6 החודשים הקרובים (כל ההלוואות יחד): ₪${average.toLocaleString('he-IL')}`;
+  if (missingCount === 1) {
+    text += ` · לא כולל הלוואה אחת בלי תשלום חודשי מוגדר`;
+  } else if (missingCount > 1) {
+    text += ` · לא כולל ${missingCount} הלוואות בלי תשלום חודשי מוגדר`;
+  }
+  return text;
 }
 
 async function addLoan() {
