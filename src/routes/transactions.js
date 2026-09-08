@@ -13,9 +13,29 @@ function register(router) {
       .prepare("SELECT * FROM transactions WHERE user_id = ? ORDER BY occurred_at DESC, id DESC")
       .all(ctx.user.userId);
 
+    // מצב "צפייה בתשלומים" של הלוואה ספציפית (ר' loans-transactions/loadLoanTransactions ב-
+    // public/app.html) - כשמעבירים loan_id מפורש, מחזירים רק את התשלומים המקושרים אליה (כולל
+    // אותם תשלומים שבברירת המחדל למטה מוחרגים לגמרי מ"כל התנועות") - בלי סכומים/פילוח (לא רלוונטי
+    // לתצוגה הזו, שהיא רשימה בלבד).
+    const loanIdFilter = ctx.query && ctx.query.loan_id ? Number(ctx.query.loan_id) : null;
+    if (loanIdFilter) {
+      return json(ctx.res, 200, { transactions: rows.filter(r => r.loan_id === loanIdFilter), summary: null, byCategory: null, tithe: null });
+    }
+
+    // תוקן (משוב אמיתי: "בתנועות למטה יש לי כל הלוח סילוקין שקשור בכלל לקטגוריית הלוואות") - הלוואה
+    // אחת עם 144 תשלומים הציפה את "כל התנועות" הרגילה. תשלומי הלוואה (loan_id מוגדר) מוחרגים עכשיו
+    // לגמרי מהרשימה הרגילה (לא רק מהסכומים, כמו moved_to) - נגישים בנפרד דרך "צפייה בתשלומים" במסך
+    // "הלוואות" (הקריאה עם loan_id למעלה).
+    // include_loan_linked=1 - יציאת חירום מהחרגה הזו: "צפייה בתנועות" של קובץ ייבוא שהתקבל דרך
+    // toggleBatchTransactions (ר' public/app.html) מבקשת את *כל* התנועות של הקובץ, כולל שורות
+    // שקושרו להלוואה במהלך הייבוא עצמו (למשל ייבוא לוח סילוקין עם "קשר את כל השורות המסומנות") -
+    // בלי הפרמטר הזה, שורות כאלה היו נעלמות משם, למרות שהן חלק אמיתי מהקובץ שיובא.
+    const includeLoanLinked = ctx.query && (ctx.query.include_loan_linked === "1" || ctx.query.include_loan_linked === "true");
+    const visibleRows = includeLoanLinked ? rows : rows.filter(r => !r.loan_id);
+
     // תנועות ש"הועברו" לחתונה/דירה (ר' /api/transactions/move) נשארות ברשימה (מוצגות עם ציון לאן
     // הועברו) אבל מוחרגות מכל הסכומים/הפילוח - הן כבר נספרות ביעד, לא נכון לספור אותן פעמיים.
-    const activeRows = rows.filter(r => !r.moved_to);
+    const activeRows = visibleRows.filter(r => !r.moved_to);
 
     const income = activeRows.filter(r => r.type === "income").reduce((s, r) => s + r.amount, 0);
     const expense = activeRows.filter(r => r.type === "expense").reduce((s, r) => s + r.amount, 0);
@@ -40,7 +60,7 @@ function register(router) {
     };
 
     return json(ctx.res, 200, {
-      transactions: rows,
+      transactions: visibleRows,
       summary: { income, expense, balance: income - expense },
       byCategory,
       tithe,
@@ -124,13 +144,16 @@ function register(router) {
   }));
 
   // מגמה חודשית פשוטה (12 חודשים אחרונים) — לגרף באזור האישי
+  // AND loan_id IS NULL - תוקן (משוב אמיתי: "בתנועות למטה יש לי כל הלוח סילוקין... זה לא טוב"), אותו
+  // עיקרון כמו titheStatus ב-routes/ivr.js - בלי זה, גרף "דוח חודשי" היה עדיין כולל תשלומי הלוואה
+  // שהוחרגו מהרשימה/הסכומים הראשיים, ולא תואם יותר להם.
   router.get("/api/transactions/trend", requireAuth(async (ctx) => {
     const rows = db
       .prepare(
         `SELECT strftime('%Y-%m', occurred_at) AS month,
                 SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) AS income,
                 SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) AS expense
-         FROM transactions WHERE user_id = ? AND moved_to IS NULL
+         FROM transactions WHERE user_id = ? AND moved_to IS NULL AND loan_id IS NULL
          GROUP BY month ORDER BY month DESC LIMIT 12`
       )
       .all(ctx.user.userId);

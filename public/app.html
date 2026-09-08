@@ -72,6 +72,11 @@
 
   .card{background:var(--surface); border-radius:var(--radius); box-shadow:var(--shadow); padding:20px; margin-bottom:18px;}
   .card h3{margin:0 0 14px; font-size:15.5px;}
+
+  /* כותרות "כיס כספי" בסקירה הכללית (עו"ש/הלוואות/דירה/חתונה) - ר' משוב אמיתי ליד view-overview.
+     border-bottom מפריד ויזואלית בין הבלוקים, בלי להשתמש בעוד .card מקונן (שהיה נראה כפול/עמוס). */
+  .section-label{display:flex; align-items:center; gap:8px; font-size:17px; font-weight:700; margin:30px 0 14px; padding-bottom:8px; border-bottom:2px solid var(--border);}
+  .section-label:first-of-type{margin-top:0;}
   .grid-3{display:grid; grid-template-columns:repeat(3,1fr); gap:14px;}
   .grid-2{display:grid; grid-template-columns:repeat(2,1fr); gap:14px;}
   @media (max-width:720px){ .grid-3,.grid-2{grid-template-columns:1fr;} .sidenav{display:none;} .main{margin-right:0;} }
@@ -294,6 +299,14 @@
       <!-- ---------- OVERVIEW ---------- -->
       <div class="view active" id="view-overview">
         <div class="view-header"><h1>סקירה כללית</h1><p>המצב הכספי שלכם החודש, במבט אחד</p></div>
+
+        <!-- משוב אמיתי: "בסקירה כללית אתה נותן הכל כולל הלוואות ודירה זה לא טוב - צריך שיהיה מסודר
+             עו"ש, הלוואות, דירה, חתונה". עד כה בלוק אחד ("הכנסות/הוצאות/יתרה") ערבב בפועל גם תשלומי
+             הלוואה (category='הלוואות', עדיין נספרו כאן) - עכשיו ארבעה בלוקים נפרדים, אחד לכל "כיס"
+             כספי, כל אחד עם המספרים שלו בלבד (ר' routes/transactions.js - תשלומי הלוואה מוחרגים
+             עכשיו לגמרי מהסיכום הזה; דירה/חתונה תמיד היו בטבלאות נפרדות משלהן ולא נספרו כאן בכלל -
+             הבעיה האמיתית הייתה שהן לא הוצגו כאן כלל, לא שהן "התערבבו" פנימה). -->
+        <h2 class="section-label"><span>💳</span> עו"ש</h2>
         <div class="grid-3" style="margin-bottom:18px">
           <div class="stat-tile income"><div class="label">הכנסות</div><div class="value" id="ov-income">₪0</div></div>
           <div class="stat-tile expense"><div class="label">הוצאות</div><div class="value" id="ov-expense">₪0</div></div>
@@ -315,6 +328,27 @@
         <div class="card">
           <h3>תנועות אחרונות</h3>
           <div id="ov-recent"><div class="empty-state">אין עדיין תנועות</div></div>
+        </div>
+
+        <h2 class="section-label"><span>💰</span> הלוואות</h2>
+        <div class="grid-3" id="ov-loans-summary" style="margin-bottom:18px">
+          <div class="stat-tile"><div class="label">הלוואות פעילות</div><div class="value" id="ov-loans-count">0</div></div>
+          <div class="stat-tile"><div class="label">תשלומים שנותרו (הכל יחד)</div><div class="value" id="ov-loans-remaining-count">0</div></div>
+          <div class="stat-tile expense"><div class="label">נותר לשלם (₪, להלוואות עם סכום ידוע)</div><div class="value" id="ov-loans-remaining-amount">₪0</div></div>
+        </div>
+
+        <h2 class="section-label"><span>🏠</span> דירה</h2>
+        <div class="grid-3" id="ov-apartment-summary" style="margin-bottom:18px">
+          <div class="stat-tile income"><div class="label">הכנסות</div><div class="value" id="ov-apt-income">₪0</div></div>
+          <div class="stat-tile expense"><div class="label">הוצאות</div><div class="value" id="ov-apt-expense">₪0</div></div>
+          <div class="stat-tile balance"><div class="label">יתרה</div><div class="value" id="ov-apt-balance">₪0</div></div>
+        </div>
+
+        <h2 class="section-label"><span>💍</span> חתונה</h2>
+        <div class="grid-3" id="ov-wedding-summary" style="margin-bottom:18px">
+          <div class="stat-tile income"><div class="label">הכנסות</div><div class="value" id="ov-wed-income">₪0</div></div>
+          <div class="stat-tile expense"><div class="label">הוצאות</div><div class="value" id="ov-wed-expense">₪0</div></div>
+          <div class="stat-tile balance"><div class="label">יתרה</div><div class="value" id="ov-wed-balance">₪0</div></div>
         </div>
       </div>
 
@@ -1043,7 +1077,41 @@ async function doSignup() {
 function updateTopbarDate() {
   const el = document.getElementById('topbar-date');
   if (!el) return;
-  el.textContent = new Date().toLocaleDateString('he-IL', { day: 'numeric', month: 'long', year: 'numeric' });
+  const gregorian = new Date().toLocaleDateString('he-IL', { day: 'numeric', month: 'long', year: 'numeric' });
+  el.textContent = `${gregorian} · ${hebrewDateString(new Date())}`;
+}
+
+// משוב אמיתי (המשך ישיר): "אתה יכול גם להכניס לי ליד תאריך הלועזי לוח עברי... שיהיה כתוב כ"ו אלול
+// תשפ"ו". ממירים ללוח העברי עם Intl.DateTimeFormat({calendar:'hebrew'}) המובנה בדפדפן (בלי ספריית
+// לוח-עברי חיצונית) - זה נותן יום/חודש/שנה נכונים כמספרים/שם (כולל אדר א'/אדר ב' בשנה מעוברת), אבל
+// numberingSystem:'hebr' לא מצליח לתת ספרות עבריות אמיתיות (א'/ב'/... ) בפועל בדפדפנים שנבדקו - רק
+// עדיין מציג ספרות ערביות רגילות. לכן ממירים בעצמנו את המספרים (יום, ושנה בלי אלפים) לגימטריה.
+function hebrewNumeral(num) {
+  const VALUES = [
+    [400, 'ת'], [300, 'ש'], [200, 'ר'], [100, 'ק'],
+    [90, 'צ'], [80, 'פ'], [70, 'ע'], [60, 'ס'], [50, 'נ'], [40, 'מ'], [30, 'ל'], [20, 'כ'],
+    [10, 'י'], [9, 'ט'], [8, 'ח'], [7, 'ז'], [6, 'ו'], [5, 'ה'], [4, 'ד'], [3, 'ג'], [2, 'ב'], [1, 'א'],
+  ];
+  let n = num;
+  let letters = '';
+  while (n > 0) {
+    // 15/16 מאייתים ט"ו/ט"ז ולא י"ה/י"ו - כדי לא "לאיית" בטעות צורה של שם ה' (מוסכמה עברית סטנדרטית).
+    if (n === 15) { letters += 'טו'; break; }
+    if (n === 16) { letters += 'טז'; break; }
+    const [v, l] = VALUES.find(([val]) => val <= n);
+    letters += l;
+    n -= v;
+  }
+  // גרש (׳) אחרי אות בודדת, גרשיים (״) לפני האות האחרונה כשיש כמה אותיות - כמו "תשפ״ו"/"כ״ו".
+  return letters.length === 1 ? letters + '׳' : letters.slice(0, -1) + '״' + letters.slice(-1);
+}
+function hebrewDateString(date) {
+  const parts = new Intl.DateTimeFormat('he', { day: 'numeric', month: 'long', year: 'numeric', calendar: 'hebrew' })
+    .formatToParts(date)
+    .reduce((o, p) => { o[p.type] = p.value; return o; }, {});
+  const day = hebrewNumeral(Number(parts.day));
+  const year = hebrewNumeral(Number(parts.year) % 1000); // משמיטים את ספרת האלפים (מוסכמה - "תשפ״ו" לא "ה'תשפ״ו")
+  return `${day} ${parts.month} ${year}`;
 }
 
 function onAuthSuccess(data) {
@@ -1126,10 +1194,45 @@ function showView(name) {
   if (name === 'wedding') loadWedding();
   if (name === 'apartment') loadApartment();
   if (name === 'loans') loadLoans();
+  // משוב אמיתי: "בסקירה כללית אתה נותן הכל כולל הלוואות ודירה זה לא טוב - צריך שיהיה מסודר עו"ש,
+  // הלוואות, דירה, חתונה" - loadTransactions() כבר מרענן את בלוק עו"ש (הכנסות/הוצאות/יתרה/מעשרות/
+  // עיגול/תנועות אחרונות); loadOverviewExtraSummaries() מרענן את שלושת הבלוקים הנוספים (הלוואות/
+  // דירה/חתונה) בכל חזרה למסך, כדי שיהיו עדכניים גם אחרי שינוי שנעשה במסך אחר.
+  if (name === 'overview') { loadTransactions(); loadOverviewExtraSummaries(); }
+}
+
+// שלושת בלוקי הסיכום הנוספים בסקירה הכללית (ר' משוב אמיתי למעלה) - לא חוזרים על אותה שאילתה
+// שכבר קיימת בכל מסך (הלוואות/דירה/חתונה) בנפרד, אלא קוראים את אותם ה-API בדיוק וממפים לתגיות
+// הסיכום כאן. נקרא גם מ-refreshAll (טעינה ראשונית אחרי התחברות) וגם מ-showView('overview').
+async function loadOverviewExtraSummaries() {
+  const loansR = await api('GET', '/api/loans');
+  if (loansR.ok) {
+    const active = loansR.data.loans.filter(l => l.remainingInstallments > 0);
+    // סכום שנותר לשלם בפועל (₪) אפשרי רק להלוואות עם monthly_amount ידוע - בדיוק כמו legendExtra
+    // בעיגול ההלוואות (ר' loadLoans) - לא מציגים "לא ידוע", פשוט מסכמים את מה שכן ניתן לחשב.
+    const remainingAmount = active.reduce((s, l) => s + (l.monthly_amount ? l.remainingInstallments * l.monthly_amount : 0), 0);
+    document.getElementById('ov-loans-count').textContent = active.length;
+    document.getElementById('ov-loans-remaining-count').textContent = active.reduce((s, l) => s + l.remainingInstallments, 0);
+    document.getElementById('ov-loans-remaining-amount').textContent = `₪${remainingAmount.toLocaleString('he-IL')}`;
+  }
+
+  const aptR = await api('GET', '/api/apartment/transactions');
+  if (aptR.ok) {
+    document.getElementById('ov-apt-income').textContent = `₪${aptR.data.summary.income}`;
+    document.getElementById('ov-apt-expense').textContent = `₪${aptR.data.summary.expense}`;
+    document.getElementById('ov-apt-balance').textContent = `₪${aptR.data.summary.balance}`;
+  }
+
+  const wedR = await api('GET', '/api/wedding/transactions');
+  if (wedR.ok) {
+    document.getElementById('ov-wed-income').textContent = `₪${wedR.data.summary.income}`;
+    document.getElementById('ov-wed-expense').textContent = `₪${wedR.data.summary.expense}`;
+    document.getElementById('ov-wed-balance').textContent = `₪${wedR.data.summary.balance}`;
+  }
 }
 
 async function refreshAll() {
-  await Promise.all([loadTransactions(), loadStudents(), loadPlans(), loadLoans()]);
+  await Promise.all([loadTransactions(), loadStudents(), loadPlans(), loadLoans(), loadOverviewExtraSummaries()]);
   loadLessonDictionaries();
   autofillLessonFormFromProfile();
 }
@@ -1545,7 +1648,11 @@ async function toggleBatchTransactions(containerId, batchId, endpoint) {
   if (el.style.display !== 'none') { el.style.display = 'none'; return; }
   el.style.display = '';
   el.innerHTML = '<div class="empty-state">טוען...</div>';
-  const r = await api('GET', endpoint);
+  // include_loan_linked=1 - "כל התנועות" הרגילה מחריגה עכשיו תשלומי הלוואה (ר' routes/transactions.js) -
+  // כאן רוצים את *כל* תנועות הקובץ בלי קשר לכך, כולל שורות שקושרו להלוואה בזמן הייבוא. פרמטר לא
+  // מוכר ל-/api/wedding/transactions ו-/api/apartment/transactions - שם הוא פשוט מתעלם.
+  const sep = endpoint.includes('?') ? '&' : '?';
+  const r = await api('GET', `${endpoint}${sep}include_loan_linked=1`);
   if (!r.ok) return;
   const txs = (r.data.transactions || []).filter(t => t.import_batch_id === batchId);
   el.innerHTML = txs.length ? txs.map(t => `
@@ -2260,11 +2367,36 @@ function renderLoansList() {
         </div>
       </div>
       <div style="display:flex; align-items:center; gap:10px">
+        ${l.linkedPaymentsCount > 0 ? `<button class="btn secondary sm" onclick="toggleLoanTransactions(${l.id})">צפייה בתשלומים</button>` : ''}
         <button class="btn secondary sm" onclick="startLoanEdit(${l.id})">עריכה</button>
         <button class="btn secondary sm" onclick="deleteLoan(${l.id}, '${l.name.replace(/'/g, "\\'")}')">מחיקה</button>
       </div>
-    </div>`;
+    </div>
+    ${l.linkedPaymentsCount > 0 ? `<div id="loan-txs-${l.id}" style="display:none; margin:-4px 0 8px; padding-right:16px"></div>` : ''}`;
   }).join('');
+}
+
+// "צפייה בתשלומים" - משוב אמיתי: "בתנועות למטה יש לי כל הלוח סילוקין שקשור בכלל לקטגוריית הלוואות" -
+// תשלומי הלוואה מוחרגים עכשיו מ"כל התנועות" הרגילה (ר' routes/transactions.js), כדי לא להציף אותה
+// (הלוואה עם 144 תשלומים הייתה יוצרת 144 שורות שם) - נגישים במקום זה כאן, ליד ההלוואה עצמה, בדרישה
+// (בדיוק כמו toggleBatchTransactions לקבצים שיובאו - אותו דפוס, מקור נתונים שונה: loan_id ולא batch).
+async function toggleLoanTransactions(loanId) {
+  const el = document.getElementById(`loan-txs-${loanId}`);
+  if (!el) return;
+  if (el.style.display !== 'none') { el.style.display = 'none'; return; }
+  el.style.display = '';
+  el.innerHTML = '<div class="empty-state">טוען...</div>';
+  const r = await api('GET', `/api/transactions?loan_id=${loanId}`);
+  if (!r.ok) return;
+  const txs = r.data.transactions || [];
+  el.innerHTML = txs.length ? txs.map(t => `
+    <div class="list-item">
+      <div>
+        <div class="li-main">${(t.category || (t.type === 'income' ? 'הכנסה' : 'הוצאה')).replace(/</g, '&lt;')}</div>
+        <div class="li-sub">${t.occurred_at}${t.note ? ' · ' + t.note.replace(/</g, '&lt;') : ''}</div>
+      </div>
+      <span class="pill ${t.type}">${t.type === 'income' ? '+' : '-'}₪${t.amount}</span>
+    </div>`).join('') : '<div class="empty-state">לא נמצאו תשלומים מקושרים</div>';
 }
 
 function startLoanEdit(id) { loanEditingId = id; renderLoansList(); }

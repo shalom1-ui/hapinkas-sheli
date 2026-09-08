@@ -1091,6 +1091,9 @@ function createPhoneUser(fullName, phone, email, pin) {
 // AND moved_to IS NULL - תוקן (נתפס ע"י בדיקה אוטומטית): תנועה שהועברה לחתונה/דירה (ר'
 // /api/transactions/move ב-routes/importTransactions.js) כבר נספרת שם - בלי התנאי הזה כאן היא
 // הייתה נספרת פעמיים (גם כאן וגם ביעד), וההקראה בטלפון הייתה לא תואמת לסכום המדויק שמוצג באתר.
+// AND loan_id IS NULL - תוקן (משוב אמיתי: "בתנועות למטה יש לי כל הלוח סילוקין... זה לא טוב") - אותו
+// עיקרון בדיוק: routes/transactions.js מחריגה עכשיו תשלומי הלוואה (loan_id מוגדר) מ"כל התנועות"/
+// הסכומים באתר - בלי התנאי המקביל כאן, הקראת היתרה בטלפון הייתה כוללת אותם ולא תואמת יותר לאתר.
 function titheStatus(userId) {
   const row = db
     .prepare(
@@ -1098,7 +1101,7 @@ function titheStatus(userId) {
          COALESCE(SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END), 0) AS income,
          COALESCE(SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END), 0) AS expense,
          COALESCE(SUM(CASE WHEN type = 'expense' AND category = 'מעשרות' THEN amount ELSE 0 END), 0) AS tithePaid
-       FROM transactions WHERE user_id = ? AND moved_to IS NULL`
+       FROM transactions WHERE user_id = ? AND moved_to IS NULL AND loan_id IS NULL`
     )
     .get(userId);
   const obligation = Math.round(row.income * 0.1 * 100) / 100;

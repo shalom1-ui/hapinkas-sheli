@@ -1150,6 +1150,12 @@ async function run() {
     console.log("\n💰 ייבוא קובץ עם קישור להלוואה - משוב אמיתי: 'בהלוואות לא עשית שאני יכול לייבא נתונים'");
     const loanForImport = await api("POST", "/api/loans", { name: "הלוואת משכנתא", total_installments: 120, start_date: "2024-01-01" }, token);
     const loanForImportId = loanForImport.data.loan.id;
+    // תוקן (משוב אמיתי: "בתנועות למטה יש לי כל הלוח סילוקין... זה לא טוב") - קולטים "לפני" כדי לבודד
+    // בדיוק את ההשפעה של שתי התנועות האלה (הזרימה משתפת token/סכומים מצטברים לאורך כל הקובץ).
+    const expenseBeforeLoanImport = (await api("GET", "/api/transactions", null, token)).data.summary.expense;
+    const trendBeforeLoanImport = (await api("GET", "/api/transactions/trend", null, token)).data.trend;
+    const currentMonthKey = new Date().toISOString().slice(0, 7);
+    const trendExpenseBefore = (trendBeforeLoanImport.find(m => m.month === currentMonthKey) || { expense: 0 }).expense;
     const loanImportCsv = "תאריך,תיאור,סכום\n05/09/2026,הלוואה- פרעון,-1500\n06/09/2026,קניה בסופר,-200\n";
     const loanImportPreview = await api(
       "POST", "/api/transactions/import/parse",
@@ -1164,11 +1170,34 @@ async function run() {
     }));
     const loanImportCommit = await api("POST", "/api/transactions/import/commit", { transactions: loanImportRows, filename: "loan-import.csv" }, token);
     assert(loanImportCommit.status === 201 && loanImportCommit.data.imported === 2, `שמירת הייבוא עם קישור חלקי להלוואה הצליחה (${JSON.stringify(loanImportCommit.data)})`);
+    // תוקן (משוב אמיתי: "בתנועות למטה יש לי כל הלוח סילוקין שקשור בכלל לקטגוריית הלוואות") - תנועות
+    // מקושרות-הלוואה מוחרגות עכשיו מ"כל התנועות" הרגילה (ר' routes/transactions.js) - נגישות רק
+    // דרך ?loan_id= (או ?include_loan_linked=1, ר' toggleBatchTransactions/toggleLoanTransactions).
     const txsAfterLoanImport = await api("GET", "/api/transactions", null, token);
-    const importedLoanTx = txsAfterLoanImport.data.transactions.find(t => t.note === "הלוואה- פרעון" && t.amount === 1500);
+    const loanLinkedTxs = await api("GET", `/api/transactions?loan_id=${loanForImportId}`, null, token);
+    const importedLoanTx = loanLinkedTxs.data.transactions.find(t => t.note === "הלוואה- פרעון" && t.amount === 1500);
     const importedOtherTx = txsAfterLoanImport.data.transactions.find(t => t.note === "קניה בסופר");
-    assert(importedLoanTx && importedLoanTx.loan_id == loanForImportId, "התנועה שסומנה בתצוגה המקדימה כשייכת להלוואה נשמרה עם הקישור הנכון");
-    assert(importedOtherTx && !importedOtherTx.loan_id, "התנועה השנייה, שלא סומנה, יובאה בלי שום קישור להלוואה");
+    assert(importedLoanTx && importedLoanTx.loan_id == loanForImportId, "התנועה שסומנה בתצוגה המקדימה כשייכת להלוואה נשמרה עם הקישור הנכון (נגישה דרך ?loan_id=)");
+    assert(
+      !txsAfterLoanImport.data.transactions.some(t => t.note === "הלוואה- פרעון"),
+      "התנועה שקושרה להלוואה כבר לא מופיעה ב'כל התנועות' הרגילה - רק תחת ההלוואה עצמה"
+    );
+    assert(importedOtherTx && !importedOtherTx.loan_id, "התנועה השנייה, שלא סומנה, יובאה בלי שום קישור להלוואה, ומופיעה כרגיל ב'כל התנועות'");
+    assert(
+      txsAfterLoanImport.data.summary.expense - expenseBeforeLoanImport === 200,
+      `הוצאות עו"ש עלו ב-200 בלבד (התנועה השנייה) - לא ב-1700 - תשלום ההלוואה (1500) לא נספר יותר בסיכום הכללי (${txsAfterLoanImport.data.summary.expense - expenseBeforeLoanImport})`
+    );
+    const trendAfterLoanImport = (await api("GET", "/api/transactions/trend", null, token)).data.trend;
+    const trendExpenseAfter = (trendAfterLoanImport.find(m => m.month === currentMonthKey) || { expense: 0 }).expense;
+    assert(
+      trendExpenseAfter - trendExpenseBefore === 200,
+      `גרף "דוח חודשי" עלה גם הוא ב-200 בלבד באותו חודש - עקבי עם הסיכום הכללי, לא כולל את תשלום ההלוואה (${trendExpenseAfter - trendExpenseBefore})`
+    );
+    const allTxsIncludingLoan = await api("GET", "/api/transactions?include_loan_linked=1", null, token);
+    assert(
+      allTxsIncludingLoan.data.transactions.some(t => t.note === "הלוואה- פרעון"),
+      "include_loan_linked=1 כן מחזיר את התנועה המקושרת-הלוואה (ר' toggleBatchTransactions - 'צפייה בתנועות' של קובץ ייבוא שכולל שורות מקושרות)"
+    );
     const loanAfterImport = await api("GET", "/api/loans", null, token);
     const loanRowAfterImport = loanAfterImport.data.loans.find(l => l.id === loanForImportId);
     assert(loanRowAfterImport.linkedPaymentsCount === 1, `להלוואה מוצג עכשיו תשלום אחד אמיתי מהקובץ שיובא (${JSON.stringify(loanRowAfterImport)})`);
@@ -1237,7 +1266,8 @@ async function run() {
       amortCommit.data.loan.linkedPaymentsCount === 1 && amortCommit.data.loan.remainingInstallments === 1,
       `ההלוואה שנוצרה מציגה תשלום אחד מקושר בפועל ותשלום אחד שנותר (${JSON.stringify(amortCommit.data.loan)})`
     );
-    const txsAfterAmort = await api("GET", "/api/transactions", null, token);
+    // תוקן: תשלומי הלוואה מוחרגים מ"כל התנועות" הרגילה (ר' הערה למעלה) - נגישים דרך ?loan_id=.
+    const txsAfterAmort = await api("GET", `/api/transactions?loan_id=${amortLoanId}`, null, token);
     const amortLinkedTx = txsAfterAmort.data.transactions.find(t => t.loan_id === amortLoanId);
     assert(
       amortLinkedTx && amortLinkedTx.amount === 775.65 && amortLinkedTx.occurred_at.startsWith(yesterdayIso),
@@ -1269,7 +1299,8 @@ async function run() {
       );
       dupLoanIds.push(c.data.loan.id);
     }
-    const txsBeforeMerge = await api("GET", "/api/transactions", null, token);
+    // include_loan_linked=1 - בודקים כמה הלוואות שונות בבת אחת, לא הלוואה בודדת (?loan_id= לא מספיק).
+    const txsBeforeMerge = await api("GET", "/api/transactions?include_loan_linked=1", null, token);
     const linkedBeforeMerge = txsBeforeMerge.data.transactions.filter(t => dupLoanIds.includes(t.loan_id));
     assert(linkedBeforeMerge.length === 3, `לפני המיזוג - שלוש תנועות זהות (אחת לכל ייבוא כפול) (${linkedBeforeMerge.length})`);
 
@@ -1286,7 +1317,7 @@ async function run() {
       loansAfterMerge.data.loans.some(l => l.id === dupLoanIds[0]),
       "ההלוואות שמוזגו (המקור) נמחקו, ורק הראשית נשארה"
     );
-    const txsAfterMerge = await api("GET", "/api/transactions", null, token);
+    const txsAfterMerge = await api("GET", `/api/transactions?loan_id=${dupLoanIds[0]}`, null, token);
     const linkedAfterMerge = txsAfterMerge.data.transactions.filter(t => t.loan_id === dupLoanIds[0]);
     assert(linkedAfterMerge.length === 1, `אחרי המיזוג - תנועה אחת בלבד מקושרת בפועל להלוואה הראשית (${linkedAfterMerge.length})`);
 
