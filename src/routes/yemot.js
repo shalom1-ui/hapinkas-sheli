@@ -14,10 +14,11 @@
 
 const db = require("../db");
 const { text, json } = require("../router");
-const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt, OPENING_GREETING, DIGIT_ENTRY_STATES, CONFIRM_MENU_STATES, DIGIT_MENU_STATES } = require("./ivr");
-const { sayAndReadStt, sayAndGoToRecordExtension, sayAndReadDigits, sayAndHangup, VAL_NAME } = require("../services/yemot");
+const { advance, advanceSignup, upsertCall, appendTranscript, MAIN_MENU_HINTS, mainMenuPrompt, OPENING_GREETING, DIGIT_ENTRY_STATES, CONFIRM_MENU_STATES, DIGIT_MENU_STATES, expenseCategoryMenuText, incomeCategoryMenuText } = require("./ivr");
+const { sayAndReadStt, sayAndGoToRecordExtension, sayAndReadDigits, sayAndReadNumber, sayAndHangup, VAL_NAME } = require("../services/yemot");
 const speechToText = require("../services/speechToText");
 const debugLog = require("../debugLog");
+const { isKeypadOnly, keypadOnlySource, setKeypadOnly } = require("../lib/settings");
 
 // שלבים שמבקשים טקסט חופשי גרידא (שם, לא קטגוריה/ספרה) - אין בהם שום קיצור הקשה בעל משמעות,
 // ולכן אפשר להעביר אותם למנוע ה"הקלטה" של ימות (freeText ב-sayAndReadStt) לזיהוי דיבור מדויק
@@ -121,7 +122,55 @@ const RECORD_CONFIRM_HINT = " כשתסיימו לדבר, הקישו סולמית
 const WHISPER_RECORD_MODE_ENABLED = true;
 
 function whisperRecordModeActive() {
-  return WHISPER_RECORD_MODE_ENABLED && speechToText.isConfigured();
+  // במצב "הקשות בלבד" (ר' keypadOnly למטה) אין שום שלב שעובר להקלטה/תמלול - הכל בהקשות.
+  return WHISPER_RECORD_MODE_ENABLED && !isKeypadOnly() && speechToText.isConfigured();
+}
+
+// ---------- מצב "הקשות בלבד" (מתג, ר' lib/settings.js) ----------
+// משוב אמיתי: ימות הודיעה "אין יתרה בזיהוי דיבור" ולא קיבלה גם הקשות ספרות במצב voice - אי אפשר היה
+// להיכנס לקו בכלל. כשהמתג דלוק, כל שלב שאפשר לעשות בהקשות עובר למצב tap של ימות (בדיוק כמו קוד PIN
+// ותפריטי האישור שכבר עובדים כך) - אין בכלל בקשת זיהוי דיבור לימות, אז היתרה שלו לא משנה.
+// שלבים שזמינים: תפריט ראשי, אחרי יתרה, בחירות/אישורים (1 ספרה), וסכומים (ספרות + סולמית).
+// שלבים שדורשים דיבור באמת (שמות, תוכן חופשי, "אחר", טופס הכנה לשיעור, סוג דיווח מטפל וכו') לא
+// זמינים בזמן הזה - מודיעים ומחזירים לתפריט (או לתפריט הקטגוריות, כדי לא לאבד סכום שכבר הוקש).
+const KEYPAD_AMOUNT_STATES = new Set(["expense_amount", "income_amount", "tithe_amount"]);
+const KEYPAD_OK_FREE_TEXT_STATES = new Set(["main_menu", "balance_next_action", ...KEYPAD_AMOUNT_STATES]);
+const KEYPAD_NO_SPEECH_MSG = "האפשרות הזו דורשת זיהוי דיבור, שאינו זמין כרגע. אפשר להשתמש באתר.";
+
+// מתאים ניסוח של שלבים שנכתב בהנחה של "אמרו" להקשה: מוריד "אפשר לומר:" ו"נסו לומר בצורה שונה",
+// ומחליף את בקשת הסכום בהוראת הקשה. נקרא רק במצב הקשות בלבד - המצב הרגיל לא נוגע בטקסטים.
+function keypadizeText(text, state) {
+  let t = String(text || "")
+    .replace(/ ?אם זה לא מזוהה, כדאי לנסות לומר את זה בצורה קצת שונה\./g, "")
+    .replace(/אפשר לומר סכום בשקלים\./g, "הקישו את הסכום בשקלים, ובסיום הקישו סולמית.")
+    .replace(/אפשר לומר: /g, "")
+    .replace(/אפשר גם להקיש:/g, "הקישו:")
+    .replace(/אמרו כן, או הקישו 1\. אם לא, אמרו לא, או הקישו 2\./g, "כן הקישו 1, לא הקישו 2.");
+  if (KEYPAD_AMOUNT_STATES.has(state) && !t.includes("סולמית")) t += " הקישו את הסכום, ובסיום הקישו סולמית.";
+  return t;
+}
+
+// אם השלב הבא דורש זיהוי דיבור - מחליף אותו בהודעה + חזרה לתפריט מתאים (תוצאה חדשה במבנה של advance()).
+function keypadAdjust(result) {
+  if (result.hangup) return result;
+  const next = result.nextState;
+  const needsSpeech = FREE_TEXT_STATES.has(next) && !KEYPAD_OK_FREE_TEXT_STATES.has(next);
+  if (!needsSpeech) return result;
+  if (next === "expense_category_other") {
+    return { text: `${KEYPAD_NO_SPEECH_MSG} ${expenseCategoryMenuText({ digitConfirm: true })}`, nextState: "expense_category", draft: result.draft };
+  }
+  if (next === "income_category_other") {
+    return { text: `${KEYPAD_NO_SPEECH_MSG} ${incomeCategoryMenuText({ digitConfirm: true })}`, nextState: "income_category", draft: result.draft };
+  }
+  return { text: `${KEYPAD_NO_SPEECH_MSG} ${mainMenuPrompt("", { digitConfirm: true })}`, nextState: "main_menu", draft: {}, hints: MAIN_MENU_HINTS };
+}
+
+// תגובת הפרוטוקול למצב הקשות בלבד - אף פעם לא read=...,voice (זיהוי דיבור).
+function keypadResponse(result) {
+  if (result.hangup) return sayAndHangup(result.text);
+  if (DIGIT_ENTRY_STATES.has(result.nextState)) return sayAndReadDigits(result.text, 4);
+  if (KEYPAD_AMOUNT_STATES.has(result.nextState)) return sayAndReadNumber(keypadizeText(result.text, result.nextState));
+  return sayAndReadDigits(keypadizeText(result.text, result.nextState), 1);
 }
 
 // תוקן (משוב אמיתי ממשתמש בבדיקה חיה: "קטגוריית ניהול חשבון חונכות השארת רק בזיהוי דיבור, אני
@@ -238,6 +287,11 @@ function register(router) {
     // ---------- תחילת שיחה חדשה: מזהים משתמש לפי מספר טלפון ----------
     if (!call) {
       const user = findUserByPhone(v.ApiPhone);
+      // מצב הקשות בלבד: הרשמה בטלפון דורשת הכתבת שם בדיבור - לא זמינה, מנתקים בהודעה ברורה במקום
+      // לבקש זיהוי דיבור שימות ממילא לא תבצע (אין יתרה).
+      if (!user && isKeypadOnly()) {
+        return text(ctx.res, 200, sayAndHangup(`${OPENING_GREETING}מספר הטלפון שלך אינו מזוהה במערכת. ההרשמה בטלפון דורשת זיהוי דיבור, שאינו זמין כרגע. אפשר להירשם באתר. להתראות.`));
+      }
       if (!user) {
         upsertCall(callId, null, "signup_name", withRecordingFlag({ phone: v.ApiPhone }, shouldUseRecordExtension("signup_name")), null, v.ApiPhone);
         return text(
@@ -248,6 +302,9 @@ function register(router) {
       }
 
       upsertCall(callId, user.id, "main_menu", withRecordingFlag({}, shouldUseRecordExtension("main_menu")), null, v.ApiPhone);
+      if (isKeypadOnly()) {
+        return text(ctx.res, 200, sayAndReadDigits(`${OPENING_GREETING}${mainMenuPrompt(user.full_name, { digitConfirm: true })}`, 1));
+      }
       const menuVoiceOnly = shouldUseRecordExtension("main_menu");
       return text(
         ctx.res,
@@ -289,15 +346,22 @@ function register(router) {
     // למעלה - main_menu כבר לא עובר למצב הקלטה גולמי בכלל (כדי לא לאבד את קיצור ההקשה 1-6), אז זה
     // תמיד false עכשיו - ההזכרה המילולית של קיצור ההקשה תמיד מופיעה.
     const opts = { digitConfirm: true, menuVoiceOnly: shouldUseRecordExtension("main_menu") };
-    const result = call.user_id
+    let result = call.user_id
       ? await advance(call.state, speech, draft, db.prepare("SELECT * FROM users WHERE id = ?").get(call.user_id), opts)
       : await advanceSignup(call.state, speech, draft, opts);
+
+    // מצב הקשות בלבד (מתג): שלבים שדורשים דיבור מוחלפים בהודעה + חזרה לתפריט, והתגובה תמיד במצב tap.
+    const keypadOnly = isKeypadOnly();
+    if (keypadOnly) result = keypadAdjust(result);
 
     const goingToFreeText = !result.hangup && !DIGIT_ENTRY_STATES.has(result.nextState) && FREE_TEXT_STATES.has(result.nextState);
     const draftToSave = withRecordingFlag(result.draft || draft, goingToFreeText && shouldUseRecordExtension(result.nextState));
 
     upsertCall(callId, result.newUserId || call.user_id, result.nextState, draftToSave, result.outcome, v.ApiPhone);
 
+    if (keypadOnly) {
+      return text(ctx.res, 200, keypadResponse(result));
+    }
     if (result.hangup) {
       return text(ctx.res, 200, sayAndHangup(result.text));
     }
@@ -320,6 +384,25 @@ function register(router) {
       return text(ctx.res, 200, freeTextPrompt(callId, result.text, result.nextState));
     }
     return text(ctx.res, 200, sayAndReadStt(result.text));
+  });
+
+  // מתג "הקשות בלבד" - דרך מהירה להפוך אותו מהדפדפן בלי להיכנס ל-Render (בדיוק כמו yemot-recent למטה:
+  // מילת-מעבר קבועה בכתובת). הדלקה: ?key=...&mode=on  כיבוי: mode=off  בדיקת מצב: בלי mode.
+  // אפשר גם מתוך האתר (הגדרות > מנהל מערכת, ר' routes/systemAdmin.js). משתנה סביבה YEMOT_KEYPAD_ONLY=1 גובר.
+  router.get("/api/debug/yemot-keypad", async (ctx) => {
+    if (ctx.query.key !== "hapinkas-diag-9427") {
+      return json(ctx.res, 403, { error: "אין הרשאה - חסר או שגוי פרמטר key" });
+    }
+    if (ctx.query.mode === "on") setKeypadOnly(true);
+    else if (ctx.query.mode === "off") setKeypadOnly(false);
+    const source = keypadOnlySource();
+    return text(
+      ctx.res,
+      200,
+      source
+        ? `מצב "הקשות בלבד": דלוק (${source === "env" ? "נעול ע\"י משתנה הסביבה YEMOT_KEYPAD_ONLY בשרת - לכיבוי יש להסיר אותו ב-Render" : "לפי המתג"}).\nלכיבוי: הוסיפו לכתובת &mode=off`
+        : `מצב "הקשות בלבד": כבוי (זיהוי דיבור רגיל).\nלהדלקה: הוסיפו לכתובת &mode=on`
+    );
   });
 
   // --- אבחון זמני: בדיקת הקלטות Whisper ישירות מול ימות (ר' README, סעיף "זיהוי דיבור משודרג") ---
@@ -394,6 +477,7 @@ function register(router) {
       `RECOVERY_MOCK (שיחה קולית): ${process.env.RECOVERY_MOCK === "false" ? "false (Twilio אמיתי אמור לפעול)" : "לא הוגדר ל-false (עדיין במצב בדיקה)"}`,
       `SYSTEM_ADMIN_PASSWORD: ${process.env.SYSTEM_ADMIN_PASSWORD ? "מוגדר (לא מציגים את הערך)" : "חסר"}`,
       `YEMOT_API_TOKEN / YEMOT_EXTENSION_NUMBER: ${process.env.YEMOT_API_TOKEN && process.env.YEMOT_EXTENSION_NUMBER ? "מוגדרים" : "חסרים"}`,
+      `מצב "הקשות בלבד" (בלי זיהוי דיבור, ר' /api/debug/yemot-keypad): ${keypadOnlySource() ? `דלוק (${keypadOnlySource()})` : "כבוי"}`,
     ].join("\n");
 
     return text(
@@ -431,4 +515,7 @@ module.exports = {
   // אמיתיים - הבדיקות "מזייפות" זמנית את speechToText.isConfigured() כדי לבדוק את שני המצבים.
   shouldUseRecordExtension,
   MENU_DIGIT_FREE_TEXT_STATES,
+  keypadizeText,
+  keypadAdjust,
+  keypadResponse,
 };

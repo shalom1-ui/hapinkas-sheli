@@ -69,10 +69,20 @@ function sayAndReadDigits(text, digits) {
   return `read=t-${safe}=${VAL_NAME},${ops.join(",")}`;
 }
 
+// מצב "הקשות בלבד" (ר' lib/settings.js, מתג keypad-only) - הקשת מספר באורך משתנה (סכום בשקלים), עד
+// maxDigits ספרות, שמסתיימת בסולמית (או אחרי sec_wait שניות בלי הקשה). אותו מצב tap כמו sayAndReadDigits,
+// רק עם min_digits=1 ו-max_digits גמיש - ולכן הסולמית היא זו שמסיימת את ההקשה, לא ספירת ספרות קבועה.
+// typing_playback_mode="No" כמו ב-PIN - לא מקריאים בקול כל ספרה תוך כדי הקשה (מהיר יותר, פחות רעש).
+function sayAndReadNumber(text, maxDigits = 7) {
+  const safe = sanitizeForYemot(text);
+  const ops = ["no", String(maxDigits), "1", "10", "No", "no", "no", "", "", "", "", "", ""];
+  return `read=t-${safe}=${VAL_NAME},${ops.join(",")}`;
+}
+
 // משמיע טקסט ואז מנתק את השיחה (למסכי סיום)
 function sayAndHangup(text) {
   const safe = sanitizeForYemot(text);
   return `id_list_message=t-${safe}.g-hangup`;
 }
 
-module.exports = { sayAndReadStt, sayAndGoToRecordExtension, sayAndReadDigits, sayAndHangup, sanitizeForYemot, VAL_NAME };
+module.exports = { sayAndReadStt, sayAndGoToRecordExtension, sayAndReadDigits, sayAndReadNumber, sayAndHangup, sanitizeForYemot, VAL_NAME };

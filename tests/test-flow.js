@@ -1156,7 +1156,10 @@ async function run() {
     const trendBeforeLoanImport = (await api("GET", "/api/transactions/trend", null, token)).data.trend;
     const currentMonthKey = new Date().toISOString().slice(0, 7);
     const trendExpenseBefore = (trendBeforeLoanImport.find(m => m.month === currentMonthKey) || { expense: 0 }).expense;
-    const loanImportCsv = "תאריך,תיאור,סכום\n05/09/2026,הלוואה- פרעון,-1500\n06/09/2026,קניה בסופר,-200\n";
+    // תאריכי התנועות בחודש הנוכחי (לא קבועים לספטמבר 2026) - אחרת בדיקת "דוח חודשי" למעלה, שמשווה את
+    // החודש הנוכחי, נשברת בכל מעבר חודש (נתפס בפועל כשהחודש התחלף לאוקטובר).
+    const loanImportMonth = `${String(new Date().getMonth() + 1).padStart(2, "0")}/${new Date().getFullYear()}`;
+    const loanImportCsv = `תאריך,תיאור,סכום\n05/${loanImportMonth},הלוואה- פרעון,-1500\n06/${loanImportMonth},קניה בסופר,-200\n`;
     const loanImportPreview = await api(
       "POST", "/api/transactions/import/parse",
       { data_base64: Buffer.from(loanImportCsv, "utf8").toString("base64"), filename: "loan-import.csv", source_type: "bank" },
@@ -2076,6 +2079,68 @@ async function run() {
     assert(ymAmountCategoryPrompt.includes("מאיזה מקור ההכנסה"), "בימות, סכום עם 'ש\"ח' צמוד לספרות עדיין מזוהה נכון כ-100 וממשיך ישר לשאלת מקור ההכנסה");
     const ymAmountEcho = await yemotCall({ callId: ymAmountWithCurrencyCallId, speech: "1" }); // 1 = משכורת
     assert(ymAmountEcho.includes("לאשר: הכנסה של 100 שקלים"), "בימות, סכום עם 'ש\"ח' צמוד לספרות (לא רק ספרה נקייה) עדיין מזוהה נכון כ-100");
+
+    console.log("\n🔢 ימות: מתג 'הקשות בלבד' - כש-ימות מודיעה 'אין יתרה בזיהוי דיבור' (אז היא לא מקבלת גם הקשות במצב voice)");
+    // משוב אמיתי: "אני מנסה להיכנס לימות המשיח אומרים שאין יתרה בזיהוי דיבור", "אני ראיתי שהמערכת לא
+    // מקבלת הקשות אם היתרה אפס, תבנה מתג". במצב המתג אף תגובה לא אמורה להכיל read=...,voice (זיהוי דיבור).
+    const keypadWrongPw = await api("POST", "/api/system-admin/keypad-mode", { password: "wrong", enabled: true });
+    assert(keypadWrongPw.status === 403, "מתג הקשות בלבד דורש את סיסמת מנהל המערכת - סיסמה שגויה נדחית");
+    const keypadOn = await api("POST", "/api/system-admin/keypad-mode", { password: "test-system-admin-password-9427", enabled: true });
+    assert(keypadOn.status === 200 && keypadOn.data.keypadOnly === true && keypadOn.data.source === "db", `הדלקת המתג הצליחה (${JSON.stringify(keypadOn.data)})`);
+
+    const kpCallId = `${ymCallId}-keypad`;
+    const kpResponses = [];
+    const kpStep = async (speech) => { const r = await yemotCall({ callId: kpCallId, phone: "0500000001", speech }); kpResponses.push(r); return r; };
+    const kpOpen = await kpStep(undefined);
+    assert(
+      kpOpen.startsWith("read=t-") && kpOpen.includes("ניהול חשבונות הקישו 1") && kpOpen.includes("=speech,no,1,1,7,No") && !kpOpen.includes(",voice,"),
+      `פתיחת שיחה במצב הקשות בלבד: אותו תפריט עם הספרות, אבל במצב הקשה (ספרה אחת, tap) ולא זיהוי דיבור (${kpOpen.slice(0, 160)})`
+    );
+    const kpUnknown = await yemotCall({ callId: `${kpCallId}-unknown`, phone: "0500000099" });
+    assert(
+      kpUnknown.includes("g-hangup") && kpUnknown.includes("דורשת זיהוי דיבור") && !kpUnknown.includes(",voice,"),
+      "מספר לא מזוהה במצב הקשות בלבד: הרשמה בטלפון דורשת דיבור - מודיעים ומנתקים במקום לבקש זיהוי דיבור שאין לו יתרה"
+    );
+    const kpBalance = await kpStep("1"); // ניהול חשבונות -> קריאת יתרה
+    assert(kpBalance.includes("היתרה") && kpBalance.includes("=speech,no,1,1,7,No"), "הקשת 1 בתפריט הראשי עובדת במצב הקשות בלבד וממשיכה בהקשה (תפריט אחרי יתרה, ספרה אחת)");
+    const kpAmount = await kpStep("2"); // 2 = הוצאה (אחרי יתרה)
+    assert(
+      kpAmount.includes("=speech,no,7,1,10,No") && kpAmount.includes("סולמית") && !kpAmount.includes("אפשר לומר"),
+      `שאלת סכום במצב הקשות בלבד: הקשת מספר באורך משתנה שמסתיימת בסולמית, והטקסט מבקש להקיש (לא 'לומר') (${kpAmount.slice(0, 200)})`
+    );
+    const kpCategory = await kpStep("75"); // הקשת הסכום (ספרות בלבד)
+    assert(kpCategory.includes("רשמתי 75 שקלים") && kpCategory.includes("1 מזון") && kpCategory.includes("=speech,no,1,1,7,No"), "סכום שהוקש בספרות מזוהה (75), וממשיך לתפריט הקטגוריות בהקשה");
+    const kpOther = await kpStep("7"); // 7 = אחר (תיאור חופשי - דורש דיבור)
+    assert(
+      kpOther.includes("דורשת זיהוי דיבור") && kpOther.includes("1 מזון") && !kpOther.includes(",voice,"),
+      "בחירת 'אחר' (דורש דיבור) במצב הקשות בלבד: מודיעים וחוזרים לתפריט הקטגוריות עצמו - הסכום שהוקש לא אובד"
+    );
+    await kpStep("1"); // 1 = מזון -> שאלת אישור
+    const kpSaved = await kpStep("1"); // 1 = אישור
+    assert(kpSaved.includes("נשמר"), "אישור בהקשה (1) במצב הקשות בלבד שומר את התנועה");
+    const afterKp = await api("GET", "/api/transactions", null, token);
+    const kpTx = afterKp.data.transactions.find(t => t.source === "phone" && t.amount === 75 && t.category === "מזון");
+    assert(!!kpTx, "זרימת הוצאה מלאה בהקשות בלבד (יתרה -> הוצאה -> סכום -> קטגוריה -> אישור) נשמרה במסד הנתונים");
+    if (kpTx) await api("DELETE", `/api/transactions/${kpTx.id}`, null, token);
+
+    const kpMentor = await yemotCall({ callId: `${kpCallId}-therapist`, phone: "0500000001" }).then(async () =>
+      yemotCall({ callId: `${kpCallId}-therapist`, speech: "4" }) // 4 = מטפלים -> שלב שדורש דיבור (סוג דיווח)
+    );
+    assert(
+      kpMentor.includes("דורשת זיהוי דיבור") && kpMentor.includes("ניהול חשבונות הקישו 1") && !kpMentor.includes(",voice,"),
+      "קטגוריה שכולה דיבור (מטפלים) במצב הקשות בלבד: הודעה ברורה וחזרה לתפריט הראשי בהקשות"
+    );
+    assert(
+      kpResponses.every((r) => !r.includes(",voice,")),
+      "בכל התגובות של השיחה במצב הקשות בלבד אין אף בקשת זיהוי דיבור (voice) לימות"
+    );
+
+    const kpStatus = await fetch(`${BASE}/api/debug/yemot-keypad?key=hapinkas-diag-9427`).then((r) => r.text());
+    assert(kpStatus.includes("דלוק"), "דף המצב המהיר (yemot-keypad) מציג שהמתג דלוק");
+    const keypadOff = await api("POST", "/api/system-admin/keypad-mode", { password: "test-system-admin-password-9427", enabled: false });
+    assert(keypadOff.status === 200 && keypadOff.data.keypadOnly === false, "כיבוי המתג הצליח");
+    const normalOpen = await yemotCall({ callId: `${kpCallId}-normal`, phone: "0500000001" });
+    assert(normalOpen.includes(",voice,"), "אחרי הכיבוי הקו חוזר למצב הרגיל (זיהוי דיבור) - אין שינוי בהתנהגות כשהמתג כבוי");
 
     console.log("\n❓ קלט לא ברור בשאלת אישור לא מבטל בשקט (רק 'לא' מפורש מבטל) - כדי לא לאבד תנועה שהוזנה");
     // בבדיקה בפועל מול ימות התברר שמילים כמו "אישור"/"לאשר" לפעמים לא מזוהות בדיוק ע"י זיהוי הדיבור.

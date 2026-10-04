@@ -1486,5 +1486,9 @@ module.exports = {
   DIGIT_ENTRY_STATES,
   CONFIRM_MENU_STATES,
   DIGIT_MENU_STATES,
+  // מיוצאים עבור מצב "הקשות בלבד" בימות (ר' routes/yemot.js, keypadFallbackFor): כשהמתקשר בוחר "אחר"
+  // (תיאור חופשי, שדורש זיהוי דיבור) - חוזרים לתפריט הקטגוריות עצמו במקום לאבד את הסכום שכבר הוקש.
+  expenseCategoryMenuText,
+  incomeCategoryMenuText,
   extractAmount, // מיוצא כדי לאפשר בדיקה ישירה (ר' tests/test-flow.js) - כולל פענוח מספרים במילים
 };

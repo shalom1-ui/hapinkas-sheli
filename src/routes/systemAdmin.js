@@ -16,6 +16,7 @@
 const crypto = require("crypto");
 const db = require("../db");
 const { json } = require("../router");
+const { keypadOnlySource, setKeypadOnly } = require("../lib/settings");
 
 // השוואת סיסמה בזמן-קבוע - נכשל (false) גם אם האורך שונה, בלי לחשוף מידע על האורך הנכון דרך תזמון.
 function passwordMatches(candidate) {
@@ -89,6 +90,27 @@ function register(router) {
 
     const updated = db.prepare("SELECT id, full_name, username, phone, email, roles FROM users WHERE id = ?").get(user.id);
     return json(ctx.res, 200, { message: `הרשאת המפקח/ת של ${user.full_name} הוסרה`, user: updated });
+  });
+
+  // מתג "הקשות בלבד" לקו ימות (ר' lib/settings.js, routes/yemot.js) - כשיתרת זיהוי הדיבור בימות נגמרת
+  // הקו לא מקבל גם הקשות במצב voice; המתג מעביר את כל מה שאפשר להקשות. בלי enabled בבקשה - רק מחזיר
+  // את המצב הנוכחי (לתצוגה בכרטיס); עם enabled=true/false - משנה. משתנה סביבה YEMOT_KEYPAD_ONLY גובר ולכן
+  // כיבוי מהמתג לא יעזור כל עוד הוא מוגדר (ההודעה בתשובה אומרת את זה במפורש).
+  router.post("/api/system-admin/keypad-mode", async (ctx) => {
+    const { password, enabled } = ctx.body || {};
+    if (!process.env.SYSTEM_ADMIN_PASSWORD) {
+      return json(ctx.res, 503, { error: "תכונת 'מנהל מערכת' לא מוגדרת בשרת הזה (חסר SYSTEM_ADMIN_PASSWORD)" });
+    }
+    if (!passwordMatches(password)) return json(ctx.res, 403, { error: "סיסמת מנהל המערכת שגויה" });
+    if (typeof enabled === "boolean") setKeypadOnly(enabled);
+    const source = keypadOnlySource();
+    return json(ctx.res, 200, {
+      keypadOnly: source !== null,
+      source,
+      message: source === "env"
+        ? "מצב הקשות בלבד דלוק ונעול ע\"י משתנה הסביבה YEMOT_KEYPAD_ONLY בשרת - לכיבוי יש להסיר אותו ב-Render"
+        : source === "db" ? "מצב הקשות בלבד דלוק - הקו לא מבקש זיהוי דיבור" : "מצב הקשות בלבד כבוי - זיהוי דיבור רגיל",
+    });
   });
 }
 

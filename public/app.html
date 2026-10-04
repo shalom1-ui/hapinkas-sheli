@@ -957,6 +957,18 @@
             <button class="btn secondary" style="align-self:flex-end" onclick="systemAdminSearch()">חיפוש</button>
           </div>
           <div id="sm-results" style="margin-top:10px"></div>
+          <!-- משוב אמיתי: ימות הודיעה "אין יתרה בזיהוי דיבור" ולא קיבלה גם הקשות - אי אפשר להיכנס לקו.
+               מתג "הקשות בלבד" (ר' routes/systemAdmin.js, lib/settings.js): בלי זיהוי דיבור בכלל. -->
+          <div style="margin-top:18px; padding-top:14px; border-top:1px solid var(--border)">
+            <b>קו הטלפון (ימות המשיח): מצב הקשות בלבד</b>
+            <div class="hint">כשיתרת "זיהוי דיבור" בימות נגמרת, הקו מודיע "אין יתרה בזיהוי דיבור" ולא מאפשר להיכנס. במצב הזה הקו לא מבקש זיהוי דיבור בכלל - הכל בהקשות (תפריט, יתרה, הכנסה/הוצאה/מעשרות עם סכום ב-# בסוף, אישורים). שלבים שדורשים דיבור (שמות, "אחר", דיווחי חונכות/מטפלים) לא זמינים עד שמטעינים יתרה. משתמש בסיסמה למעלה.</div>
+            <div class="row" style="margin-top:8px; align-items:center">
+              <span id="keypad-status" class="hint" style="margin:0">לא נבדק</span>
+              <button class="btn secondary sm" onclick="keypadModeSet()">בדיקת מצב</button>
+              <button class="btn sm" onclick="keypadModeSet(true)">הדלקה</button>
+              <button class="btn secondary sm" onclick="keypadModeSet(false)">כיבוי</button>
+            </div>
+          </div>
         </div>
         <div class="card">
           <h3 style="margin-top:0">שינוי סיסמה</h3>
@@ -3394,6 +3406,17 @@ async function systemAdminRevoke(userId) {
   const password = document.getElementById('sm_password').value;
   const r = await api('POST', '/api/system-admin/revoke-supervisor', { password, user_id: userId });
   if (r.ok) { toast(r.data.message, 'success'); systemAdminSearch(); }
+}
+// מתג "הקשות בלבד" לקו ימות (ר' routes/systemAdmin.js): enabled=undefined -> בדיקת מצב בלבד.
+async function keypadModeSet(enabled) {
+  const password = document.getElementById('sm_password').value;
+  if (!password) { toast('יש להזין את סיסמת מנהל המערכת', 'error'); return; }
+  const body = { password };
+  if (typeof enabled === 'boolean') body.enabled = enabled;
+  const r = await api('POST', '/api/system-admin/keypad-mode', body);
+  if (!r.ok) return; // api() כבר הציג הודעת שגיאה
+  document.getElementById('keypad-status').textContent = (r.data.keypadOnly ? '🟢 ' : '⚪ ') + r.data.message;
+  if (typeof enabled === 'boolean') toast(r.data.message, 'success');
 }
 async function changePassword() {
   const currentPassword = document.getElementById('st_current_password').value;

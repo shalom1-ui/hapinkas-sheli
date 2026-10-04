@@ -184,6 +184,14 @@ db.exec(`
     deleted_at TEXT DEFAULT (datetime('now'))
   );
 
+  -- הגדרות מערכת גלובליות (לא פר-משתמש) שאפשר להפוך בזמן ריצה בלי פריסה מחדש - כרגע: מתג "הקשות בלבד"
+  -- לקו ימות (ר' lib/settings.js). key/value פשוט - לא סכמה נפרדת לכל הגדרה.
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT DEFAULT (datetime('now'))
+  );
+
   CREATE TABLE IF NOT EXISTS students (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     owner_user_id INTEGER NOT NULL REFERENCES users(id), -- מי יצר/מנהל את התלמיד (חונך/מטפל ראשי)
