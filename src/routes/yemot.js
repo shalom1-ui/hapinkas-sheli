@@ -477,6 +477,7 @@ function register(router) {
       `RECOVERY_MOCK (שיחה קולית): ${process.env.RECOVERY_MOCK === "false" ? "false (Twilio אמיתי אמור לפעול)" : "לא הוגדר ל-false (עדיין במצב בדיקה)"}`,
       `SYSTEM_ADMIN_PASSWORD: ${process.env.SYSTEM_ADMIN_PASSWORD ? "מוגדר (לא מציגים את הערך)" : "חסר"}`,
       `YEMOT_API_TOKEN / YEMOT_EXTENSION_NUMBER: ${process.env.YEMOT_API_TOKEN && process.env.YEMOT_EXTENSION_NUMBER ? "מוגדרים" : "חסרים"}`,
+      `טכנוליין - תמלול חיצוני: TECHNOLINE_API_KEY ${process.env.TECHNOLINE_API_KEY ? "מוגדר" : "חסר"}, מנוע תמלול (OPENAI_API_KEY/STT_SERVICE_URL) ${process.env.OPENAI_API_KEY || process.env.STT_SERVICE_URL ? "מוגדר" : "חסר"}, TECHNOLINE_WHISPER_ALL=${process.env.TECHNOLINE_WHISPER_ALL || "לא מוגדר (רק תוכן ארוך)"}, TECHNOLINE_WHISPER=${process.env.TECHNOLINE_WHISPER || "לא מוגדר"}`,
       `מצב "הקשות בלבד" (בלי זיהוי דיבור, ר' /api/debug/yemot-keypad): ${keypadOnlySource() ? `דלוק (${keypadOnlySource()})` : "כבוי"}`,
     ].join("\n");
 
