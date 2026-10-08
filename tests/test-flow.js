@@ -2142,6 +2142,62 @@ async function run() {
     const normalOpen = await yemotCall({ callId: `${kpCallId}-normal`, phone: "0500000001" });
     assert(normalOpen.includes(",voice,"), "אחרי הכיבוי הקו חוזר למצב הרגיל (זיהוי דיבור) - אין שינוי בהתנהגות כשהמתג כבוי");
 
+    console.log("\n📞 ערוץ טכנוליין (pbx.tlivr.com, 'מודול API') - אותה מכונת מצבים, JSON במקום מחרוזת ימות");
+    // משוב אמיתי: "אני רוצה להעביר את הפרויקט שיעבור דרך קו טכנוליין". המרכזייה שולחת PBXcallId/PBXphone/
+    // PBXcallStatus וקלט תחת השם 'val'; אנחנו מחזירים מודול JSON (simpleMenu/getDTMF/stt/record/hangup).
+    const tlCall = async (callId, params) => {
+      const qs = new URLSearchParams({ PBXcallId: callId, PBXphone: "0500000001", PBXcallStatus: "CALL", ...params });
+      const res = await fetch(`${BASE}/api/ivr/technoline?${qs}`);
+      return res.json();
+    };
+    const tlId = `TL-${Date.now()}`;
+    const tlOpen = await tlCall(tlId, {});
+    assert(
+      tlOpen.type === "simpleMenu" && tlOpen.name === "val" && tlOpen.enabledKeys.includes("7") && tlOpen.files[0].text.includes("ניהול חשבונות הקישו 1") && tlOpen.files[0].text.includes("שלום וברכה"),
+      `פתיחת שיחה בטכנוליין: ברכה + תפריט ראשי כ-simpleMenu של ספרה אחת (לא getDTMF שמחכה לסולמית) (${JSON.stringify(tlOpen).slice(0, 140)})`
+    );
+    const tlBalance = await tlCall(tlId, { val: "1" });
+    assert(tlBalance.type === "simpleMenu" && tlBalance.files[0].text.includes("היתרה"), "הקשת 1 מקריאה יתרה וממשיכה בתפריט ספרה אחת");
+    const tlAmountAsk = await tlCall(tlId, { val: "2" });
+    assert(
+      tlAmountAsk.type === "getDTMF" && tlAmountAsk.max === 7 && tlAmountAsk.skipKey === "#" && tlAmountAsk.files[0].text.includes("סולמית") && !tlAmountAsk.files[0].text.includes("אפשר לומר"),
+      "שאלת סכום: getDTMF רב-ספרתי שמסתיים בסולמית, והטקסט מבקש להקיש"
+    );
+    const tlCat = await tlCall(tlId, { val: "88" });
+    assert(tlCat.type === "simpleMenu" && tlCat.files[0].text.includes("רשמתי 88 שקלים"), "הסכום שהוקש (88) מזוהה וממשיך לתפריט הקטגוריות");
+    await tlCall(tlId, { val: "1" }); // מזון
+    const tlSaved = await tlCall(tlId, { val: "1" }); // אישור
+    assert(tlSaved.type === "simpleMenu" && tlSaved.files[0].text.includes("נשמר"), "אישור בהקשה שומר את התנועה וחוזר עם תפריט המשך");
+    const afterTl = await api("GET", "/api/transactions", null, token);
+    const tlTx = afterTl.data.transactions.find(t => t.source === "phone" && t.amount === 88 && t.category === "מזון");
+    assert(!!tlTx, "זרימת הוצאה מלאה דרך טכנוליין נשמרה במסד הנתונים עם source=phone");
+    if (tlTx) await api("DELETE", `/api/transactions/${tlTx.id}`, null, token);
+
+    const tlSttId = `${tlId}-stt`;
+    await tlCall(tlSttId, {});
+    const tlStt = await tlCall(tlSttId, { val: "4" }); // מטפלים -> סוג דיווח (דורש דיבור)
+    assert(
+      tlStt.type === "stt" && tlStt.name === "val" && tlStt.max <= 10 && tlStt.sttSnap === false && tlStt.sttPhrases.includes("ריפוי בעיסוק"),
+      `שלב שדורש דיבור עובר לזיהוי הדיבור המובנה של טכנוליין (stt, עד 10 שניות) עם רמז אוצר מילים בלי הצמדה (${JSON.stringify(tlStt).slice(0, 160)})`
+    );
+    const tlUnknown = await fetch(`${BASE}/api/ivr/technoline?PBXcallId=${tlId}-unk&PBXphone=0509876543&PBXcallStatus=CALL`).then((r) => r.json());
+    assert(tlUnknown.type === "stt" && tlUnknown.files[0].text.includes("אינו מזוהה") && tlUnknown.files[0].text.includes("השם המלא"), `מספר לא מזוהה בטכנוליין: הצעת הרשמה, והשם נקלט בזיהוי הדיבור (stt) (${JSON.stringify(tlUnknown).slice(0, 200)})`);
+
+    const tlBuild = require("../src/routes/technoline");
+    const tlLong = tlBuild.buildModule({ text: "מה לכתוב בדיווח?", nextState: "therapist_note" });
+    assert(
+      tlLong.type === "record" && tlLong.sttSoft === true && tlLong.max === 60 && tlLong.hangupSave === "yes" && tlLong.files[0].text.includes("סולמית"),
+      "תוכן ארוך (דיווח/הערה) מוקלט עד 60 שניות עם תמלול רך ברקע - לא נחתך ב-10 שניות של stt"
+    );
+    assert(tlBuild.mapInput({ TEXT_val: "הדיווח שהוכתב", val: "file.mp3" }, "therapist_note") === "הדיווח שהוכתב", "בשלב הקלטה ארוכה הקלט הוא הטקסט המתומלל (TEXT_val), לא שם הקובץ");
+    assert(tlBuild.mapInput({ val: "ERROR" }, "main_menu") === "", "ERROR (תם הזמן בתפריט) נחשב שקט ולא קלט");
+    const tlPin = tlBuild.buildModule({ text: "בחרו קוד", nextState: "signup_pin" });
+    assert(tlPin.type === "getDTMF" && tlPin.min === 4 && tlPin.max === 4 && tlPin.maskLog === true, "קוד PIN בטכנוליין: getDTMF של 4 ספרות, מוסתר בלוג");
+    const tlHang = tlBuild.buildModule({ text: "להתראות", hangup: true });
+    assert(Array.isArray(tlHang) && tlHang[0].type === "simpleMessage" && tlHang[1].type === "hangup", "סיום שיחה: הודעה + ניתוק");
+    const tlHangupCall = await tlCall(tlId, { PBXcallStatus: "HANGUP" });
+    assert(Array.isArray(tlHangupCall) && tlHangupCall.length === 0, "פנייה של ניתוק (HANGUP) מקבלת תשובה ריקה, בלי להמשיך את השיחה");
+
     console.log("\n❓ קלט לא ברור בשאלת אישור לא מבטל בשקט (רק 'לא' מפורש מבטל) - כדי לא לאבד תנועה שהוזנה");
     // בבדיקה בפועל מול ימות התברר שמילים כמו "אישור"/"לאשר" לפעמים לא מזוהות בדיוק ע"י זיהוי הדיבור.
     // בעבר כל קלט שלא זוהה כ"כן" נחשב אוטומטית "לא" וביטל את כל התנועה בשקט - התנהגות מסוכנת.

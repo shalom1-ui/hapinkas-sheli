@@ -51,6 +51,7 @@ require("./routes/documents").register(router);
 require("./routes/subscription").register(router);
 require("./routes/ivr").register(router);
 require("./routes/yemot").register(router);
+require("./routes/technoline").register(router);
 require("./routes/systemAdmin").register(router);
 require("./routes/trash").register(router);
 

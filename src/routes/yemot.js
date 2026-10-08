@@ -518,4 +518,9 @@ module.exports = {
   keypadizeText,
   keypadAdjust,
   keypadResponse,
+  // משותפים עם הערוץ של טכנוליין (routes/technoline.js) - אותו זיהוי מתקשר ואותה חלוקה לשלבים.
+  findUserByPhone,
+  FREE_TEXT_STATES,
+  KEYPAD_OK_FREE_TEXT_STATES,
+  KEYPAD_AMOUNT_STATES,
 };
