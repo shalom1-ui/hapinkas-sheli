@@ -523,4 +523,5 @@ module.exports = {
   FREE_TEXT_STATES,
   KEYPAD_OK_FREE_TEXT_STATES,
   KEYPAD_AMOUNT_STATES,
+  vocabularyHintFor,
 };

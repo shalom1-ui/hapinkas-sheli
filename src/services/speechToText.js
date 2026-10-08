@@ -133,41 +133,54 @@ function containsHebrew(str) {
 // ביטחון (ר' containsHebrew למעלה) - אם בכל זאת מתקבל תמלול בלי אף אות עברית אחת, מתייחסים לזה
 // כאל כישלון (מחזירים null) במקום לנסות להשתמש בטקסט חסר-משמעות הזה - כדי שהמערכת תבקש מהמתקשר
 // לנסות שוב, במקום "להיתקע" בלולאה שמנסה להתאים קטגוריה/שם לטקסט שלעולם לא יתאים.
-async function transcribeAudio(audioBuffer, vocabularyHint) {
-  if (!isConfigured() || !audioBuffer) return null;
+// ליבת התמלול - בלי תלות בימות (אפשר להפעיל אותה גם על הקלטות של ערוץ אחר, כמו טכנוליין - ר'
+// routes/technoline.js). מנוע: אם מוגדר STT_SERVICE_URL - שירות תמלול חיצוני/עצמאי (חוזה פשוט:
+// POST multipart עם שדה "file" (ו"prompt" אופציונלי) -> JSON {"text": "..."} - מיועד לשירות
+// ivrit.ai משותף לכל הפרויקטים, ר' זיכרון הפרויקט); אחרת OpenAI Whisper אם יש OPENAI_API_KEY.
+function sttEngineAvailable() {
+  return Boolean(process.env.STT_SERVICE_URL || process.env.OPENAI_API_KEY);
+}
+
+async function transcribeBuffer(audioBuffer, vocabularyHint, { contentType = "audio/wav", filename = "recording.wav" } = {}) {
+  if (!audioBuffer || !sttEngineAvailable()) return null;
   try {
     const form = new FormData();
-    form.append("file", new Blob([audioBuffer], { type: "audio/wav" }), "recording.wav");
-    form.append("model", "whisper-1");
-    form.append("language", "he"); // מבקשים במפורש עברית - עוזר לדיוק, גם אם המודל יודע לזהות שפה לבד
-    // "prompt" של Whisper: לא הוראה למודל, אלא "רמז אוצר מילים" - מוטה את התמלול לכיוון מילים/כתיב
-    // שמופיעים בו. שימושי במיוחד לשלבים עם רשימת מילים סגורה וידועה מראש (כמו קטגוריות התפריט
-    // הראשי) - ר' קריאה ב-routes/yemot.js שמעבירה כאן את המילים הרלוונטיות לשלב הנוכחי בשיחה.
-    if (vocabularyHint) {
-      form.append("prompt", vocabularyHint);
+    form.append("file", new Blob([audioBuffer], { type: contentType }), filename);
+    if (vocabularyHint) form.append("prompt", vocabularyHint);
+    let url, headers = {};
+    if (process.env.STT_SERVICE_URL) {
+      url = process.env.STT_SERVICE_URL;
+      if (process.env.STT_SERVICE_TOKEN) headers.Authorization = `Bearer ${process.env.STT_SERVICE_TOKEN}`;
+    } else {
+      url = "https://api.openai.com/v1/audio/transcriptions";
+      headers.Authorization = `Bearer ${process.env.OPENAI_API_KEY}`;
+      form.append("model", "whisper-1");
+      form.append("language", "he"); // מבקשים במפורש עברית - עוזר לדיוק, גם אם המודל יודע לזהות שפה לבד
     }
-    const res = await fetch("https://api.openai.com/v1/audio/transcriptions", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-      body: form,
-    });
+    const res = await fetch(url, { method: "POST", headers, body: form });
     if (!res.ok) {
       const errText = await res.text().catch(() => "");
-      console.log(`[WHISPER-DEBUG] קריאה ל-Whisper נכשלה: סטטוס ${res.status} - ${errText.slice(0, 300)}`);
+      console.log(`[WHISPER-DEBUG] קריאה לתמלול נכשלה: סטטוס ${res.status} - ${errText.slice(0, 300)}`);
       return null;
     }
     const data = await res.json();
     const transcribed = String(data.text || "").trim();
-    console.log(`[WHISPER-DEBUG] תמלול Whisper: "${transcribed}"`);
+    console.log(`[WHISPER-DEBUG] תמלול: "${transcribed}"`);
     if (transcribed && !containsHebrew(transcribed)) {
       console.log(`[WHISPER-DEBUG] התמלול לא מכיל אף אות עברית ("${transcribed}") - כנראה "הזיה" של המודל (שפה/כתב שגויים), מתייחסים לזה כאילו נכשל`);
       return null;
     }
     return transcribed || null;
   } catch (e) {
-    console.log(`[WHISPER-DEBUG] שגיאה בתמלול Whisper: ${e.message}`);
+    console.log(`[WHISPER-DEBUG] שגיאה בתמלול: ${e.message}`);
     return null;
   }
+}
+
+// עטיפה לערוץ ימות (דורשת את כל ההגדרות של ימות כמו תמיד - ר' isConfigured) - ההתנהגות הקיימת לא משתנה.
+async function transcribeAudio(audioBuffer, vocabularyHint) {
+  if (!isConfigured()) return null;
+  return transcribeBuffer(audioBuffer, vocabularyHint);
 }
 
 // פונקציית נוחות משולבת: מוצאת את ההקלטה האחרונה בשלוחת ההקלטה, מורידה ומתמללת אותה בפעולה אחת.
@@ -184,4 +197,4 @@ async function downloadAndTranscribe(vocabularyHint) {
   return transcribeAudio(audio, vocabularyHint);
 }
 
-module.exports = { isConfigured, findLatestRecording, downloadYemotRecording, transcribeAudio, downloadAndTranscribe, containsHebrew };
+module.exports = { sttEngineAvailable, transcribeBuffer, isConfigured, findLatestRecording, downloadYemotRecording, transcribeAudio, downloadAndTranscribe, containsHebrew };

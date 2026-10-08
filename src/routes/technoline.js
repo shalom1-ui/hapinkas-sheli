@@ -19,7 +19,8 @@ const {
   advance, advanceSignup, upsertCall, appendTranscript, mainMenuPrompt, OPENING_GREETING,
   DIGIT_ENTRY_STATES,
 } = require("./ivr");
-const { keypadizeText, findUserByPhone, FREE_TEXT_STATES, KEYPAD_OK_FREE_TEXT_STATES, KEYPAD_AMOUNT_STATES } = require("./yemot");
+const { keypadizeText, findUserByPhone, FREE_TEXT_STATES, KEYPAD_OK_FREE_TEXT_STATES, KEYPAD_AMOUNT_STATES, vocabularyHintFor } = require("./yemot");
+const speechToText = require("../services/speechToText");
 
 // שם הערך שבו המרכזייה מחזירה את מה שהמתקשר הקיש/אמר (ור' mapInput למטה)
 const VAL = "val";
@@ -33,6 +34,47 @@ const LONG_TEXT_STATES = new Set([
 ]);
 
 const STUDENT_NAME_STATES = new Set(["mentor_pick_student", "therapist_student", "supervisor_pick_student"]);
+
+// ---------- תמלול חיצוני (Whisper / שירות ivrit.ai) במקום ה-stt של טכנוליין ----------
+// משוב אמיתי: "אני יכול להשתמש עם זיהוי דיבור אחר שהבאת לי". במקום stt (שמחויב ביחידות, עד 10 שניות,
+// ותמלול של גוגל) מקליטים (record) ומורידים את הקובץ מה-API של טכנוליין (fileDownload לפי FILEID_val,
+// נדרש TECHNOLINE_API_KEY) ומתמללים אצלנו - OpenAI Whisper, או שירות משלנו אם מוגדר STT_SERVICE_URL
+// (ר' services/speechToText.js). ברירת מחדל: רק לתוכן ארוך (במקום sttSoft - בלי חיוב כפול); עם
+// TECHNOLINE_WHISPER_ALL=1 גם לשמות/סוג דיווח/"אחר" (המתקשר מסיים בסולמית - בלי סיום אוטומטי של stt).
+function whisperMode() {
+  return Boolean(process.env.TECHNOLINE_API_KEY) && speechToText.sttEngineAvailable() && process.env.TECHNOLINE_WHISPER !== "off";
+}
+function whisperAll() {
+  return whisperMode() && process.env.TECHNOLINE_WHISPER_ALL === "1";
+}
+const TL_FILES_API = () => process.env.TECHNOLINE_API_URL || "https://api.tlivr.com/ivrFilesApi.php";
+
+// שלב שמוקלט (record) ולא נקלט ב-stt: תמיד התוכן הארוך, ובמצב whisperAll גם שאר שלבי הדיבור.
+function isRecordState(state, all) {
+  if (LONG_TEXT_STATES.has(state)) return true;
+  return Boolean(all) && FREE_TEXT_STATES.has(state) && !KEYPAD_OK_FREE_TEXT_STATES.has(state);
+}
+
+async function downloadRecording(fileId) {
+  try {
+    const url = `${TL_FILES_API()}?action=fileDownload&audio=${encodeURIComponent(fileId)}&apiKey=${encodeURIComponent(process.env.TECHNOLINE_API_KEY)}`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    if (!res.ok) {
+      console.log(`[WHISPER-DEBUG] tlivr הורדת הקלטה ${fileId} נכשלה: סטטוס ${res.status}`);
+      return null;
+    }
+    const buf = Buffer.from(await res.arrayBuffer());
+    // תשובת שגיאה של ה-API היא JSON (לא אודיו) - לא שולחים אותה לתמלול
+    if (!buf.length || buf[0] === 0x7b) {
+      console.log(`[WHISPER-DEBUG] tlivr הורדת הקלטה ${fileId}: לא התקבל קובץ שמע (${buf.length} בתים)`);
+      return null;
+    }
+    return buf;
+  } catch (e) {
+    console.log(`[WHISPER-DEBUG] tlivr שגיאה בהורדת הקלטה ${fileId}: ${e.message}`);
+    return null;
+  }
+}
 
 // מקשים שמותר להקיש בתפריט של ספרה אחת - כולל * (חזרה לתפריט הראשי) ו-0 (חלק מהתפריטים)
 const MENU_KEYS = "0,1,2,3,4,5,6,7,8,9,*";
@@ -65,12 +107,16 @@ function buildModule(result, extra = {}) {
       files: files(keypadizeText(result.text, state)),
     };
   }
-  // תוכן ארוך: הקלטה + תמלול רך ברקע
-  if (LONG_TEXT_STATES.has(state)) {
-    return {
-      type: "record", name: VAL, max: 60, min: 1, confirm: "no", hangupSave: "yes", sttSoft: true,
+  // הקלטה: תוכן ארוך תמיד (ובמצב whisperAll גם שאר שלבי הדיבור). עם תמלול חיצוני (extra.whisper) -
+  // הקלטה רגילה ואנחנו מתמללים; בלי זה - תמלול רך ברקע של טכנוליין (sttSoft, הטקסט ב-TEXT_val).
+  if (isRecordState(state, extra.whisperAll)) {
+    const long = LONG_TEXT_STATES.has(state);
+    const mod = {
+      type: "record", name: VAL, max: long ? 60 : 15, min: 1, confirm: "no", hangupSave: "yes",
       files: files(`${result.text} כשתסיימו לדבר, הקישו סולמית.`),
     };
+    if (!extra.whisper) mod.sttSoft = true;
+    return mod;
   }
   // שאר שלבי הדיבור (שמות, סוג דיווח, "אחר" בקטגוריה): זיהוי הדיבור המובנה של טכנוליין (עד 10 שניות).
   // sttSnap:false - הרשימה היא רמז בלבד, לא "הצמדה" לערך הקרוב: אחרת שם תלמיד חדש (שעוד לא ברשימה)
@@ -92,10 +138,25 @@ function buildModule(result, extra = {}) {
 
 // הקלט שחזר מהמרכזייה: לשלבי הקלטה ארוכה - הטקסט המתומלל (TEXT_val); אחרת הערך עצמו. "ERROR" (תם הזמן
 // בתפריט) נחשב כשקט.
-function mapInput(params, state) {
-  const raw = LONG_TEXT_STATES.has(state) ? params[`TEXT_${VAL}`] : params[VAL];
+function mapInput(params, state, all) {
+  const raw = isRecordState(state, all) ? params[`TEXT_${VAL}`] : params[VAL];
   const v = String(raw == null ? "" : raw).trim();
   return v === "ERROR" ? "" : v;
+}
+
+// הקלט הסופי של שלב: בשלבי הקלטה עם תמלול חיצוני - מורידים את ההקלטה (FILEID_val) ומתמללים; אם זה לא
+// הצליח (או שהמצב כבוי) נופלים לטקסט ש-טכנוליין עצמה תמללה (TEXT_val, רק עם sttSoft), ואם גם הוא ריק -
+// קלט ריק, והלוגיקה הרגילה תבקש שוב ("לא שמעתי").
+async function resolveSpeech(params, state) {
+  const all = whisperAll();
+  if (whisperMode() && isRecordState(state, all) && params[`FILEID_${VAL}`]) {
+    const audio = await downloadRecording(params[`FILEID_${VAL}`]);
+    if (audio) {
+      const text = await speechToText.transcribeBuffer(audio, vocabularyHintFor(state), { contentType: "audio/mpeg", filename: "recording.mp3" });
+      if (text) return text;
+    }
+  }
+  return mapInput(params, state, all);
 }
 
 function studentNamesFor(userId) {
@@ -122,7 +183,7 @@ async function handleTechnoline(ctx) {
       return json(ctx.res, 200, buildModule({
         text: `${OPENING_GREETING}מספר הטלפון שלך אינו מזוהה במערכת. אפשר להירשם עכשיו ישירות בטלפון, בלי לגשת לאתר. מה השם המלא שלכם?`,
         nextState: "signup_name",
-      }));
+      }, { whisper: whisperMode(), whisperAll: whisperAll() }));
     }
     upsertCall(callId, user.id, "main_menu", {}, null, p.PBXphone);
     return json(ctx.res, 200, buildModule({
@@ -133,7 +194,7 @@ async function handleTechnoline(ctx) {
 
   // ---------- המשך שיחה ----------
   const draft = JSON.parse(call.draft_json || "{}");
-  const speech = mapInput(p, call.state);
+  const speech = await resolveSpeech(p, call.state);
   appendTranscript(callId, speech);
 
   const silent = speech === "" ? (draft._tlSilent || 0) + 1 : 0;
@@ -149,7 +210,11 @@ async function handleTechnoline(ctx) {
 
   upsertCall(callId, result.newUserId || call.user_id, result.nextState, { ...(result.draft || draft), _tlSilent: silent }, result.outcome, p.PBXphone);
 
-  const extra = { studentNames: STUDENT_NAME_STATES.has(result.nextState) ? studentNamesFor(result.newUserId || call.user_id) : [] };
+  const extra = {
+    studentNames: STUDENT_NAME_STATES.has(result.nextState) ? studentNamesFor(result.newUserId || call.user_id) : [],
+    whisper: whisperMode(),
+    whisperAll: whisperAll(),
+  };
   return json(ctx.res, 200, buildModule(result, extra));
 }
 
@@ -159,4 +224,4 @@ function register(router) {
   router.post("/api/ivr/technoline", handleTechnoline);
 }
 
-module.exports = { register, buildModule, mapInput, LONG_TEXT_STATES };
+module.exports = { register, buildModule, mapInput, resolveSpeech, whisperMode, LONG_TEXT_STATES };

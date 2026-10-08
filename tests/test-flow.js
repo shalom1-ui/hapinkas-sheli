@@ -2195,6 +2195,56 @@ async function run() {
     assert(tlPin.type === "getDTMF" && tlPin.min === 4 && tlPin.max === 4 && tlPin.maskLog === true, "קוד PIN בטכנוליין: getDTMF של 4 ספרות, מוסתר בלוג");
     const tlHang = tlBuild.buildModule({ text: "להתראות", hangup: true });
     assert(Array.isArray(tlHang) && tlHang[0].type === "simpleMessage" && tlHang[1].type === "hangup", "סיום שיחה: הודעה + ניתוק");
+
+    // ---- תמלול חיצוני (Whisper) להקלטות של טכנוליין: "אני יכול להשתמש עם זיהוי דיבור אחר שהבאת לי" ----
+    // מדמים (בתהליך הבדיקה עצמו, לא בשרת) את fetch: הורדת ההקלטה מ-api.tlivr.com ואת קריאת התמלול.
+    const savedEnv = { T: process.env.TECHNOLINE_API_KEY, O: process.env.OPENAI_API_KEY, A: process.env.TECHNOLINE_WHISPER_ALL };
+    const realFetch = global.fetch;
+    const fetchLog = [];
+    let mockMode = "ok";
+    global.fetch = async (url, init) => {
+      const u = String(url);
+      fetchLog.push(u);
+      if (u.includes("api.tlivr.com")) {
+        if (mockMode === "dlfail") return new Response("{\"status\":\"ERROR\"}", { status: 200 });
+        return new Response(new Uint8Array([0xff, 0xfb, 0x90, 0x00, 1, 2, 3]), { status: 200 });
+      }
+      if (u.includes("api.openai.com")) {
+        return new Response(JSON.stringify({ text: mockMode === "nohebrew" ? "hello" : "הדיווח שתומלל בוויספר" }), { status: 200 });
+      }
+      return realFetch(url, init);
+    };
+    try {
+      process.env.TECHNOLINE_API_KEY = "test-tl-key"; process.env.OPENAI_API_KEY = "test-openai-key"; delete process.env.TECHNOLINE_WHISPER_ALL;
+      const tlW = require("../src/routes/technoline");
+      assert(tlW.whisperMode() === true, "מצב תמלול חיצוני דלוק כשיש גם מפתח API של טכנוליין וגם מנוע תמלול (OPENAI_API_KEY)");
+      const recW = tlW.buildModule({ text: "הערה", nextState: "therapist_note" }, { whisper: true });
+      assert(recW.type === "record" && recW.sttSoft === undefined && recW.max === 60, "עם תמלול חיצוני: הקלטה רגילה בלי sttSoft (אין חיוב תמלול כפול בטכנוליין)");
+      const shortSoft = tlW.buildModule({ text: "שם?", nextState: "signup_name" }, { whisper: true });
+      assert(shortSoft.type === "stt", "ברירת מחדל: שלבי דיבור קצרים (שם) נשארים ב-stt של טכנוליין, רק תוכן ארוך עובר לתמלול חיצוני");
+      const shortRec = tlW.buildModule({ text: "שם?", nextState: "signup_name" }, { whisper: true, whisperAll: true });
+      assert(shortRec.type === "record" && shortRec.max === 15, "עם TECHNOLINE_WHISPER_ALL גם שם/סוג דיווח מוקלטים ומתומללים חיצונית");
+      const got = await tlW.resolveSpeech({ FILEID_val: "777", val: "f.mp3", TEXT_val: "" }, "therapist_note");
+      assert(got === "הדיווח שתומלל בוויספר", `הקלטה מטכנוליין (FILEID_val) מורדת ומתומללת בוויספר (${got})`);
+      assert(fetchLog.some((u) => u.includes("action=fileDownload") && u.includes("audio=777") && u.includes("apiKey=test-tl-key")), "ההורדה נעשית דרך fileDownload של ה-API של טכנוליין עם FILEID ומפתח ה-API");
+      mockMode = "dlfail";
+      const fb = await tlW.resolveSpeech({ FILEID_val: "778", TEXT_val: "" }, "therapist_note");
+      assert(fb === "", "הורדה שנכשלה (תשובת שגיאה JSON) לא נשלחת לתמלול - קלט ריק, והלוגיקה הרגילה מבקשת שוב");
+      const fb2 = await tlW.resolveSpeech({ FILEID_val: "778", TEXT_val: "טקסט של טכנוליין" }, "therapist_note");
+      assert(fb2 === "טקסט של טכנוליין", "אם ההורדה נכשלה אבל טכנוליין תמללה בעצמה (TEXT_val) - משתמשים בזה");
+      mockMode = "nohebrew";
+      const fb3 = await tlW.resolveSpeech({ FILEID_val: "779" }, "therapist_note");
+      assert(fb3 === "", "תמלול בלי אף אות עברית (הזיית מודל) נדחה");
+      delete process.env.TECHNOLINE_API_KEY;
+      assert(tlW.whisperMode() === false, "בלי TECHNOLINE_API_KEY המצב כבוי - חוזרים ל-sttSoft של טכנוליין");
+      const recNoW = tlW.buildModule({ text: "הערה", nextState: "therapist_note" }, { whisper: false });
+      assert(recNoW.sttSoft === true, "כשהמצב כבוי, תוכן ארוך חוזר להקלטה עם תמלול רך של טכנוליין");
+    } finally {
+      global.fetch = realFetch;
+      for (const [k, v] of [["TECHNOLINE_API_KEY", savedEnv.T], ["OPENAI_API_KEY", savedEnv.O], ["TECHNOLINE_WHISPER_ALL", savedEnv.A]]) {
+        if (v === undefined) delete process.env[k]; else process.env[k] = v;
+      }
+    }
     const tlHangupCall = await tlCall(tlId, { PBXcallStatus: "HANGUP" });
     assert(Array.isArray(tlHangupCall) && tlHangupCall.length === 0, "פנייה של ניתוק (HANGUP) מקבלת תשובה ריקה, בלי להמשיך את השיחה");
 
